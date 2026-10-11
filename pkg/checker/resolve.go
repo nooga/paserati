@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -1261,9 +1262,9 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 				if prevOk && curOk {
 					merged := &types.ObjectType{}
 					merged.Materialize()
-merged.CallSignatures = append(merged.CallSigs(), prevSigs...)
+					merged.CallSignatures = append(merged.CallSigs(), prevSigs...)
 					merged.Materialize()
-merged.CallSignatures = append(merged.CallSigs(), curSigs...)
+					merged.CallSignatures = append(merged.CallSigs(), curSigs...)
 					propType = merged
 				}
 			}
@@ -1911,125 +1912,36 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			return typ
 		}
 
-		// Handle ObjectType with properties and call signatures
+		// The copy's members are substituted when first read: most members
+		// of most instantiations (a method's parameter types in a .d.ts) are
+		// never read.
 		result := &types.ObjectType{
-			Properties:         make(map[string]types.Type),
 			PropertyDocs:       typ.PropertyDocs,
 			Doc:                typ.Doc,
-			OptionalProperties: make(map[string]bool),
-			ReadOnlyProperties: make(map[string]bool),
-			BaseTypes:          typ.Bases(),
 			IsReflectIntrinsic: typ.IsReflectIntrinsic,
+			IsInterface:        typ.IsInterface,
 		}
 		visited[typ] = result
 		typ.CopyDisplay(result, func(a types.Type) types.Type { return c.substituteTypesWithVisited(a, substitution, visited) })
-		// Inherited members come from the bases: ZodObject<..., Output>
-		// reads _output through `extends ZodType<Output, ...>`.
-		if len(typ.Bases()) > 0 {
-			result.Materialize()
-result.BaseTypes = make([]types.Type, len(typ.Bases()))
-			for i, base := range typ.Bases() {
-				result.Bases()[i] = c.substituteTypesWithVisited(base, substitution, visited)
-			}
-		}
-
-		// Copy and substitute property types
-		for _, propName := range typ.PropertyNames() {
-			propType := typ.Props()[propName]
-			result.SetProperty(propName, c.substituteTypesWithVisited(propType, substitution, visited))
-		}
-		for propName, isOptional := range typ.OptionalProps() {
-			result.OptionalProps()[propName] = isOptional
-		}
-		for propName, isReadOnly := range typ.ReadOnlyProps() {
-			result.ReadOnlyProps()[propName] = isReadOnly
-		}
-
-		if typ.IndexSigs() != nil {
-			result.Materialize()
-result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSigs()))
-			for i, sig := range typ.IndexSigs() {
-				result.IndexSigs()[i] = &types.IndexSignature{
-					KeyType:        c.substituteTypesWithVisited(sig.KeyType, substitution, visited),
-					ValueType:      c.substituteTypesWithVisited(sig.ValueType, substitution, visited),
-					IsMapped:       sig.IsMapped,
-					TypeParameter:  sig.TypeParameter,
-					ConstraintType: c.substituteTypesWithVisited(sig.ConstraintType, substitution, visited),
-				}
-			}
-		}
-
-		// Copy and substitute call signatures
-		if typ.CallSigs() != nil {
-			// Assigned once complete: a recursive visit of result meanwhile
-			// (it is in visited) must not see empty slots.
-			callSignatures := make([]*types.Signature, len(typ.CallSigs()))
-			for i, sig := range typ.CallSigs() {
-				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
-				for j, paramType := range sig.ParameterTypes {
-					newParamTypes[j] = c.substituteTypesWithVisited(paramType, substitution, visited)
-				}
-
-				newReturnType := c.substituteTypesWithVisited(sig.ReturnType, substitution, visited)
-				newRestParamType := c.substituteTypesWithVisited(sig.RestParameterType, substitution, visited)
-
-				callSignatures[i] = &types.Signature{
-					TypeParameters:    sig.TypeParameters,
-					ParameterNames:    sig.ParameterNames,
-					ParameterTypes:    newParamTypes,
-					ReturnType:        newReturnType,
-					OptionalParams:    sig.OptionalParams, // Copy optional flags
-					IsVariadic:        sig.IsVariadic,
-					StrictVariance:    sig.StrictVariance,
-					RestParameterType: newRestParamType,
-				}
-			}
-			result.Materialize()
-result.CallSignatures = callSignatures
-		}
-
-		// Copy construct signatures (if any)
-		if typ.ConstructSigs() != nil {
-			constructSignatures := make([]*types.Signature, len(typ.ConstructSigs()))
-			for i, sig := range typ.ConstructSigs() {
-				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
-				for j, paramType := range sig.ParameterTypes {
-					newParamTypes[j] = c.substituteTypesWithVisited(paramType, substitution, visited)
-				}
-
-				newReturnType := c.substituteTypesWithVisited(sig.ReturnType, substitution, visited)
-				newRestParamType := c.substituteTypesWithVisited(sig.RestParameterType, substitution, visited)
-
-				constructSignatures[i] = &types.Signature{
-					TypeParameters:    sig.TypeParameters,
-					ParameterNames:    sig.ParameterNames,
-					ParameterTypes:    newParamTypes,
-					ReturnType:        newReturnType,
-					OptionalParams:    sig.OptionalParams,
-					IsVariadic:        sig.IsVariadic,
-					StrictVariance:    sig.StrictVariance,
-					RestParameterType: newRestParamType,
-				}
-			}
-			result.Materialize()
-result.ConstructSignatures = constructSignatures
-		}
-
-		// Copy ClassMeta to preserve class instance information
 		if typ.ClassMeta != nil {
 			// A full copy: SourceClassName and the inheritance fields drive
 			// protected/private access checks on an instantiated generic class (#613).
 			meta := *typ.ClassMeta
 			result.ClassMeta = &meta
 		}
-
-		// Inherited members and the interface flag survive instantiation; the
-		// base types are instantiated with the same substitution.
-		result.IsInterface = typ.IsInterface
 		if c.closedInstantiation(typ, substitution) {
 			result.Instantiates = typ.Instantiates
 		}
-
+		// The caller may reuse its map for another substitution.
+		subst, env := maps.Clone(substitution), c.env
+		result.SetLazyMembers(func(ot *types.ObjectType) {
+			// Substitute as where the instantiation was written (`typeof x`
+			// resolves in that scope); what it reports was reported there.
+			saved := c.env
+			c.env = env
+			c.speculate(func() { c.substituteMembers(typ, ot, subst, visited) })
+			c.env = saved
+		})
 		return result
 
 	case *types.UnionType:
@@ -3042,7 +2954,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 			valueType = types.Any
 		}
 		resultObj.Materialize()
-resultObj.IndexSignatures = append(resultObj.IndexSigs(), &types.IndexSignature{
+		resultObj.IndexSignatures = append(resultObj.IndexSigs(), &types.IndexSignature{
 			KeyType:   types.String,
 			ValueType: valueType,
 		})
@@ -3060,7 +2972,7 @@ resultObj.IndexSignatures = append(resultObj.IndexSigs(), &types.IndexSignature{
 			valueType = types.Any
 		}
 		resultObj.Materialize()
-resultObj.IndexSignatures = append(resultObj.IndexSigs(), &types.IndexSignature{
+		resultObj.IndexSignatures = append(resultObj.IndexSigs(), &types.IndexSignature{
 			KeyType:   types.Number,
 			ValueType: valueType,
 		})
@@ -3317,9 +3229,9 @@ func cloneObjectTypeWithTypesNotify(obj *types.ObjectType, rewrite func(types.Ty
 		created(result)
 	}
 	result.Materialize()
-result.CallSignatures = cloneSignaturesWithTypes(obj.CallSigs(), rewrite)
+	result.CallSignatures = cloneSignaturesWithTypes(obj.CallSigs(), rewrite)
 	result.Materialize()
-result.ConstructSignatures = cloneSignaturesWithTypes(obj.ConstructSigs(), rewrite)
+	result.ConstructSignatures = cloneSignaturesWithTypes(obj.ConstructSigs(), rewrite)
 
 	for _, name := range obj.PropertyNames() {
 		propType := obj.Props()[name]
@@ -3333,7 +3245,7 @@ result.ConstructSignatures = cloneSignaturesWithTypes(obj.ConstructSigs(), rewri
 	}
 	if obj.IndexSigs() != nil {
 		result.Materialize()
-result.IndexSignatures = make([]*types.IndexSignature, len(obj.IndexSigs()))
+		result.IndexSignatures = make([]*types.IndexSignature, len(obj.IndexSigs()))
 		for i, sig := range obj.IndexSigs() {
 			if sig == nil {
 				continue
@@ -4306,9 +4218,9 @@ func (c *Checker) structuralObject(t types.Type) (*types.ObjectType, bool) {
 				}
 			}
 			merged.Materialize()
-merged.IndexSignatures = append(merged.IndexSigs(), obj.IndexSigs()...)
+			merged.IndexSignatures = append(merged.IndexSigs(), obj.IndexSigs()...)
 			merged.Materialize()
-merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
+			merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
 		}
 		for name, opt := range optional {
 			if opt {
@@ -4319,7 +4231,7 @@ merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
 			if ro {
 				if merged.ReadOnlyProps() == nil {
 					merged.Materialize()
-merged.ReadOnlyProperties = map[string]bool{}
+					merged.ReadOnlyProperties = map[string]bool{}
 				}
 				merged.ReadOnlyProps()[name] = true
 			}
@@ -4501,4 +4413,71 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 		return false
 	}
 	return true
+}
+
+// substituteMembers fills in result's members: typ's, substituted.
+func (c *Checker) substituteMembers(typ, result *types.ObjectType, substitution map[string]types.Type, visited map[types.Type]types.Type) {
+	sub := func(t types.Type) types.Type { return c.substituteTypesWithVisited(t, substitution, visited) }
+	result.Properties = make(map[string]types.Type, len(typ.Props()))
+	result.OptionalProperties = make(map[string]bool, len(typ.OptionalProps()))
+	result.ReadOnlyProperties = make(map[string]bool, len(typ.ReadOnlyProps()))
+	// Inherited members come from the bases: ZodObject<..., Output>
+	// reads _output through `extends ZodType<Output, ...>`.
+	if bases := typ.Bases(); len(bases) > 0 {
+		result.BaseTypes = make([]types.Type, len(bases))
+		for i, base := range bases {
+			result.BaseTypes[i] = sub(base)
+		}
+	}
+	for _, propName := range typ.PropertyNames() {
+		result.SetProperty(propName, sub(typ.Props()[propName]))
+	}
+	for propName, isOptional := range typ.OptionalProps() {
+		result.OptionalProperties[propName] = isOptional
+	}
+	for propName, isReadOnly := range typ.ReadOnlyProps() {
+		result.ReadOnlyProperties[propName] = isReadOnly
+	}
+	if sigs := typ.IndexSigs(); sigs != nil {
+		index := make([]*types.IndexSignature, len(sigs))
+		for i, sig := range sigs {
+			index[i] = &types.IndexSignature{
+				KeyType:        sub(sig.KeyType),
+				ValueType:      sub(sig.ValueType),
+				IsMapped:       sig.IsMapped,
+				TypeParameter:  sig.TypeParameter,
+				ConstraintType: sub(sig.ConstraintType),
+			}
+		}
+		result.IndexSignatures = index
+	}
+	// Signature slices are assigned once complete: a recursive visit of
+	// result meanwhile (it is in visited) must not see empty slots.
+	if sigs := typ.CallSigs(); sigs != nil {
+		result.CallSignatures = c.substituteSignatures(sigs, sub)
+	}
+	if sigs := typ.ConstructSigs(); sigs != nil {
+		result.ConstructSignatures = c.substituteSignatures(sigs, sub)
+	}
+}
+
+func (c *Checker) substituteSignatures(sigs []*types.Signature, sub func(types.Type) types.Type) []*types.Signature {
+	out := make([]*types.Signature, len(sigs))
+	for i, sig := range sigs {
+		params := make([]types.Type, len(sig.ParameterTypes))
+		for j, p := range sig.ParameterTypes {
+			params[j] = sub(p)
+		}
+		out[i] = &types.Signature{
+			TypeParameters:    sig.TypeParameters,
+			ParameterNames:    sig.ParameterNames,
+			ParameterTypes:    params,
+			ReturnType:        sub(sig.ReturnType),
+			OptionalParams:    sig.OptionalParams,
+			IsVariadic:        sig.IsVariadic,
+			StrictVariance:    sig.StrictVariance,
+			RestParameterType: sub(sig.RestParameterType),
+		}
+	}
+	return out
 }

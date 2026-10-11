@@ -61,14 +61,14 @@ func constAssertionType(expr parser.Expression) types.Type {
 		for name, opt := range obj.OptionalProps() {
 			if out.OptionalProps() == nil {
 				out.Materialize()
-out.OptionalProperties = map[string]bool{}
+				out.OptionalProperties = map[string]bool{}
 			}
 			out.OptionalProps()[name] = opt
 		}
 		out.Materialize()
-out.IndexSignatures = obj.IndexSigs()
+		out.IndexSignatures = obj.IndexSigs()
 		out.Materialize()
-out.CallSignatures = obj.CallSigs()
+		out.CallSignatures = obj.CallSigs()
 		for _, prop := range e.Properties {
 			var name string
 			switch k := prop.Key.(type) {
@@ -91,7 +91,7 @@ out.CallSignatures = obj.CallSigs()
 		}
 		if out.ReadOnlyProps() == nil {
 			out.Materialize()
-out.ReadOnlyProperties = map[string]bool{}
+			out.ReadOnlyProperties = map[string]bool{}
 		}
 		for name := range out.Props() {
 			out.ReadOnlyProps()[name] = true

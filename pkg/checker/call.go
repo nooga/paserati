@@ -621,7 +621,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		if sigs := c.intersectionCallSignatures(inter, 0); len(sigs) > 0 {
 			callable := types.NewObjectType()
 			callable.Materialize()
-callable.CallSignatures = sigs
+			callable.CallSignatures = sigs
 			funcNodeType = callable
 		}
 	}
@@ -975,7 +975,7 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 		if len(candidates) > 0 {
 			objType = types.NewObjectType()
 			objType.Materialize()
-objType.CallSignatures = candidates
+			objType.CallSignatures = candidates
 		}
 	}
 
@@ -1000,7 +1000,7 @@ objType.CallSignatures = candidates
 		if inferred != nil {
 			objType = types.NewObjectType()
 			objType.Materialize()
-objType.CallSignatures = inferred
+			objType.CallSignatures = inferred
 		}
 	}
 
@@ -1954,7 +1954,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			if len(typ.Bases()) > 0 {
 				// Inherited members are read through the bases.
 				newObj.Materialize()
-newObj.BaseTypes = make([]types.Type, len(typ.Bases()))
+				newObj.BaseTypes = make([]types.Type, len(typ.Bases()))
 				for i, base := range typ.Bases() {
 					newObj.Bases()[i] = substitute(base)
 				}
@@ -1971,7 +1971,7 @@ newObj.BaseTypes = make([]types.Type, len(typ.Bases()))
 					continue
 				}
 				newObj.Materialize()
-newObj.IndexSignatures = append(newObj.IndexSigs(), &types.IndexSignature{
+				newObj.IndexSignatures = append(newObj.IndexSigs(), &types.IndexSignature{
 					KeyType:        substitute(indexSig.KeyType),
 					ValueType:      substitute(indexSig.ValueType),
 					IsMapped:       indexSig.IsMapped,
@@ -1984,14 +1984,14 @@ newObj.IndexSignatures = append(newObj.IndexSigs(), &types.IndexSignature{
 			for _, sig := range typ.CallSigs() {
 				newSig := c.substituteMemberSignature(sig, solution, substitute)
 				newObj.Materialize()
-newObj.CallSignatures = append(newObj.CallSigs(), newSig)
+				newObj.CallSignatures = append(newObj.CallSigs(), newSig)
 			}
 
 			// Substitute in construct signatures
 			for _, sig := range typ.ConstructSigs() {
 				newSig := c.substituteMemberSignature(sig, solution, substitute)
 				newObj.Materialize()
-newObj.ConstructSignatures = append(newObj.ConstructSigs(), newSig)
+				newObj.ConstructSignatures = append(newObj.ConstructSigs(), newSig)
 			}
 
 			return newObj

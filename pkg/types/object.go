@@ -267,6 +267,9 @@ type ObjectType struct {
 	// literal types), which matters when relating them to index signatures.
 	IsInterface bool
 
+	// lazy, when set, fills in the members on first access (see Materialize).
+	lazy func(*ObjectType)
+
 	// IsReflectIntrinsic marks this as a compile-time type reflection intrinsic
 	// When the checker sees a call to a function with this flag, it resolves the type argument
 	// and stores it for the compiler to emit a type descriptor object
@@ -590,19 +593,19 @@ func (ot *ObjectType) IsPropertyOptional(name string) bool {
 // AddCallSignature adds a call signature to this ObjectType
 func (ot *ObjectType) AddCallSignature(sig *Signature) {
 	ot.Materialize()
-ot.CallSignatures = append(ot.CallSigs(), sig)
+	ot.CallSignatures = append(ot.CallSigs(), sig)
 }
 
 // AddConstructSignature adds a constructor signature to this ObjectType
 func (ot *ObjectType) AddConstructSignature(sig *Signature) {
 	ot.Materialize()
-ot.ConstructSignatures = append(ot.ConstructSigs(), sig)
+	ot.ConstructSignatures = append(ot.ConstructSigs(), sig)
 }
 
 // AddBaseType adds a base type for inheritance
 func (ot *ObjectType) AddBaseType(baseType Type) {
 	ot.Materialize()
-ot.BaseTypes = append(ot.Bases(), baseType)
+	ot.BaseTypes = append(ot.Bases(), baseType)
 }
 
 // --- Smart Constructors/Builder Pattern ---
@@ -637,7 +640,7 @@ func (ot *ObjectType) WithReadOnlyProperty(name string, propType Type) *ObjectTy
 	ot.SetProperty(name, propType)
 	if ot.ReadOnlyProps() == nil {
 		ot.Materialize()
-ot.ReadOnlyProperties = make(map[string]bool)
+		ot.ReadOnlyProperties = make(map[string]bool)
 	}
 	ot.ReadOnlyProps()[name] = true
 	return ot
@@ -657,7 +660,7 @@ func (ot *ObjectType) WithVariadicProperty(name string, paramTypes []Type, retur
 // WithCallSignature adds a call signature to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithCallSignature(sig *Signature) *ObjectType {
 	ot.Materialize()
-ot.CallSignatures = append(ot.CallSigs(), sig)
+	ot.CallSignatures = append(ot.CallSigs(), sig)
 	return ot
 }
 
@@ -688,7 +691,7 @@ func (ot *ObjectType) WithVariadicCallSignature(paramTypes []Type, returnType Ty
 // WithConstructSignature adds a constructor signature to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithConstructSignature(sig *Signature) *ObjectType {
 	ot.Materialize()
-ot.ConstructSignatures = append(ot.ConstructSigs(), sig)
+	ot.ConstructSignatures = append(ot.ConstructSigs(), sig)
 	return ot
 }
 
@@ -707,7 +710,7 @@ func (ot *ObjectType) WithSimpleConstructSignature(paramTypes []Type, returnType
 // Inherits adds a base type for inheritance and returns the same instance for chaining
 func (ot *ObjectType) Inherits(baseType Type) *ObjectType {
 	ot.Materialize()
-ot.BaseTypes = append(ot.Bases(), baseType)
+	ot.BaseTypes = append(ot.Bases(), baseType)
 	return ot
 }
 
@@ -730,7 +733,7 @@ func (ot *ObjectType) WithClassMember(memberName string, memberType Type, access
 	if isReadonly {
 		if ot.ReadOnlyProps() == nil {
 			ot.Materialize()
-ot.ReadOnlyProperties = make(map[string]bool)
+			ot.ReadOnlyProperties = make(map[string]bool)
 		}
 		ot.ReadOnlyProps()[memberName] = true
 	}

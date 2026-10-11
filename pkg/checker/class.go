@@ -942,7 +942,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 		// Add index signature: [key: string]: ComputedValueType
 		instanceType.Materialize()
-instanceType.IndexSignatures = []*types.IndexSignature{
+		instanceType.IndexSignatures = []*types.IndexSignature{
 			{
 				KeyType:   types.String,
 				ValueType: indexValueType,
@@ -1141,7 +1141,7 @@ func (c *Checker) methodTypeWithOverloads(body *parser.ClassBody, method *parser
 	}
 	result := types.NewObjectType()
 	result.Materialize()
-result.CallSignatures = sigs
+	result.CallSignatures = sigs
 	return result
 }
 
@@ -2075,7 +2075,7 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 
 	// Add superclass to BaseTypes for structural inheritance
 	instanceType.Materialize()
-instanceType.BaseTypes = append(instanceType.Bases(), superInstanceType)
+	instanceType.BaseTypes = append(instanceType.Bases(), superInstanceType)
 
 	if checkerDebug {
 		debugPrintf("// [Checker Class] Successfully set up inheritance: %s extends %s\n", instanceType.GetClassName(), superClassExpr.String())
@@ -2109,7 +2109,7 @@ func (c *Checker) registerInterfaceImplementation(instanceType *types.ObjectType
 
 	// Add interface to BaseTypes for structural inheritance
 	instanceType.Materialize()
-instanceType.BaseTypes = append(instanceType.Bases(), interfaceObjType)
+	instanceType.BaseTypes = append(instanceType.Bases(), interfaceObjType)
 
 	if checkerDebug {
 		debugPrintf("// [Checker Class] Successfully registered interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
@@ -2692,7 +2692,7 @@ func (c *Checker) inheritStaticMembers(constructorType, instanceType *types.Obje
 		}
 	}
 	constructorType.Materialize()
-constructorType.BaseTypes = append(constructorType.Bases(), baseCtor)
+	constructorType.BaseTypes = append(constructorType.Bases(), baseCtor)
 }
 
 // resolveTypeofInMembers resolves `typeof x` queries (and conditional types
@@ -2753,7 +2753,7 @@ func (c *Checker) addAmbientMethodSignatures(body *parser.ClassBody, static bool
 			for _, sig := range sigs {
 				if callSigs, ok := overloadableCallSignatures(c.inferMethodTypeFromSignature(sig)); ok {
 					merged.Materialize()
-merged.CallSignatures = append(merged.CallSigs(), callSigs...)
+					merged.CallSignatures = append(merged.CallSigs(), callSigs...)
 				}
 			}
 			methodType = merged

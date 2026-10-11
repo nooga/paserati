@@ -194,14 +194,14 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		}
 		if len(t.ReadOnlyProps()) > 0 {
 			newObj.Materialize()
-newObj.ReadOnlyProperties = make(map[string]bool, len(t.ReadOnlyProps()))
+			newObj.ReadOnlyProperties = make(map[string]bool, len(t.ReadOnlyProps()))
 			for name, ro := range t.ReadOnlyProps() {
 				newObj.ReadOnlyProps()[name] = ro
 			}
 		}
 		if len(t.Bases()) > 0 {
 			newObj.Materialize()
-newObj.BaseTypes = make([]Type, len(t.Bases()))
+			newObj.BaseTypes = make([]Type, len(t.Bases()))
 			for i, base := range t.Bases() {
 				newObj.Bases()[i] = substituteTypeMemo(base, substitutions, memo)
 			}
@@ -213,14 +213,14 @@ newObj.BaseTypes = make([]Type, len(t.Bases()))
 		for _, sig := range t.CallSigs() {
 			newSig := substituteMemberSignature(sig, substitutions, memo)
 			newObj.Materialize()
-newObj.CallSignatures = append(newObj.CallSigs(), newSig)
+			newObj.CallSignatures = append(newObj.CallSigs(), newSig)
 		}
 
 		// Handle constructor signatures
 		for _, sig := range t.ConstructSigs() {
 			newSig := substituteMemberSignature(sig, substitutions, memo)
 			newObj.Materialize()
-newObj.ConstructSignatures = append(newObj.ConstructSigs(), newSig)
+			newObj.ConstructSignatures = append(newObj.ConstructSigs(), newSig)
 		}
 
 		// Copy index signatures
@@ -230,7 +230,7 @@ newObj.ConstructSignatures = append(newObj.ConstructSigs(), newSig)
 				ValueType: substituteTypeMemo(indexSig.ValueType, substitutions, memo),
 			}
 			newObj.Materialize()
-newObj.IndexSignatures = append(newObj.IndexSigs(), newIndexSig)
+			newObj.IndexSignatures = append(newObj.IndexSigs(), newIndexSig)
 		}
 
 		return newObj

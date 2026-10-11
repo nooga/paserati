@@ -26,7 +26,7 @@ func simplifyMappedType(t Type) Type {
 			valueType = Any
 		}
 		obj.Materialize()
-obj.IndexSignatures = append(obj.IndexSigs(), &IndexSignature{
+		obj.IndexSignatures = append(obj.IndexSigs(), &IndexSignature{
 			KeyType:   mt.ConstraintType,
 			ValueType: valueType,
 		})
@@ -1124,11 +1124,11 @@ func mergeIntersectionObjects(inter *IntersectionType) *ObjectType {
 			merged.OptionalProps()[name] = obj.IsPropertyOptional(name)
 		}
 		merged.Materialize()
-merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
+		merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
 		merged.Materialize()
-merged.ConstructSignatures = append(merged.ConstructSigs(), obj.ConstructSigs()...)
+		merged.ConstructSignatures = append(merged.ConstructSigs(), obj.ConstructSigs()...)
 		merged.Materialize()
-merged.IndexSignatures = append(merged.IndexSigs(), obj.IndexSigs()...)
+		merged.IndexSignatures = append(merged.IndexSigs(), obj.IndexSigs()...)
 	}
 	return merged
 }

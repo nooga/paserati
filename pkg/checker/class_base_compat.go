@@ -157,11 +157,11 @@ func (c *Checker) resolveTypeofDeep(t types.Type, depth int) types.Type {
 		if changed {
 			cp := *tt
 			cp.Materialize()
-cp.Properties = props
+			cp.Properties = props
 			cp.Materialize()
-cp.CallSignatures = calls
+			cp.CallSignatures = calls
 			cp.Materialize()
-cp.ConstructSignatures = ctors
+			cp.ConstructSignatures = ctors
 			return &cp
 		}
 	}

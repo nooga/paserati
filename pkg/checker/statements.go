@@ -229,9 +229,9 @@ func (c *Checker) resolveExtendedInterfaceObjectType(t types.Type) (*types.Objec
 				}
 			}
 			merged.Materialize()
-merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
+			merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
 			merged.Materialize()
-merged.ConstructSignatures = append(merged.ConstructSigs(), obj.ConstructSigs()...)
+			merged.ConstructSignatures = append(merged.ConstructSigs(), obj.ConstructSigs()...)
 		}
 		return merged, true
 	case *types.ArrayType, *types.TupleType, *types.MappedType:
@@ -296,7 +296,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	if optionalProperties == nil {
 		optionalProperties = make(map[string]bool)
 		interfaceType.Materialize()
-interfaceType.OptionalProperties = optionalProperties
+		interfaceType.OptionalProperties = optionalProperties
 	}
 	var indexSignatures []*types.IndexSignature
 	var callSignatures []*types.Signature
@@ -415,7 +415,7 @@ interfaceType.OptionalProperties = optionalProperties
 			if sigs := c.extractConstructSignaturesFromType(constructorType); len(sigs) > 0 {
 				// A construct signature is a member of the interface type, not a property.
 				interfaceType.Materialize()
-interfaceType.ConstructSignatures = append(interfaceType.ConstructSigs(), sigs...)
+				interfaceType.ConstructSignatures = append(interfaceType.ConstructSigs(), sigs...)
 			} else {
 				interfaceType.SetProperty("new", constructorType)
 			}
@@ -509,21 +509,21 @@ interfaceType.ConstructSignatures = append(interfaceType.ConstructSigs(), sigs..
 	indexSignatures = append(append([]*types.IndexSignature(nil), previousIndexSignatures...), indexSignatures...)
 	indexSignatures = inheritIndexSignatures(indexSignatures, extendedObjs)
 	interfaceType.Materialize()
-interfaceType.IndexSignatures = indexSignatures
+	interfaceType.IndexSignatures = indexSignatures
 	interfaceTypeChecked, sigsChecked := interfaceType, indexSignatures
 	c.deferRelationCheck(func() { c.checkInterfaceIndexConstraints(node, interfaceTypeChecked, sigsChecked) })
 	c.checkInterfaceExtends(node, interfaceType, extendedObjs)
 	if len(callSignatures) > 0 {
 		interfaceType.Materialize()
-interfaceType.CallSignatures = append(interfaceType.CallSigs(), callSignatures...)
+		interfaceType.CallSignatures = append(interfaceType.CallSigs(), callSignatures...)
 	}
 	// An interface's call and construct signatures follow those of the
 	// interfaces it extends (resolveObjectTypeMembers).
 	for _, ext := range extendedObjs {
 		interfaceType.Materialize()
-interfaceType.CallSignatures = appendNewSignatures(interfaceType.CallSigs(), ext.CallSigs())
+		interfaceType.CallSignatures = appendNewSignatures(interfaceType.CallSigs(), ext.CallSigs())
 		interfaceType.Materialize()
-interfaceType.ConstructSignatures = appendNewSignatures(interfaceType.ConstructSigs(), ext.ConstructSigs())
+		interfaceType.ConstructSignatures = appendNewSignatures(interfaceType.ConstructSigs(), ext.ConstructSigs())
 	}
 
 	if checkerDebug {
@@ -666,11 +666,11 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	}
 	if bodyType.Props() == nil {
 		bodyType.Materialize()
-bodyType.Properties = make(map[string]types.Type)
+		bodyType.Properties = make(map[string]types.Type)
 	}
 	if bodyType.OptionalProps() == nil {
 		bodyType.Materialize()
-bodyType.OptionalProperties = make(map[string]bool)
+		bodyType.OptionalProperties = make(map[string]bool)
 	}
 	nameGenericType(bodyType, node.Name.Value, typeParams)
 	properties := bodyType.Props()
@@ -741,7 +741,7 @@ bodyType.OptionalProperties = make(map[string]bool)
 			}
 			if sigs := c.extractConstructSignaturesFromType(constructorType); len(sigs) > 0 {
 				bodyType.Materialize()
-bodyType.ConstructSignatures = append(bodyType.ConstructSigs(), sigs...)
+				bodyType.ConstructSignatures = append(bodyType.ConstructSigs(), sigs...)
 			} else {
 				bodyType.SetProperty("new", constructorType)
 			}
@@ -775,14 +775,14 @@ bodyType.ConstructSignatures = append(bodyType.ConstructSigs(), sigs...)
 
 	indexSignatures = inheritIndexSignatures(indexSignatures, extendedObjs)
 	bodyType.Materialize()
-bodyType.IndexSignatures = indexSignatures
+	bodyType.IndexSignatures = indexSignatures
 	bodyType.Materialize()
-bodyType.CallSignatures = callSignatures
+	bodyType.CallSignatures = callSignatures
 	for _, ext := range extendedObjs {
 		bodyType.Materialize()
-bodyType.CallSignatures = appendNewSignatures(bodyType.CallSigs(), ext.CallSigs())
+		bodyType.CallSignatures = appendNewSignatures(bodyType.CallSigs(), ext.CallSigs())
 		bodyType.Materialize()
-bodyType.ConstructSignatures = appendNewSignatures(bodyType.ConstructSigs(), ext.ConstructSigs())
+		bodyType.ConstructSignatures = appendNewSignatures(bodyType.ConstructSigs(), ext.ConstructSigs())
 	}
 	bodyTypeChecked, sigsChecked := bodyType, indexSignatures
 	c.deferRelationCheck(func() { c.checkInterfaceIndexConstraints(node, bodyTypeChecked, sigsChecked) })
@@ -832,9 +832,9 @@ func mergeInterfaceFunctionMemberTypes(existingType, incomingType types.Type) (t
 
 	merged := types.NewObjectType()
 	merged.Materialize()
-merged.CallSignatures = append(merged.CallSigs(), existingSigs...)
+	merged.CallSignatures = append(merged.CallSigs(), existingSigs...)
 	merged.Materialize()
-merged.CallSignatures = append(merged.CallSigs(), incomingSigs...)
+	merged.CallSignatures = append(merged.CallSigs(), incomingSigs...)
 	return merged, true
 }
 
@@ -905,11 +905,11 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 		}
 		for _, baseType := range typ.Bases() {
 			result.Materialize()
-result.BaseTypes = append(result.Bases(), c.rebindThisTypeWithVisited(baseType, from, to, visited))
+			result.BaseTypes = append(result.Bases(), c.rebindThisTypeWithVisited(baseType, from, to, visited))
 		}
 		if typ.IndexSigs() != nil {
 			result.Materialize()
-result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSigs()))
+			result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSigs()))
 			for i, sig := range typ.IndexSigs() {
 				result.IndexSigs()[i] = &types.IndexSignature{
 					KeyType:        c.rebindThisTypeWithVisited(sig.KeyType, from, to, visited),
@@ -921,9 +921,9 @@ result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSigs()))
 			}
 		}
 		result.Materialize()
-result.CallSignatures = c.rebindSignaturesThisType(typ.CallSigs(), from, to, visited)
+		result.CallSignatures = c.rebindSignaturesThisType(typ.CallSigs(), from, to, visited)
 		result.Materialize()
-result.ConstructSignatures = c.rebindSignaturesThisType(typ.ConstructSigs(), from, to, visited)
+		result.ConstructSignatures = c.rebindSignaturesThisType(typ.ConstructSigs(), from, to, visited)
 		if typ.ClassMeta != nil {
 			// A full copy: SourceClassName and the inheritance fields drive
 			// protected/private access checks on an instantiated generic class (#613).
