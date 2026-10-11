@@ -280,7 +280,9 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 			// (left, right) -> right_type
 			c.checkCommaOperator(node)
 			resultType = rightType
-			debugPrintf("// [Checker Comma] Left evaluated but discarded, result type: %s\n", rightType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Comma] Left evaluated but discarded, result type: %s\n", rightType.String())
+			}
 		default:
 			debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
 			c.addError(node.Right, fmt.Sprintf("unsupported infix operator: %s", node.Operator))

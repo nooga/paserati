@@ -265,7 +265,9 @@ func (me *ModuleEnvironment) resolveReExportType(binding *ExportBinding) types.T
 
 	// Look up the exported type from the source module
 	if exportType, exists := sourceModule.Exports[binding.LocalName]; exists {
-		debugPrintf("// [ModuleEnv] Resolved re-export %s as: %s\n", binding.LocalName, exportType.String())
+		if checkerDebug {
+			debugPrintf("// [ModuleEnv] Resolved re-export %s as: %s\n", binding.LocalName, exportType.String())
+		}
 		return exportType
 	}
 

@@ -47,8 +47,10 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 				if instType.Generic.Name == "Generator" && len(instType.TypeArguments) >= 2 {
 					innerReturnTypeFromAnnotation = instType.TypeArguments[1] // TReturn parameter
 					expectedReturnTypeForBody = innerReturnTypeFromAnnotation
-					debugPrintf("// [Checker FuncLit] Generator function: using TReturn type %s for body checking\n",
-						expectedReturnTypeForBody.String())
+					if checkerDebug {
+						debugPrintf("// [Checker FuncLit] Generator function: using TReturn type %s for body checking\n",
+							expectedReturnTypeForBody.String())
+					}
 				}
 			}
 		} else {
@@ -68,7 +70,9 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		// Use the collected yield types to create AsyncGenerator<T, TReturn, TNext>
 		asyncGeneratorType := c.createAsyncGeneratorType(finalReturnType, c.currentInferredYieldTypes)
 		finalReturnType = asyncGeneratorType
-		debugPrintf("// [Checker FuncLit] Created async generator type: %s\n", finalReturnType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker FuncLit] Created async generator type: %s\n", finalReturnType.String())
+		}
 	} else if node.IsGenerator {
 		// For generator functions, the actual return type becomes Generator<YieldType, ReturnType, any>
 		debugPrintf("// [Checker FuncLit] Generator function detected, wrapping return type\n")
@@ -76,7 +80,9 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		// Use the collected yield types to create the proper Generator<T, TReturn, TNext> type
 		generatorType := c.createGeneratorType(finalReturnType, c.currentInferredYieldTypes)
 		finalReturnType = generatorType
-		debugPrintf("// [Checker FuncLit] Created generator type: %s\n", finalReturnType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker FuncLit] Created generator type: %s\n", finalReturnType.String())
+		}
 	} else if node.IsAsync {
 		// For async functions, the actual return type becomes Promise<T>
 		// But skip wrapping if already Promise<T> (explicit annotation)
@@ -94,7 +100,9 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 			}
 			promiseType := c.createPromiseType(innerType)
 			finalReturnType = promiseType
-			debugPrintf("// [Checker FuncLit] Created Promise type: %s\n", finalReturnType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker FuncLit] Created Promise type: %s\n", finalReturnType.String())
+			}
 		}
 	}
 
@@ -102,7 +110,9 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	finalFuncType := c.createFinalFunctionType(ctx, paramTypes, finalReturnType, restParameterType)
 
 	// 6. Set computed type on the FunctionLiteral node
-	debugPrintf("// [Checker FuncLit] Setting computed type: %s\n", finalFuncType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker FuncLit] Setting computed type: %s\n", finalFuncType.String())
+	}
 	node.SetComputedType(finalFuncType)
 
 	// 6. Check for overload completion if this is a named function

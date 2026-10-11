@@ -295,8 +295,10 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 							if isLoose {
 								narrowedType = types.NewUnionType(types.Null, types.Undefined)
 							}
-							debugPrintf("// [detectTypeGuard] Direct member narrowing: %s === %s\n",
-								key, narrowedType.String())
+							if checkerDebug {
+								debugPrintf("// [detectTypeGuard] Direct member narrowing: %s === %s\n",
+									key, narrowedType.String())
+							}
 							return &TypeGuard{
 								VariableName:             key,
 								NarrowedType:             narrowedType,
@@ -335,8 +337,10 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 					if discriminantValue := c.literalToType(infix.Right); discriminantValue != nil {
 						baseKey := expressionToNarrowingKey(memberExpr.Object)
 						if baseKey != "" {
-							debugPrintf("// [detectTypeGuard] Discriminated union pattern: %s.%s === %s\n",
-								baseKey, propIdent.Value, discriminantValue.String())
+							if checkerDebug {
+								debugPrintf("// [detectTypeGuard] Discriminated union pattern: %s.%s === %s\n",
+									baseKey, propIdent.Value, discriminantValue.String())
+							}
 							return &TypeGuard{
 								VariableName:      baseKey,
 								NarrowedType:      nil, // Will be computed during narrowing
@@ -355,8 +359,10 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 					if discriminantValue := c.literalToType(infix.Left); discriminantValue != nil {
 						baseKey := expressionToNarrowingKey(memberExpr.Object)
 						if baseKey != "" {
-							debugPrintf("// [detectTypeGuard] Discriminated union pattern (reversed): %s === %s.%s\n",
-								discriminantValue.String(), baseKey, propIdent.Value)
+							if checkerDebug {
+								debugPrintf("// [detectTypeGuard] Discriminated union pattern (reversed): %s === %s.%s\n",
+									discriminantValue.String(), baseKey, propIdent.Value)
+							}
 							return &TypeGuard{
 								VariableName:      baseKey,
 								NarrowedType:      nil, // Will be computed during narrowing
@@ -610,7 +616,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				for _, memberType := range unionType.Types {
 					if c.memberMatchesDiscriminant(memberType, guard.DiscriminantProp, guard.DiscriminantValue) {
 						matchingMembers = append(matchingMembers, memberType)
-						debugPrintf("// [TypeNarrowing] Member expr union member matches discriminant: %s\n", memberType.String())
+						if checkerDebug {
+							debugPrintf("// [TypeNarrowing] Member expr union member matches discriminant: %s\n", memberType.String())
+						}
 					}
 				}
 
@@ -635,7 +643,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 			}
 		}
 
-		debugPrintf("// [TypeNarrowing] Member expression narrowing detected: %s -> %s\n", guard.VariableName, narrowedType.String())
+		if checkerDebug {
+			debugPrintf("// [TypeNarrowing] Member expression narrowing detected: %s -> %s\n", guard.VariableName, narrowedType.String())
+		}
 
 		// Create a new environment with the narrowing
 		newEnv := NewEnclosedEnvironment(c.env)
@@ -670,8 +680,10 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 
 	// Handle discriminated union narrowing (e.g., expr.kind === "num")
 	if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
-		debugPrintf("// [TypeNarrowing] Discriminated union narrowing: %s.%s === %s\n",
-			guard.VariableName, guard.DiscriminantProp, guard.DiscriminantValue.String())
+		if checkerDebug {
+			debugPrintf("// [TypeNarrowing] Discriminated union narrowing: %s.%s === %s\n",
+				guard.VariableName, guard.DiscriminantProp, guard.DiscriminantValue.String())
+		}
 
 		// The original type must be a union for discriminated narrowing
 		if unionType, ok := originalType.(*types.UnionType); ok {
@@ -680,7 +692,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				// Check if this union member has the discriminant property with a matching value
 				if c.memberMatchesDiscriminant(memberType, guard.DiscriminantProp, guard.DiscriminantValue) {
 					matchingMembers = append(matchingMembers, memberType)
-					debugPrintf("// [TypeNarrowing] Union member matches discriminant: %s\n", memberType.String())
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Union member matches discriminant: %s\n", memberType.String())
+					}
 				}
 			}
 
@@ -692,8 +706,10 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					narrowedType = types.NewUnionType(matchingMembers...)
 				}
 
-				debugPrintf("// [TypeNarrowing] Narrowed '%s' to discriminated type: %s\n",
-					guard.VariableName, narrowedType.String())
+				if checkerDebug {
+					debugPrintf("// [TypeNarrowing] Narrowed '%s' to discriminated type: %s\n",
+						guard.VariableName, narrowedType.String())
+				}
 
 				narrowedEnv := NewEnclosedEnvironment(c.env)
 				narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
@@ -750,8 +766,10 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		// branch doesn't change observable behavior there, only for the
 		// two universal types where it was silently wrong. canNarrow stays
 		// false, same as the "cannot narrow" fallback below.
-		debugPrintf("// [TypeNarrowing] Property-existence guard on non-union '%s' (%s) - marker has nothing to filter, leaving type unchanged\n",
-			guard.VariableName, originalType.String())
+		if checkerDebug {
+			debugPrintf("// [TypeNarrowing] Property-existence guard on non-union '%s' (%s) - marker has nothing to filter, leaving type unchanged\n",
+				guard.VariableName, originalType.String())
+		}
 	} else if _, isObjMarker := guard.NarrowedType.(*types.ObjectTypeMarker); isObjMarker && originalType == types.Any {
 		// `typeof x === "object"` does not refine `any`.
 	} else if _, isObjMarker := guard.NarrowedType.(*types.ObjectTypeMarker); isObjMarker && originalType == types.Unknown {
@@ -786,7 +804,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					} else {
 						narrowedType = types.NewUnionType(objectMembers...)
 					}
-					debugPrintf("// [TypeNarrowing] Narrowed to object types: %s\n", narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Narrowed to object types: %s\n", narrowedType.String())
+					}
 				} else {
 					debugPrintf("// [TypeNarrowing] No object types found in union\n")
 					return nil
@@ -806,7 +826,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					} else {
 						narrowedType = types.NewUnionType(validMembers...)
 					}
-					debugPrintf("// [TypeNarrowing] Narrowed to types with property '%s': %s\n", propMarker.PropertyName, narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Narrowed to types with property '%s': %s\n", propMarker.PropertyName, narrowedType.String())
+					}
 				} else {
 					debugPrintf("// [TypeNarrowing] No types with property '%s' found in union\n", propMarker.PropertyName)
 					return nil
@@ -816,15 +838,21 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				var callableMembers []types.Type
 				debugPrintf("// [TypeNarrowing] Checking union members for callable types\n")
 				for _, memberType := range unionType.Types {
-					debugPrintf("// [TypeNarrowing] Checking member: %s (type: %T)\n", memberType.String(), memberType)
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Checking member: %s (type: %T)\n", memberType.String(), memberType)
+					}
 
 					// Resolve type aliases to their underlying types
 					resolvedType := c.resolveTypeAlias(memberType)
-					debugPrintf("// [TypeNarrowing] Resolved member to: %s (type: %T)\n", resolvedType.String(), resolvedType)
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Resolved member to: %s (type: %T)\n", resolvedType.String(), resolvedType)
+					}
 
 					if memberObj, ok := resolvedType.(*types.ObjectType); ok && memberObj.IsCallable() {
 						callableMembers = append(callableMembers, memberType) // Keep original for narrowed type
-						debugPrintf("// [TypeNarrowing] Found callable member: %s\n", memberType.String())
+						if checkerDebug {
+							debugPrintf("// [TypeNarrowing] Found callable member: %s\n", memberType.String())
+						}
 					}
 				}
 
@@ -835,7 +863,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					} else {
 						narrowedType = types.NewUnionType(callableMembers...)
 					}
-					debugPrintf("// [TypeNarrowing] Narrowed to callable types: %s\n", narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Narrowed to callable types: %s\n", narrowedType.String())
+					}
 				} else {
 					debugPrintf("// [TypeNarrowing] No callable members found in union\n")
 					return nil
@@ -855,7 +885,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					} else {
 						narrowedType = types.NewUnionType(arrayMembers...)
 					}
-					debugPrintf("// [TypeNarrowing] Narrowed to array types: %s\n", narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Narrowed to array types: %s\n", narrowedType.String())
+					}
 				} else {
 					// No array in the union — narrow to the predicate type directly
 					canNarrow = true
@@ -876,7 +908,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				// to the predicate type directly since type params could be anything.
 				canNarrow = true
 				narrowedType = guard.NarrowedType
-				debugPrintf("// [TypeNarrowing] Generic union narrowed to predicate type: %s\n", narrowedType.String())
+				if checkerDebug {
+					debugPrintf("// [TypeNarrowing] Generic union narrowed to predicate type: %s\n", narrowedType.String())
+				}
 			} else {
 				// For instanceof narrowing, filter union members that are compatible with the narrowed type
 				var compatibleMembers []types.Type
@@ -894,10 +928,14 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					} else {
 						narrowedType = types.NewUnionType(compatibleMembers...)
 					}
-					debugPrintf("// [TypeNarrowing] Narrowed to compatible types: %s\n", narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Narrowed to compatible types: %s\n", narrowedType.String())
+					}
 				} else {
-					debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
-						originalType.String(), guard.NarrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
+							originalType.String(), guard.NarrowedType.String())
+					}
 					return nil
 				}
 			}
@@ -907,16 +945,20 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		// This handles cases like narrowing 'string' to '"foo"' (literal type)
 		canNarrow = true
 		narrowedType = guard.NarrowedType
-		debugPrintf("// [TypeNarrowing] Narrowing '%s' from '%s' to more specific type '%s'\n",
-			guard.VariableName, originalType.String(), guard.NarrowedType.String())
+		if checkerDebug {
+			debugPrintf("// [TypeNarrowing] Narrowing '%s' from '%s' to more specific type '%s'\n",
+				guard.VariableName, originalType.String(), guard.NarrowedType.String())
+		}
 	} else {
 		// NarrowedType might be nil for discriminated union guards that couldn't find a match
 		narrowedTypeStr := "<nil>"
 		if guard.NarrowedType != nil {
 			narrowedTypeStr = guard.NarrowedType.String()
 		}
-		debugPrintf("// [TypeNarrowing] Variable '%s' has type '%s', cannot narrow to '%s'\n",
-			guard.VariableName, originalType.String(), narrowedTypeStr)
+		if checkerDebug {
+			debugPrintf("// [TypeNarrowing] Variable '%s' has type '%s', cannot narrow to '%s'\n",
+				guard.VariableName, originalType.String(), narrowedTypeStr)
+		}
 		return nil
 	}
 
@@ -935,8 +977,10 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		return nil
 	}
 
-	debugPrintf("// [TypeNarrowing] Narrowed variable '%s' from '%s' to '%s'\n",
-		guard.VariableName, originalType.String(), narrowedType.String())
+	if checkerDebug {
+		debugPrintf("// [TypeNarrowing] Narrowed variable '%s' from '%s' to '%s'\n",
+			guard.VariableName, originalType.String(), narrowedType.String())
+	}
 
 	return narrowedEnv
 }
@@ -989,7 +1033,9 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 				for _, memberType := range unionType.Types {
 					if !c.memberMatchesDiscriminant(memberType, guard.DiscriminantProp, guard.DiscriminantValue) {
 						nonMatchingMembers = append(nonMatchingMembers, memberType)
-						debugPrintf("// [InvertedTypeNarrowing] Member expr union member does not match: %s\n", memberType.String())
+						if checkerDebug {
+							debugPrintf("// [InvertedTypeNarrowing] Member expr union member does not match: %s\n", memberType.String())
+						}
 					}
 				}
 
@@ -1013,8 +1059,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 						}
 					}
 					newEnv.narrowings[guard.VariableName] = narrowedType
-					debugPrintf("// [InvertedTypeNarrowing] Member expr discriminant else narrowing: %s -> %s\n",
-						guard.VariableName, narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [InvertedTypeNarrowing] Member expr discriminant else narrowing: %s -> %s\n",
+							guard.VariableName, narrowedType.String())
+					}
 					return newEnv
 				}
 			}
@@ -1048,8 +1096,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					}
 				}
 				newEnv.narrowings[guard.VariableName] = narrowedType
-				debugPrintf("// [InvertedTypeNarrowing] Member expr property-existence else narrowing: %s -> %s\n",
-					guard.VariableName, narrowedType.String())
+				if checkerDebug {
+					debugPrintf("// [InvertedTypeNarrowing] Member expr property-existence else narrowing: %s -> %s\n",
+						guard.VariableName, narrowedType.String())
+				}
 				return newEnv
 			}
 			debugPrintf("// [InvertedTypeNarrowing] Member expr property-existence else narrowing failed for %s\n", guard.VariableName)
@@ -1101,15 +1151,19 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 	// Handle discriminated union narrowing in else branch
 	// e.g., after "if (expr.kind === 'num')", the else branch has all members except those with kind='num'
 	if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
-		debugPrintf("// [InvertedTypeNarrowing] Discriminated union else branch: %s.%s !== %s\n",
-			guard.VariableName, guard.DiscriminantProp, guard.DiscriminantValue.String())
+		if checkerDebug {
+			debugPrintf("// [InvertedTypeNarrowing] Discriminated union else branch: %s.%s !== %s\n",
+				guard.VariableName, guard.DiscriminantProp, guard.DiscriminantValue.String())
+		}
 
 		if unionType, ok := originalType.(*types.UnionType); ok {
 			var nonMatchingMembers []types.Type
 			for _, memberType := range unionType.Types {
 				if !c.memberMatchesDiscriminant(memberType, guard.DiscriminantProp, guard.DiscriminantValue) {
 					nonMatchingMembers = append(nonMatchingMembers, memberType)
-					debugPrintf("// [InvertedTypeNarrowing] Union member does not match: %s\n", memberType.String())
+					if checkerDebug {
+						debugPrintf("// [InvertedTypeNarrowing] Union member does not match: %s\n", memberType.String())
+					}
 				}
 			}
 
@@ -1121,8 +1175,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					narrowedType = types.NewUnionType(nonMatchingMembers...)
 				}
 
-				debugPrintf("// [InvertedTypeNarrowing] Narrowed '%s' to non-matching types: %s\n",
-					guard.VariableName, narrowedType.String())
+				if checkerDebug {
+					debugPrintf("// [InvertedTypeNarrowing] Narrowed '%s' to non-matching types: %s\n",
+						guard.VariableName, narrowedType.String())
+				}
 
 				narrowedEnv := NewEnclosedEnvironment(c.env)
 				narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
@@ -1154,8 +1210,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					}
 					narrowedEnv := NewEnclosedEnvironment(c.env)
 					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
-					debugPrintf("// [InvertedTypeNarrowing] Array.isArray false: '%s' narrowed to non-array: %s\n",
-						guard.VariableName, narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [InvertedTypeNarrowing] Array.isArray false: '%s' narrowed to non-array: %s\n",
+							guard.VariableName, narrowedType.String())
+					}
 					return narrowedEnv
 				}
 			}
@@ -1175,8 +1233,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					}
 					narrowedEnv := NewEnclosedEnvironment(c.env)
 					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
-					debugPrintf("// [InvertedTypeNarrowing] object-like false: '%s' narrowed to non-object: %s\n",
-						guard.VariableName, narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [InvertedTypeNarrowing] object-like false: '%s' narrowed to non-object: %s\n",
+							guard.VariableName, narrowedType.String())
+					}
 					return narrowedEnv
 				}
 			}
@@ -1184,8 +1244,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 				if narrowedType, narrowed := c.filterUnionByProperty(unionType, propMarker.PropertyName, false); narrowed {
 					narrowedEnv := NewEnclosedEnvironment(c.env)
 					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
-					debugPrintf("// [InvertedTypeNarrowing] property-existence false: '%s' narrowed to property absence: %s\n",
-						guard.VariableName, narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [InvertedTypeNarrowing] property-existence false: '%s' narrowed to property absence: %s\n",
+							guard.VariableName, narrowedType.String())
+					}
 					return narrowedEnv
 				}
 			}
@@ -1213,8 +1275,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					}
 					narrowedEnv := NewEnclosedEnvironment(c.env)
 					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
-					debugPrintf("// [InvertedTypeNarrowing] typeof function: '%s' narrowed to non-callable: %s\n",
-						guard.VariableName, narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [InvertedTypeNarrowing] typeof function: '%s' narrowed to non-callable: %s\n",
+							guard.VariableName, narrowedType.String())
+					}
 					return narrowedEnv
 				}
 			}
@@ -1256,16 +1320,20 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 				return nil
 			}
 
-			debugPrintf("// [InvertedTypeNarrowing] Variable '%s' narrowed from '%s' to '%s' in else branch\n",
-				guard.VariableName, originalType.String(), remainingType.String())
+			if checkerDebug {
+				debugPrintf("// [InvertedTypeNarrowing] Variable '%s' narrowed from '%s' to '%s' in else branch\n",
+					guard.VariableName, originalType.String(), remainingType.String())
+			}
 			return narrowedEnv
 		} else {
 			narrowedTypeStr := "<nil>"
 			if guard.NarrowedType != nil {
 				narrowedTypeStr = guard.NarrowedType.String()
 			}
-			debugPrintf("// [InvertedTypeNarrowing] Union '%s' does not contain type '%s' - no inverted narrowing\n",
-				originalType.String(), narrowedTypeStr)
+			if checkerDebug {
+				debugPrintf("// [InvertedTypeNarrowing] Union '%s' does not contain type '%s' - no inverted narrowing\n",
+					originalType.String(), narrowedTypeStr)
+			}
 			return nil
 		}
 	}
@@ -1492,7 +1560,9 @@ func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
 	// Use the existing GetEffectiveType function which handles AliasType resolution
 	effective := types.GetEffectiveType(t)
 	if effective != t {
-		debugPrintf("// [TypeNarrowing] Resolved alias %s -> %s\n", t.String(), effective.String())
+		if checkerDebug {
+			debugPrintf("// [TypeNarrowing] Resolved alias %s -> %s\n", t.String(), effective.String())
+		}
 		return effective
 	}
 
@@ -1500,26 +1570,38 @@ func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
 	switch typ := t.(type) {
 	case *types.InstantiatedType:
 		// For instantiated generic types, try to substitute and resolve
-		debugPrintf("// [TypeNarrowing] Resolving InstantiatedType: %s\n", typ.String())
+		if checkerDebug {
+			debugPrintf("// [TypeNarrowing] Resolving InstantiatedType: %s\n", typ.String())
+		}
 		substituted := typ.Substitute()
-		debugPrintf("// [TypeNarrowing] InstantiatedType substituted to: %s\n", substituted.String())
+		if checkerDebug {
+			debugPrintf("// [TypeNarrowing] InstantiatedType substituted to: %s\n", substituted.String())
+		}
 		return c.resolveTypeAlias(substituted) // Recursively resolve the result
 	case *types.GenericTypeAliasForwardReference:
 		// Try to resolve forward references by looking up the alias name
 		debugPrintf("// [TypeNarrowing] Attempting to resolve GenericTypeAliasForwardReference: %s\n", typ.AliasName)
 		// First try type namespace (interfaces, type aliases), then value namespace
 		if resolvedType, found := c.env.ResolveType(typ.AliasName); found {
-			debugPrintf("// [TypeNarrowing] Found type '%s' in type environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
+			if checkerDebug {
+				debugPrintf("// [TypeNarrowing] Found type '%s' in type environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
+			}
 			if genericType, ok := resolvedType.(*types.GenericType); ok && len(typ.TypeArguments) > 0 {
-				debugPrintf("// [TypeNarrowing] Instantiating generic type with %d args\n", len(typ.TypeArguments))
+				if checkerDebug {
+					debugPrintf("// [TypeNarrowing] Instantiating generic type with %d args\n", len(typ.TypeArguments))
+				}
 				instantiated := types.NewInstantiatedType(genericType, typ.TypeArguments)
 				return c.resolveTypeAlias(instantiated.Substitute())
 			}
 			return c.resolveTypeAlias(resolvedType)
 		} else if resolvedType, _, found := c.env.Resolve(typ.AliasName); found {
-			debugPrintf("// [TypeNarrowing] Found type alias '%s' in value environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
+			if checkerDebug {
+				debugPrintf("// [TypeNarrowing] Found type alias '%s' in value environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
+			}
 			if genericType, ok := resolvedType.(*types.GenericType); ok && len(typ.TypeArguments) > 0 {
-				debugPrintf("// [TypeNarrowing] Instantiating generic type with %d args\n", len(typ.TypeArguments))
+				if checkerDebug {
+					debugPrintf("// [TypeNarrowing] Instantiating generic type with %d args\n", len(typ.TypeArguments))
+				}
 				instantiated := types.NewInstantiatedType(genericType, typ.TypeArguments)
 				return c.resolveTypeAlias(instantiated.Substitute())
 			}
@@ -1597,7 +1679,9 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 				if found && originalType != nil {
 					narrowedEnv := NewEnclosedEnvironment(c.env)
 					narrowedEnv.Define(varName, narrowedType, isConst)
-					debugPrintf("// [TypeNarrowing] OR-chain equality narrowing: '%s' -> %s\n", varName, narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [TypeNarrowing] OR-chain equality narrowing: '%s' -> %s\n", varName, narrowedType.String())
+					}
 					return narrowedEnv
 				}
 			}
@@ -1784,8 +1868,10 @@ func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 			// Create narrowed environment
 			narrowedEnv := NewEnclosedEnvironment(c.env)
 			if narrowedEnv.Define(varName, narrowedType, isConst) {
-				debugPrintf("// [TypeNarrowing] Truthiness check narrowed '%s' from '%s' to '%s'\n",
-					varName, originalType.String(), narrowedType.String())
+				if checkerDebug {
+					debugPrintf("// [TypeNarrowing] Truthiness check narrowed '%s' from '%s' to '%s'\n",
+						varName, originalType.String(), narrowedType.String())
+				}
 				return narrowedEnv
 			}
 		}
@@ -1831,8 +1917,10 @@ func (c *Checker) narrowBaseObjectFromOptionalChaining(baseExpr parser.Expressio
 		}
 		if narrowedType := removeNullUndefined(originalType); narrowedType != nil {
 			env.Define(ident.Value, narrowedType, isConst)
-			debugPrintf("// [TypeNarrowing] Back-propagated optional chaining narrowing: '%s' from '%s' to '%s'\n",
-				ident.Value, originalType.String(), narrowedType.String())
+			if checkerDebug {
+				debugPrintf("// [TypeNarrowing] Back-propagated optional chaining narrowing: '%s' from '%s' to '%s'\n",
+					ident.Value, originalType.String(), narrowedType.String())
+			}
 		}
 		return
 	}
@@ -1852,8 +1940,10 @@ func (c *Checker) narrowBaseObjectFromOptionalChaining(baseExpr parser.Expressio
 		}
 		if narrowedType := removeNullUndefined(memberType); narrowedType != nil {
 			env.narrowings[memberKey] = narrowedType
-			debugPrintf("// [TypeNarrowing] Back-propagated optional chaining narrowing for member: '%s' from '%s' to '%s'\n",
-				memberKey, memberType.String(), narrowedType.String())
+			if checkerDebug {
+				debugPrintf("// [TypeNarrowing] Back-propagated optional chaining narrowing for member: '%s' from '%s' to '%s'\n",
+					memberKey, memberType.String(), narrowedType.String())
+			}
 		}
 	}
 }
@@ -1891,8 +1981,10 @@ func (c *Checker) applyMemberTruthinessNarrowing(memberExpr *parser.MemberExpres
 
 						newEnv := NewEnclosedEnvironment(c.env)
 						if newEnv.Define(baseKey, narrowedType, isConst) {
-							debugPrintf("// [TypeNarrowing] Member truthiness discriminant narrowed '%s' from '%s' to '%s'\n",
-								baseKey, originalType.String(), narrowedType.String())
+							if checkerDebug {
+								debugPrintf("// [TypeNarrowing] Member truthiness discriminant narrowed '%s' from '%s' to '%s'\n",
+									baseKey, originalType.String(), narrowedType.String())
+							}
 							return newEnv
 						}
 					}
@@ -1952,8 +2044,10 @@ func (c *Checker) applyMemberTruthinessNarrowing(memberExpr *parser.MemberExpres
 		}
 	}
 	newEnv.narrowings[memberKey] = narrowedType
-	debugPrintf("// [TypeNarrowing] Member truthiness check narrowed '%s' from '%s' to '%s'\n",
-		memberKey, memberType.String(), narrowedType.String())
+	if checkerDebug {
+		debugPrintf("// [TypeNarrowing] Member truthiness check narrowed '%s' from '%s' to '%s'\n",
+			memberKey, memberType.String(), narrowedType.String())
+	}
 	return newEnv
 }
 
@@ -2184,8 +2278,10 @@ func (c *Checker) mergePostIfTypes(originalEnv *Environment, narrowedEnv *Enviro
 			mergedEnv := NewEnclosedEnvironment(originalEnv)
 			mergedEnv.Define(varName, mergedType, false)
 			c.env = mergedEnv
-			debugPrintf("// [MergePostIf] Merged '%s': then=%s, else=%s → %s\n",
-				varName, thenType.String(), elseType.String(), mergedType.String())
+			if checkerDebug {
+				debugPrintf("// [MergePostIf] Merged '%s': then=%s, else=%s → %s\n",
+					varName, thenType.String(), elseType.String(), mergedType.String())
+			}
 		}
 	} else {
 		// --- Member expression narrowing merge ---
@@ -2228,8 +2324,10 @@ func (c *Checker) mergePostIfTypes(originalEnv *Environment, narrowedEnv *Enviro
 		}
 		mergedEnv.narrowings[varName] = mergedType
 		c.env = mergedEnv
-		debugPrintf("// [MergePostIf] Merged member '%s': then=%s, else=%s → %s\n",
-			varName, thenType.String(), elseType.String(), mergedType.String())
+		if checkerDebug {
+			debugPrintf("// [MergePostIf] Merged member '%s': then=%s, else=%s → %s\n",
+				varName, thenType.String(), elseType.String(), mergedType.String())
+		}
 	}
 }
 
@@ -2441,7 +2539,9 @@ func (c *Checker) updateNarrowingInChain(key string, typ types.Type) {
 		if current.narrowings != nil {
 			if _, exists := current.narrowings[key]; exists {
 				current.narrowings[key] = typ
-				debugPrintf("// [updateNarrowingInChain] Updated '%s' to '%s'\n", key, typ.String())
+				if checkerDebug {
+					debugPrintf("// [updateNarrowingInChain] Updated '%s' to '%s'\n", key, typ.String())
+				}
 				return
 			}
 		}

@@ -57,14 +57,18 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 		if !c.env.Define(functionName, funcType, false) {
 			c.mergeAmbientOverload(functionName, sig)
 		}
-		debugPrintf("// [Checker] Added ambient function signature for '%s': %s\n", functionName, funcType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker] Added ambient function signature for '%s': %s\n", functionName, funcType.String())
+		}
 		return
 	}
 
 	// Add the signature to pending overloads in the environment
 	c.env.AddOverloadSignature(functionName, node)
 	debugPrintf("// [Checker processFunctionSignature] Added to env %p\n", c.env)
-	debugPrintf("// [Checker] Added overload signature for '%s': %s\n", functionName, funcType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker] Added overload signature for '%s': %s\n", functionName, funcType.String())
+	}
 }
 
 func (c *Checker) hasPendingOverloads(functionName string) bool {
@@ -101,7 +105,9 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 		return // No pending overloads
 	}
 
-	debugPrintf("// [Checker completeOverloadedFunction] Found %d pending overloads for '%s'\n", len(pendingSignatures), functionName)
+	if checkerDebug {
+		debugPrintf("// [Checker completeOverloadedFunction] Found %d pending overloads for '%s'\n", len(pendingSignatures), functionName)
+	}
 
 	// Convert signatures to call signatures for unified ObjectType
 	var overloadSignatures []*types.Signature
@@ -111,13 +117,17 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 				// Extract call signatures from unified ObjectType
 				if len(objType.CallSignatures) > 0 {
 					overloadSignatures = append(overloadSignatures, objType.CallSignatures[0])
-					debugPrintf("// [Checker completeOverloadedFunction] Added overload signature: %s\n", objType.CallSignatures[0].String())
+					if checkerDebug {
+						debugPrintf("// [Checker completeOverloadedFunction] Added overload signature: %s\n", objType.CallSignatures[0].String())
+					}
 				}
 			}
 		}
 	}
 
-	debugPrintf("// [Checker completeOverloadedFunction] Converted %d overload signatures\n", len(overloadSignatures))
+	if checkerDebug {
+		debugPrintf("// [Checker completeOverloadedFunction] Converted %d overload signatures\n", len(overloadSignatures))
+	}
 
 	// Convert implementation ObjectType to Signature
 	if len(implementation.CallSignatures) == 0 {
@@ -136,8 +146,10 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 
 	// Complete the overloaded function in the environment using unified approach
 	if overloadEnv.CompleteOverloadedFunctionUTS(functionName, overloadSignatures, implementationSig) {
-		debugPrintf("// [Checker] Completed unified overloaded function '%s' with %d overloads\n",
-			functionName, len(overloadSignatures))
+		if checkerDebug {
+			debugPrintf("// [Checker] Completed unified overloaded function '%s' with %d overloads\n",
+				functionName, len(overloadSignatures))
+		}
 	} else {
 		debugPrintf("// [Checker] FAILED to complete unified overloaded function '%s'\n", functionName)
 		c.addError(nil, fmt.Sprintf("failed to complete overloaded function '%s'", functionName))
@@ -148,7 +160,9 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 // with an overload signature. This is a simplified check.
 // DEPRECATED: Use isSignatureCompatible instead for unified ObjectType system.
 func (c *Checker) isImplementationCompatible(implementation, overload *types.ObjectType) bool {
-	debugPrintf("// [Checker isImplementationCompatible] Checking implementation %s against overload %s\n", implementation.String(), overload.String())
+	if checkerDebug {
+		debugPrintf("// [Checker isImplementationCompatible] Checking implementation %s against overload %s\n", implementation.String(), overload.String())
+	}
 
 	// Extract call signatures from ObjectTypes
 	if len(implementation.CallSignatures) == 0 || len(overload.CallSignatures) == 0 {
@@ -167,7 +181,9 @@ func (c *Checker) isImplementationCompatible(implementation, overload *types.Obj
 // isSignatureCompatible checks if an implementation signature is compatible
 // with an overload signature. This is the unified version for Signature types.
 func (c *Checker) isSignatureCompatible(implementation, overload *types.Signature) bool {
-	debugPrintf("// [Checker isSignatureCompatible] Checking implementation %s against overload %s\n", implementation.String(), overload.String())
+	if checkerDebug {
+		debugPrintf("// [Checker isSignatureCompatible] Checking implementation %s against overload %s\n", implementation.String(), overload.String())
+	}
 
 	// Mirrors TypeScript's isImplementationCompatibleWithOverload: type
 	// parameters are erased to any, the return types must be related in either
@@ -338,8 +354,10 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 
 	// Found a matching overload
 	matchedOverload := overloadedFunc.CallSignatures[overloadIndex]
-	debugPrintf("// [Checker OverloadCall] Found matching overload %d: %s for call with args (%v)\n",
-		overloadIndex, matchedOverload.String(), argTypes)
+	if checkerDebug {
+		debugPrintf("// [Checker OverloadCall] Found matching overload %d: %s for call with args (%v)\n",
+			overloadIndex, matchedOverload.String(), argTypes)
+	}
 
 	// Perform detailed argument type checking for the matched overload
 	if matchedOverload.IsVariadic {
@@ -396,7 +414,9 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 
 	// Set the result type from the matched overload
 	node.SetComputedType(resultType)
-	debugPrintf("// [Checker OverloadCall] Set result type to: %s\n", resultType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker OverloadCall] Set result type to: %s\n", resultType.String())
+	}
 }
 
 // mergeAmbientOverload adds another `declare function f(...)` signature to the

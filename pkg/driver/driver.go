@@ -1095,7 +1095,9 @@ func (p *Paserati) RunModule(filename string) bool {
 	// not reliable here, since this call may be reentrant).
 	exportedValues := p.collectExportedValuesForModule(moduleRecord)
 	moduleRecord.ExportValues = exportedValues
-	debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
+	if debugDriver {
+		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
+	}
 
 	// Get source code for error display
 	sourceCode := ""
@@ -1224,7 +1226,9 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 	// require() partway through executing an unrelated entry script).
 	exportedValues := p.collectExportedValuesForModule(moduleRecord)
 	moduleRecord.ExportValues = exportedValues
-	debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
+	if debugDriver {
+		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
+	}
 
 	return finalValue, []errors.PaseratiError{}, runtimeErrs
 }
@@ -1928,7 +1932,9 @@ func (p *Paserati) registerNativeModuleExports(moduleRecord *modules.ModuleRecor
 	}
 
 	exportValues := moduleRecord.RealmExportValues(p.vmInstance)
-	debugPrintf("// [Driver] Registering %d native module exports with HeapAlloc\n", len(exportValues))
+	if debugDriver {
+		debugPrintf("// [Driver] Registering %d native module exports with HeapAlloc\n", len(exportValues))
+	}
 
 	// Get the HeapAlloc instance from the compiler
 	heapAlloc := p.compiler.GetHeapAlloc()
@@ -1976,7 +1982,9 @@ func (p *Paserati) coordinateModuleCompilerGlobals(moduleCompiler *compiler.Comp
 	// Get all global variables that have been initialized in the main compiler
 	globalNames := p.compiler.GetGlobalNames()
 
-	debugPrintf("// [Driver] coordinateModuleCompilerGlobals: Pre-populating %d builtin globals\n", len(globalNames))
+	if debugDriver {
+		debugPrintf("// [Driver] coordinateModuleCompilerGlobals: Pre-populating %d builtin globals\n", len(globalNames))
+	}
 
 	// Pre-assign the same global indices in the module compiler to maintain consistency
 	for _, name := range globalNames {
