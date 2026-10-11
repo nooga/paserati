@@ -5,14 +5,27 @@ package types
 // instantiations whose members are substituted only if something reads them.
 
 // SetLazyMembers makes fill fill in ot's members when one is first read or
-// written. fill runs once.
-func (ot *ObjectType) SetLazyMembers(fill func(*ObjectType)) { ot.lazy = fill }
+// written: source's members with substitution applied. fill runs once.
+func (ot *ObjectType) SetLazyMembers(source *ObjectType, substitution map[string]Type, fill func(*ObjectType)) {
+	ot.lazy, ot.lazySource, ot.lazySubstitution = fill, source, substitution
+}
+
+// LazySource reports, for an object whose members are not filled in yet,
+// the object and substitution they will be made from. A walk asking what
+// the members could mention asks these instead of filling them in, which
+// would substitute (and so walk) further.
+func (ot *ObjectType) LazySource() (*ObjectType, map[string]Type, bool) {
+	if ot.lazy == nil {
+		return nil, nil, false
+	}
+	return ot.lazySource, ot.lazySubstitution, true
+}
 
 // Materialize fills in members not filled in yet. Accessors call it; a plain
 // write to a member field calls it first.
 func (ot *ObjectType) Materialize() {
 	if fill := ot.lazy; fill != nil {
-		ot.lazy = nil
+		ot.lazy, ot.lazySource, ot.lazySubstitution = nil, nil, nil
 		fill(ot)
 	}
 }

@@ -1942,7 +1942,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		}
 		// The caller may reuse its map for another substitution.
 		subst, env := maps.Clone(substitution), c.env
-		result.SetLazyMembers(func(ot *types.ObjectType) {
+		result.SetLazyMembers(typ, subst, func(ot *types.ObjectType) {
 			// Substitute as where the instantiation was written (`typeof x`
 			// resolves in that scope); what it reports was reported there.
 			saved := c.env
@@ -4487,6 +4487,29 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 			return false
 		}
 		visited[t] = true
+		if source, subst, lazy := tt.LazySource(); lazy {
+			// Its members will be source's with subst applied: a name can
+			// come from source (unless subst replaces it) or from what subst
+			// puts in. Reading them would fill them in, substituting and so
+			// asking again, on and on through recursive generics.
+			for _, v := range subst {
+				if mayMentionTypeParamNames(v, names, visited, shadowed) {
+					return true
+				}
+			}
+			sourceNames, sourceVisited := names, visited
+			for name := range subst {
+				if _, ok := names[name]; ok {
+					sourceNames = maps.Clone(names)
+					for n := range subst {
+						delete(sourceNames, n)
+					}
+					sourceVisited = shadowedVisited(shadowed, sourceNames)
+					break
+				}
+			}
+			return len(sourceNames) > 0 && mayMentionTypeParamNames(source, sourceNames, sourceVisited, shadowed)
+		}
 		if tt.ClassMeta != nil && tt.ClassMeta.IsClassInstance && !tt.Pending {
 			// A class instance mentions outer parameters only through its
 			// type arguments (its members name the class's own parameters,
