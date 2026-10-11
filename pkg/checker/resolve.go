@@ -1714,6 +1714,12 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	// cached per argument identities (the arguments are referenced, not
 	// copied, so they may still be filling in).
 	cacheable := c.completeGenerics[genericType]
+	if !cacheable && isOwnTypeParameters(genericType, finalTypeArgs) {
+		// `next?: Node<T>` inside `interface Node<T>`: the declared type
+		// itself. Substituting would copy the body as declared so far,
+		// without the members after this one.
+		return genericType.Body
+	}
 	key := genericInstKey{generic: genericType, args: typeListKey(finalTypeArgs)}
 	if cacheable {
 		if cached, hit := c.genericInstCache[key]; hit {
@@ -1745,6 +1751,21 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 
 	debugPrintf("// [Checker] Instantiated type: %s\n", instantiatedType.String())
 	return instantiatedType
+}
+
+// isOwnTypeParameters reports whether args are the generic's own type
+// parameters, in order.
+func isOwnTypeParameters(generic *types.GenericType, args []types.Type) bool {
+	if len(args) != len(generic.TypeParameters) || generic.Body == nil {
+		return false
+	}
+	for i, arg := range args {
+		tp, ok := arg.(*types.TypeParameterType)
+		if !ok || tp.Parameter != generic.TypeParameters[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // substituteTypes recursively substitutes TypeParameterType with concrete types
@@ -1891,7 +1912,9 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 
 		// Copy and substitute call signatures
 		if typ.CallSignatures != nil {
-			result.CallSignatures = make([]*types.Signature, len(typ.CallSignatures))
+			// Assigned once complete: a recursive visit of result meanwhile
+			// (it is in visited) must not see empty slots.
+			callSignatures := make([]*types.Signature, len(typ.CallSignatures))
 			for i, sig := range typ.CallSignatures {
 				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 				for j, paramType := range sig.ParameterTypes {
@@ -1901,7 +1924,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 				newReturnType := c.substituteTypesWithVisited(sig.ReturnType, substitution, visited)
 				newRestParamType := c.substituteTypesWithVisited(sig.RestParameterType, substitution, visited)
 
-				result.CallSignatures[i] = &types.Signature{
+				callSignatures[i] = &types.Signature{
 					TypeParameters:    sig.TypeParameters,
 					ParameterNames:    sig.ParameterNames,
 					ParameterTypes:    newParamTypes,
@@ -1912,11 +1935,12 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 					RestParameterType: newRestParamType,
 				}
 			}
+			result.CallSignatures = callSignatures
 		}
 
 		// Copy construct signatures (if any)
 		if typ.ConstructSignatures != nil {
-			result.ConstructSignatures = make([]*types.Signature, len(typ.ConstructSignatures))
+			constructSignatures := make([]*types.Signature, len(typ.ConstructSignatures))
 			for i, sig := range typ.ConstructSignatures {
 				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 				for j, paramType := range sig.ParameterTypes {
@@ -1926,7 +1950,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 				newReturnType := c.substituteTypesWithVisited(sig.ReturnType, substitution, visited)
 				newRestParamType := c.substituteTypesWithVisited(sig.RestParameterType, substitution, visited)
 
-				result.ConstructSignatures[i] = &types.Signature{
+				constructSignatures[i] = &types.Signature{
 					TypeParameters:    sig.TypeParameters,
 					ParameterNames:    sig.ParameterNames,
 					ParameterTypes:    newParamTypes,
@@ -1937,6 +1961,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 					RestParameterType: newRestParamType,
 				}
 			}
+			result.ConstructSignatures = constructSignatures
 		}
 
 		// Copy ClassMeta to preserve class instance information
@@ -2156,6 +2181,9 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 	c.inferPendingInit(path[0])
 	varType, _, found := c.env.Resolve(path[0])
 	if found {
+		if c.isBuiltinGlobalThis(path[0], varType) {
+			varType = c.globalThisType()
+		}
 		varType = c.checkNamespaceUsedAsValue(&parser.Identifier{Token: node.Token, Value: path[0]}, varType)
 	}
 	if !found {
@@ -2188,6 +2216,9 @@ func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 		c.inferPendingInit(typeofType.Identifier)
 		varType, _, found := c.env.Resolve(typeofType.Identifier)
 		if found {
+			if c.isBuiltinGlobalThis(typeofType.Identifier, varType) {
+				varType = c.globalThisType()
+			}
 			debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Successfully resolved typeof %s to %T\n", typeofType.Identifier, varType)
 			if len(typeofType.Path) > 1 {
 				walked, ok := c.speculativeTypeofPath(typeofType.Path, varType)

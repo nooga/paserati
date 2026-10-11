@@ -81,8 +81,11 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	// A namespace body is a var scope of its own, like a function body.
 	bodyEnv := NewFunctionEnvironment(outerEnv)
 	if node.AmbientModule && name == "global" && c.globalScope != nil {
-		// `declare global { ... }` declares in the global scope.
-		bodyEnv = c.globalScope
+		// `declare global { ... }` declares in the global scope, but its
+		// names resolve lexically: the module's own imports and aliases
+		// (`type _Request = ...; declare global { interface Request extends
+		// _Request {} }`, as @types/node writes) are visible in it.
+		bodyEnv = newGlobalAugmentationEnvironment(c.globalScope, outerEnv)
 	}
 	c.env = bodyEnv
 

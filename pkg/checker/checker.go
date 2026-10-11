@@ -1098,11 +1098,13 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// NOTE: Only pre-register NON-GENERIC interfaces and type aliases. Generic types
 	// are handled differently because they need proper type parameter processing.
 	debugPrintf("\n// --- Checker - Pass 0: Pre-registering Interface and Type Alias Names ---\n")
+	// Only this scope counts: a module's own declarations shadow globals of
+	// the same name (@types/node's module-local `interface EventTarget`).
 	for _, stmt := range program.Statements {
 		if interfaceStmt, ok := stmt.(*parser.InterfaceDeclaration); ok {
 			// Only pre-register non-generic interfaces
 			if len(interfaceStmt.TypeParameters) == 0 {
-				if _, exists := c.env.ResolveType(interfaceStmt.Name.Value); !exists {
+				if _, exists := c.env.ResolveTypeLocal(interfaceStmt.Name.Value); !exists {
 					placeholderType := &types.ObjectType{
 						Properties:         make(map[string]types.Type),
 						OptionalProperties: make(map[string]bool),
@@ -1115,7 +1117,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		} else if aliasStmt, ok := stmt.(*parser.TypeAliasStatement); ok {
 			// Only pre-register non-generic type aliases
 			if len(aliasStmt.TypeParameters) == 0 {
-				if _, exists := c.env.ResolveType(aliasStmt.Name.Value); !exists {
+				if _, exists := c.env.ResolveTypeLocal(aliasStmt.Name.Value); !exists {
 					// Use a forward reference placeholder that will be resolved in Pass 1
 					placeholderType := &types.TypeAliasForwardReference{
 						AliasName: aliasStmt.Name.Value,
@@ -1130,7 +1132,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// declaration. A generic class is left unregistered, like a generic
 			// interface: B<T> before `class B<T>` is then a forward reference
 			// instantiated once B is declared, not "B is not generic".
-			if _, exists := c.env.ResolveType(classStmt.Name.Value); !exists && len(classStmt.TypeParameters) == 0 {
+			if _, exists := c.env.ResolveTypeLocal(classStmt.Name.Value); !exists && len(classStmt.TypeParameters) == 0 {
 				placeholderType := &types.ObjectType{
 					Properties:         make(map[string]types.Type),
 					OptionalProperties: make(map[string]bool),
@@ -1144,7 +1146,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				if interfaceStmt, ok := exportStmt.Declaration.(*parser.InterfaceDeclaration); ok {
 					// Only pre-register non-generic interfaces
 					if len(interfaceStmt.TypeParameters) == 0 {
-						if _, exists := c.env.ResolveType(interfaceStmt.Name.Value); !exists {
+						if _, exists := c.env.ResolveTypeLocal(interfaceStmt.Name.Value); !exists {
 							placeholderType := &types.ObjectType{
 								Properties:         make(map[string]types.Type),
 								OptionalProperties: make(map[string]bool),
@@ -1157,7 +1159,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				} else if aliasStmt, ok := exportStmt.Declaration.(*parser.TypeAliasStatement); ok {
 					// Only pre-register non-generic type aliases
 					if len(aliasStmt.TypeParameters) == 0 {
-						if _, exists := c.env.ResolveType(aliasStmt.Name.Value); !exists {
+						if _, exists := c.env.ResolveTypeLocal(aliasStmt.Name.Value); !exists {
 							placeholderType := &types.TypeAliasForwardReference{
 								AliasName: aliasStmt.Name.Value,
 							}
@@ -1167,7 +1169,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					}
 				} else if classDecl, ok := exportStmt.Declaration.(*parser.ClassDeclaration); ok {
 					// Pre-register exported class names (non-generic, as above)
-					if _, exists := c.env.ResolveType(classDecl.Name.Value); !exists && len(classDecl.TypeParameters) == 0 {
+					if _, exists := c.env.ResolveTypeLocal(classDecl.Name.Value); !exists && len(classDecl.TypeParameters) == 0 {
 						placeholderType := &types.ObjectType{
 							Properties:         make(map[string]types.Type),
 							OptionalProperties: make(map[string]bool),

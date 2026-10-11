@@ -272,7 +272,9 @@ func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
 	// Check for conflict with existing type alias in this scope
 	if existingType, exists := e.typeAliases[name]; exists {
 		// Allow overwriting forward references with the actual type
-		if _, isForwardRef := existingType.(*types.TypeAliasForwardReference); !isForwardRef {
+		// and the any-typed lib stubs (declareAmbientLibGlobals) with a real
+		// declaration (@types/node's global `interface EventTarget`).
+		if _, isForwardRef := existingType.(*types.TypeAliasForwardReference); !isForwardRef && !(existingType == types.Any && ambientTypeStubs[name]) {
 			// Also allow overwriting empty object placeholders (used for interface forward refs)
 			if objType, isObj := existingType.(*types.ObjectType); !isObj || len(objType.Properties) > 0 || len(objType.CallSignatures) > 0 {
 				return false
@@ -683,4 +685,16 @@ func (e *Environment) PrimitivePrototypeNames(primitiveName string) []string {
 		}
 	}
 	return nil
+}
+
+// newGlobalAugmentationEnvironment is the scope of a `declare global { ... }`
+// body: what it declares goes into global (the maps are shared), while names
+// not declared there resolve through lexical, the enclosing module scope.
+func newGlobalAugmentationEnvironment(global, lexical *Environment) *Environment {
+	env := NewFunctionEnvironment(lexical)
+	env.symbols = global.symbols
+	env.typeAliases = global.typeAliases
+	env.pendingOverloads = global.pendingOverloads
+	env.overloadedFunctions = global.overloadedFunctions
+	return env
 }

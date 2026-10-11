@@ -607,6 +607,16 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 	}
 
+	// An intersection is callable with the call signatures of its members
+	// (vitest's `test` is `ChainableTestAPI & ExtendedAPI & Hooks & {...}`).
+	if inter, ok := funcNodeType.(*types.IntersectionType); ok && !hasConflictingDiscriminant(inter) {
+		if sigs := c.intersectionCallSignatures(inter, 0); len(sigs) > 0 {
+			callable := types.NewObjectType()
+			callable.CallSignatures = sigs
+			funcNodeType = callable
+		}
+	}
+
 	// Handle union of callable types - e.g. string.includes | Uint8Array.includes
 	if unionType, isUnion := funcNodeType.(*types.UnionType); isUnion {
 		// Visit arguments
@@ -2360,4 +2370,50 @@ func (c *Checker) narrowFilterResult(node *parser.CallExpression, result types.T
 		return result
 	}
 	return &types.ArrayType{ElementType: pred.Type}
+}
+
+// intersectionCallSignatures collects the call signatures of an
+// intersection's members, in order.
+func (c *Checker) intersectionCallSignatures(inter *types.IntersectionType, depth int) []*types.Signature {
+	if depth > 8 {
+		return nil
+	}
+	var sigs []*types.Signature
+	for _, member := range inter.Types {
+		member = types.GetEffectiveType(member)
+		if inst, ok := member.(*types.InstantiatedType); ok {
+			member = types.GetEffectiveType(inst.Substitute())
+		}
+		switch m := member.(type) {
+		case *types.ObjectType:
+			sigs = append(sigs, m.CallSignatures...)
+		case *types.IntersectionType:
+			sigs = append(sigs, c.intersectionCallSignatures(m, depth+1)...)
+		}
+	}
+	return sigs
+}
+
+// hasConflictingDiscriminant reports an intersection TypeScript reduces to
+// never: two members give a property disjoint types, one of them a unit type
+// (`{ a: "" } & { a: number }`).
+func hasConflictingDiscriminant(inter *types.IntersectionType) bool {
+	seen := map[string]types.Type{}
+	for _, member := range inter.Types {
+		obj, ok := types.GetEffectiveType(member).(*types.ObjectType)
+		if !ok {
+			continue
+		}
+		for name, prop := range obj.Properties {
+			prev, exists := seen[name]
+			if !exists {
+				seen[name] = prop
+				continue
+			}
+			if (isUnitType(prev) || isUnitType(prop)) && !types.IsAssignable(prev, prop) && !types.IsAssignable(prop, prev) {
+				return true
+			}
+		}
+	}
+	return false
 }
