@@ -11,16 +11,17 @@ import (
 
 // setReadonlyProperty records (or clears) a property's readonly flag.
 func setReadonlyProperty(obj *types.ObjectType, name string, readonly bool) {
-	if obj.ReadOnlyProperties == nil {
+	if obj.ReadOnlyProps() == nil {
 		if !readonly {
 			return
 		}
-		obj.ReadOnlyProperties = map[string]bool{}
+		obj.Materialize()
+obj.ReadOnlyProperties = map[string]bool{}
 	}
 	if readonly {
-		obj.ReadOnlyProperties[name] = true
+		obj.ReadOnlyProps()[name] = true
 	} else {
-		delete(obj.ReadOnlyProperties, name)
+		delete(obj.ReadOnlyProps(), name)
 	}
 }
 
@@ -129,8 +130,8 @@ func (c *Checker) isReadonlyProperty(t types.Type, name string, depth int) bool 
 }
 
 func (c *Checker) objectPropertyReadonly(obj *types.ObjectType, name string, depth int) bool {
-	if propType, own := obj.Properties[name]; own {
-		if obj.ReadOnlyProperties[name] || types.IsReadonlyType(propType) {
+	if propType, own := obj.Props()[name]; own {
+		if obj.ReadOnlyProps()[name] || types.IsReadonlyType(propType) {
 			return true
 		}
 		if obj.ClassMeta != nil {
@@ -140,7 +141,7 @@ func (c *Checker) objectPropertyReadonly(obj *types.ObjectType, name string, dep
 		}
 		return false
 	}
-	for _, base := range obj.BaseTypes {
+	for _, base := range obj.Bases() {
 		if c.hasProperty(base, name) {
 			return c.isReadonlyProperty(base, name, depth+1)
 		}
@@ -174,7 +175,7 @@ func (c *Checker) hasReadonlyIndex(t types.Type, name string) bool {
 		}
 		return c.hasReadonlyIndex(tt.InnerType, name)
 	case *types.ObjectType:
-		for _, sig := range tt.IndexSignatures {
+		for _, sig := range tt.IndexSigs() {
 			if !sig.Readonly {
 				continue
 			}

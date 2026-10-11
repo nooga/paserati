@@ -20,7 +20,7 @@ func (at *ArrayType) String() string {
 		case *UnionType, *IntersectionType:
 			elemTypeStr = "(" + elemTypeStr + ")"
 		case *ObjectType:
-			if elem.IsCallable() && len(elem.Properties) == 0 && elem.DisplayName == "" && elem.GenericName == "" {
+			if elem.IsCallable() && len(elem.Props()) == 0 && elem.DisplayName == "" && elem.GenericName == "" {
 				elemTypeStr = "(" + elemTypeStr + ")"
 			}
 		}

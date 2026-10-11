@@ -92,7 +92,7 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 
 	// ReadonlySet<T>: Set<T> without the mutating methods
 	readonlyBody := types.NewObjectType()
-	for name, propType := range setInstanceType.Properties {
+	for name, propType := range setInstanceType.Props() {
 		switch name {
 		case "add", "delete", "clear":
 		default:

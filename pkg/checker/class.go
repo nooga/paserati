@@ -354,7 +354,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 			return
 		}
 		iface.ClassMeta = placeholderType.ClassMeta
-		for memberName := range iface.Properties {
+		for memberName := range iface.Props() {
 			iface.ClassMeta.AddMember(memberName, types.AccessPublic, false, false)
 		}
 		placeholderType = iface
@@ -723,8 +723,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			}
 
 			methodType := c.inferMethodType(getter)
-			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
-				propType = objType.CallSignatures[0].ReturnType
+			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSigs()) > 0 {
+				propType = objType.CallSigs()[0].ReturnType
 			}
 			accessLevel = c.getAccessLevel(getter.IsPublic, getter.IsPrivate, getter.IsProtected)
 			if checkerDebug {
@@ -739,8 +739,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			c.validateOverrideMethod(setter, superClass, className)
 
 			methodType := c.inferMethodType(setter)
-			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
-				sig := objType.CallSignatures[0]
+			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSigs()) > 0 {
+				sig := objType.CallSigs()[0]
 				if len(sig.ParameterTypes) > 0 {
 					setterType := sig.ParameterTypes[0]
 					if propType == nil {
@@ -915,7 +915,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 				// Handle optional properties for class instance type
 				if prop.Optional {
-					instanceType.OptionalProperties[propName] = true
+					instanceType.OptionalProps()[propName] = true
 				}
 
 				if checkerDebug {
@@ -941,7 +941,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 		}
 
 		// Add index signature: [key: string]: ComputedValueType
-		instanceType.IndexSignatures = []*types.IndexSignature{
+		instanceType.Materialize()
+instanceType.IndexSignatures = []*types.IndexSignature{
 			{
 				KeyType:   types.String,
 				ValueType: indexValueType,
@@ -1132,14 +1133,15 @@ func (c *Checker) methodTypeWithOverloads(body *parser.ClassBody, method *parser
 			continue
 		}
 		if obj, ok := c.inferMethodTypeFromSignature(sig).(*types.ObjectType); ok {
-			sigs = append(sigs, obj.CallSignatures...)
+			sigs = append(sigs, obj.CallSigs()...)
 		}
 	}
 	if len(sigs) == 0 {
 		return implType
 	}
 	result := types.NewObjectType()
-	result.CallSignatures = sigs
+	result.Materialize()
+result.CallSignatures = sigs
 	return result
 }
 
@@ -1209,7 +1211,7 @@ func (c *Checker) inheritedAbstractClassMember(instanceType *types.ObjectType, m
 				return true
 			}
 		}
-		for _, baseType := range obj.BaseTypes {
+		for _, baseType := range obj.Bases() {
 			if baseObj, ok := baseType.(*types.ObjectType); ok && visit(baseObj) {
 				return true
 			}
@@ -1217,7 +1219,7 @@ func (c *Checker) inheritedAbstractClassMember(instanceType *types.ObjectType, m
 		return false
 	}
 
-	for _, baseType := range instanceType.BaseTypes {
+	for _, baseType := range instanceType.Bases() {
 		if baseObj, ok := baseType.(*types.ObjectType); ok && visit(baseObj) {
 			return true
 		}
@@ -1239,7 +1241,7 @@ func (c *Checker) hasInheritedClassMember(instanceType *types.ObjectType, member
 		return baseName, false
 	}
 
-	for _, baseType := range instanceType.BaseTypes {
+	for _, baseType := range instanceType.Bases() {
 		if baseObj, ok := baseType.(*types.ObjectType); ok {
 			if c.objectTypeHasClassMember(baseObj, memberName, false, visited) {
 				return baseName, true
@@ -1255,7 +1257,7 @@ func (c *Checker) objectTypeHasClassMember(obj *types.ObjectType, memberName str
 	}
 	visited[obj] = true
 
-	if _, ok := obj.Properties[memberName]; ok {
+	if _, ok := obj.Props()[memberName]; ok {
 		return true
 	}
 	if obj.ClassMeta != nil {
@@ -1275,7 +1277,7 @@ func (c *Checker) objectTypeHasClassMember(obj *types.ObjectType, memberName str
 		return false
 	}
 
-	for _, baseType := range obj.BaseTypes {
+	for _, baseType := range obj.Bases() {
 		if baseObj, ok := baseType.(*types.ObjectType); ok {
 			if c.objectTypeHasClassMember(baseObj, memberName, false, visited) {
 				return true
@@ -1537,8 +1539,8 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 		c.setClassContext(className, types.AccessContextStaticMethod)
 		name := c.extractPropertyName(method.Key)
 		var accessorType types.Type = types.Any
-		if fnType, ok := c.inferMethodType(method).(*types.ObjectType); ok && len(fnType.CallSignatures) > 0 {
-			sig := fnType.CallSignatures[0]
+		if fnType, ok := c.inferMethodType(method).(*types.ObjectType); ok && len(fnType.CallSigs()) > 0 {
+			sig := fnType.CallSigs()[0]
 			if method.Kind == "getter" && sig.ReturnType != nil {
 				accessorType = sig.ReturnType
 			} else if method.Kind == "setter" && len(sig.ParameterTypes) > 0 {
@@ -1617,7 +1619,7 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 
 			// Handle optional properties
 			if prop.Optional {
-				constructorType.OptionalProperties[propName] = true
+				constructorType.OptionalProps()[propName] = true
 			}
 
 			if checkerDebug {
@@ -1978,8 +1980,8 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	// Check if it has constructor signatures or call signatures
 	// Classes have ConstructSignatures, functions have CallSignatures (and can be used as constructors in JS)
 	if constructorType, ok := constructorType.(*types.ObjectType); ok {
-		hasConstructor := len(constructorType.ConstructSignatures) > 0
-		hasCallable := len(constructorType.CallSignatures) > 0
+		hasConstructor := len(constructorType.ConstructSigs()) > 0
+		hasCallable := len(constructorType.CallSigs()) > 0
 
 		if !hasConstructor && !hasCallable {
 			c.reportNonConstructorBase(superClassExpr, constructorType)
@@ -1998,16 +2000,16 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		if superInstanceType == nil {
 			// Try to extract instance type from constructor's return type
 			if objType, isObjType := constructorType.(*types.ObjectType); isObjType {
-				if len(objType.ConstructSignatures) > 0 && objType.ConstructSignatures[0].ReturnType != nil {
+				if len(objType.ConstructSigs()) > 0 && objType.ConstructSigs()[0].ReturnType != nil {
 					// Use the constructor's return type as the instance type
-					if instType, ok := objType.ConstructSignatures[0].ReturnType.(*types.ObjectType); ok {
+					if instType, ok := objType.ConstructSigs()[0].ReturnType.(*types.ObjectType); ok {
 						debugPrintf("// [Checker Class] Extracted instance type from constructor return type for '%s'\n", ident.Value)
 						superInstanceType = instType
 					} else {
 						debugPrintf("// [Checker Class] Constructor return type is not ObjectType for '%s', using placeholder\n", ident.Value)
 						superInstanceType = types.NewObjectType()
 					}
-				} else if len(objType.CallSignatures) > 0 {
+				} else if len(objType.CallSigs()) > 0 {
 					debugPrintf("// [Checker Class] Using placeholder instance type for function constructor '%s'\n", ident.Value)
 					superInstanceType = types.NewObjectType()
 				} else {
@@ -2018,8 +2020,8 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 			} else if genericType, isGeneric := constructorType.(*types.GenericType); isGeneric {
 				// Generic class constructor - extract instance type from body's ConstructSignatures
 				if bodyObj, ok := genericType.Body.(*types.ObjectType); ok {
-					if len(bodyObj.ConstructSignatures) > 0 && bodyObj.ConstructSignatures[0].ReturnType != nil {
-						if instType, ok := bodyObj.ConstructSignatures[0].ReturnType.(*types.ObjectType); ok {
+					if len(bodyObj.ConstructSigs()) > 0 && bodyObj.ConstructSigs()[0].ReturnType != nil {
+						if instType, ok := bodyObj.ConstructSigs()[0].ReturnType.(*types.ObjectType); ok {
 							debugPrintf("// [Checker Class] Extracted instance type from generic constructor body for '%s'\n", ident.Value)
 							superInstanceType = instType
 						} else {
@@ -2041,8 +2043,8 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		// For generic applications (e.g., extends Agent<any, any>), extract instance type
 		// from the constructor's ConstructSignatures return type
 		extracted := false
-		if superObjType != nil && len(superObjType.ConstructSignatures) > 0 {
-			if retType := superObjType.ConstructSignatures[0].ReturnType; retType != nil {
+		if superObjType != nil && len(superObjType.ConstructSigs()) > 0 {
+			if retType := superObjType.ConstructSigs()[0].ReturnType; retType != nil {
 				if instType, ok := retType.(*types.ObjectType); ok {
 					debugPrintf("// [Checker Class] Extracted instance type from generic constructor return type\n")
 					superInstanceType = instType
@@ -2072,7 +2074,8 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	}
 
 	// Add superclass to BaseTypes for structural inheritance
-	instanceType.BaseTypes = append(instanceType.BaseTypes, superInstanceType)
+	instanceType.Materialize()
+instanceType.BaseTypes = append(instanceType.Bases(), superInstanceType)
 
 	if checkerDebug {
 		debugPrintf("// [Checker Class] Successfully set up inheritance: %s extends %s\n", instanceType.GetClassName(), superClassExpr.String())
@@ -2105,7 +2108,8 @@ func (c *Checker) registerInterfaceImplementation(instanceType *types.ObjectType
 	}
 
 	// Add interface to BaseTypes for structural inheritance
-	instanceType.BaseTypes = append(instanceType.BaseTypes, interfaceObjType)
+	instanceType.Materialize()
+instanceType.BaseTypes = append(instanceType.Bases(), interfaceObjType)
 
 	if checkerDebug {
 		debugPrintf("// [Checker Class] Successfully registered interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
@@ -2228,8 +2232,8 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 	// handleClassInheritance (superclass is always added there first, before
 	// any implemented interfaces).
 	superInstanceType := c.getClassInstanceType(superClassName)
-	if superInstanceType == nil && len(classInstanceType.BaseTypes) > 0 {
-		if baseObjType, ok := classInstanceType.BaseTypes[0].(*types.ObjectType); ok {
+	if superInstanceType == nil && len(classInstanceType.Bases()) > 0 {
+		if baseObjType, ok := classInstanceType.Bases()[0].(*types.ObjectType); ok {
 			superInstanceType = baseObjType
 		}
 	}
@@ -2265,15 +2269,15 @@ func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, i
 	// Check that all interface properties are implemented
 	// The class's own members and its superclasses'. Its base types also list
 	// the interfaces it implements, whose members it must not get credit for.
-	classProps := make(map[string]types.Type, len(classType.Properties))
-	for _, base := range classType.BaseTypes {
+	classProps := make(map[string]types.Type, len(classType.Props()))
+	for _, base := range classType.Bases() {
 		if baseObj, ok := c.resolveStructural(base).(*types.ObjectType); ok && baseObj.IsClassInstance() {
 			for name, t := range baseObj.GetEffectiveProperties() {
 				classProps[name] = t
 			}
 		}
 	}
-	for name, t := range classType.Properties {
+	for name, t := range classType.Props() {
 		classProps[name] = t
 	}
 	for _, propName := range types.SortedPropertyNames(interfaceType.GetEffectiveProperties()) {
@@ -2296,7 +2300,7 @@ func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, i
 
 	// Check that all interface call signatures are implemented
 	// For classes, this typically means checking methods
-	for _, interfaceSig := range interfaceType.CallSignatures {
+	for _, interfaceSig := range interfaceType.CallSigs() {
 		// For method implementations, we need to check if the class has compatible methods
 		// This is a simplified check - a full implementation would need more sophisticated matching
 		if checkerDebug {
@@ -2578,11 +2582,11 @@ type deferredHeritageCheck struct {
 func (c *Checker) reportNonConstructorBase(expr parser.Expression, t types.Type) {
 	switch bt := t.(type) {
 	case *types.ObjectType:
-		if len(bt.ConstructSignatures) > 0 || len(bt.CallSignatures) > 0 {
+		if len(bt.ConstructSigs()) > 0 || len(bt.CallSigs()) > 0 {
 			return
 		}
 		// An interface `new(...)` member is modeled as a property named "new".
-		if _, ok := bt.Properties["new"]; ok {
+		if _, ok := bt.Props()["new"]; ok {
 			return
 		}
 	case *types.Primitive:
@@ -2625,7 +2629,7 @@ func (c *Checker) inheritedClassMemberNames(instanceType *types.ObjectType, isSt
 			return
 		}
 		seenObj[obj] = true
-		for _, name := range types.SortedPropertyNames(obj.Properties) {
+		for _, name := range types.SortedPropertyNames(obj.Props()) {
 			names = append(names, name)
 		}
 		if isStatic {
@@ -2636,7 +2640,7 @@ func (c *Checker) inheritedClassMemberNames(instanceType *types.ObjectType, isSt
 			}
 			return
 		}
-		for _, baseType := range obj.BaseTypes {
+		for _, baseType := range obj.Bases() {
 			if baseObj, ok := baseType.(*types.ObjectType); ok {
 				collect(baseObj)
 			}
@@ -2650,7 +2654,7 @@ func (c *Checker) inheritedClassMemberNames(instanceType *types.ObjectType, isSt
 		}
 		return names
 	}
-	for _, baseType := range instanceType.BaseTypes {
+	for _, baseType := range instanceType.Bases() {
 		if baseObj, ok := baseType.(*types.ObjectType); ok {
 			collect(baseObj)
 		}
@@ -2682,12 +2686,13 @@ func (c *Checker) inheritStaticMembers(constructorType, instanceType *types.Obje
 	if !ok || baseCtor == nil || baseCtor == constructorType {
 		return
 	}
-	for _, existing := range constructorType.BaseTypes {
+	for _, existing := range constructorType.Bases() {
 		if existing == types.Type(baseCtor) {
 			return
 		}
 	}
-	constructorType.BaseTypes = append(constructorType.BaseTypes, baseCtor)
+	constructorType.Materialize()
+constructorType.BaseTypes = append(constructorType.Bases(), baseCtor)
 }
 
 // resolveTypeofInMembers resolves `typeof x` queries (and conditional types
@@ -2697,12 +2702,12 @@ func (c *Checker) resolveTypeofInMembers(instance *types.ObjectType) {
 	if instance == nil {
 		return
 	}
-	for name, propType := range instance.Properties {
+	for name, propType := range instance.Props() {
 		if resolved := c.resolveTypeofInType(propType); resolved != propType {
 			instance.SetProperty(name, resolved)
 		}
-		if fn, ok := instance.Properties[name].(*types.ObjectType); ok {
-			for _, sig := range fn.CallSignatures {
+		if fn, ok := instance.Props()[name].(*types.ObjectType); ok {
+			for _, sig := range fn.CallSigs() {
 				for i, paramType := range sig.ParameterTypes {
 					sig.ParameterTypes[i] = c.resolveTypeofInType(paramType)
 				}
@@ -2736,7 +2741,7 @@ func (c *Checker) addAmbientMethodSignatures(body *parser.ClassBody, static bool
 		byName[name] = append(byName[name], sig)
 	}
 	for _, name := range order {
-		if _, exists := target.Properties[name]; exists {
+		if _, exists := target.Props()[name]; exists {
 			continue // an implementation (or accessor) already defines it
 		}
 		sigs := byName[name]
@@ -2747,7 +2752,8 @@ func (c *Checker) addAmbientMethodSignatures(body *parser.ClassBody, static bool
 			merged := types.NewObjectType()
 			for _, sig := range sigs {
 				if callSigs, ok := overloadableCallSignatures(c.inferMethodTypeFromSignature(sig)); ok {
-					merged.CallSignatures = append(merged.CallSignatures, callSigs...)
+					merged.Materialize()
+merged.CallSignatures = append(merged.CallSigs(), callSigs...)
 				}
 			}
 			methodType = merged

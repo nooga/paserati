@@ -60,12 +60,12 @@ func (c *Checker) checkCallTypeArguments(node *parser.CallExpression, funcType t
 		return false
 	}
 	obj, ok := funcType.(*types.ObjectType)
-	if !ok || len(obj.CallSignatures) == 0 {
+	if !ok || len(obj.CallSigs()) == 0 {
 		return false
 	}
 	argCount := len(typeArgs)
 	belowArgCount, aboveArgCount := -1, -1
-	for _, sig := range obj.CallSignatures {
+	for _, sig := range obj.CallSigs() {
 		min, max, known := c.signatureTypeArgumentRange(sig)
 		if !known {
 			return false
@@ -83,8 +83,8 @@ func (c *Checker) checkCallTypeArguments(node *parser.CallExpression, funcType t
 			}
 		}
 	}
-	if len(obj.CallSignatures) == 1 {
-		min, max, _ := c.signatureTypeArgumentRange(obj.CallSignatures[0])
+	if len(obj.CallSigs()) == 1 {
+		min, max, _ := c.signatureTypeArgumentRange(obj.CallSigs()[0])
 		expected := fmt.Sprintf("%d", min)
 		if min < max {
 			expected = fmt.Sprintf("%d-%d", min, max)
@@ -164,7 +164,7 @@ func (c *Checker) satisfiesConstraint(arg, constraint types.Type) bool {
 		return true
 	}
 	target, ok := c.resolveStructural(constraint).(*types.ObjectType)
-	if !ok || target.IsCallable() || len(target.ConstructSignatures) > 0 {
+	if !ok || target.IsCallable() || len(target.ConstructSigs()) > 0 {
 		return false
 	}
 	var protoName string

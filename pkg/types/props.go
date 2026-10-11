@@ -104,7 +104,7 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 			}
 		case *ObjectType:
 			// Look for the property in the object's fields
-			fieldType, exists := obj.Properties[propertyName]
+			fieldType, exists := obj.Props()[propertyName]
 			if exists {
 				// Property found
 				if fieldType == nil { // Should ideally not happen if checker populates correctly
@@ -120,7 +120,7 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 					}
 				}
 
-				for _, indexSig := range obj.IndexSignatures {
+				for _, indexSig := range obj.IndexSigs() {
 					if indexSig.KeyType == String || indexSig.KeyType == Any {
 						if indexSig.ValueType == nil {
 							return Any
@@ -247,7 +247,7 @@ func MergeObjectTypes(objectTypes []*ObjectType) *ObjectType {
 	mergedOptional := make(map[string]bool)
 
 	for _, objType := range objectTypes {
-		for propName, propType := range objType.Properties {
+		for propName, propType := range objType.Props() {
 			if existingType, exists := mergedProperties[propName]; exists {
 				// Property exists in multiple objects - intersect the types
 				mergedProperties[propName] = NewIntersectionType(existingType, propType)
@@ -256,7 +256,7 @@ func MergeObjectTypes(objectTypes []*ObjectType) *ObjectType {
 			}
 
 			// Property is optional only if it's optional in ALL objects that have it
-			isOptionalInThis := objType.OptionalProperties != nil && objType.OptionalProperties[propName]
+			isOptionalInThis := objType.OptionalProps() != nil && objType.OptionalProps()[propName]
 			if !isOptionalInThis {
 				// Property is required in this object, so it's required in the intersection
 				mergedOptional[propName] = false

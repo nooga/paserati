@@ -222,14 +222,16 @@ func (c *Checker) resolveExtendedInterfaceObjectType(t types.Type) (*types.Objec
 				return nil, false
 			}
 			for _, name := range obj.PropertyNames() {
-				prop := obj.Properties[name]
+				prop := obj.Props()[name]
 				merged.SetProperty(name, prop)
-				if obj.OptionalProperties != nil && obj.OptionalProperties[name] {
-					merged.OptionalProperties[name] = true
+				if obj.OptionalProps() != nil && obj.OptionalProps()[name] {
+					merged.OptionalProps()[name] = true
 				}
 			}
-			merged.CallSignatures = append(merged.CallSignatures, obj.CallSignatures...)
-			merged.ConstructSignatures = append(merged.ConstructSignatures, obj.ConstructSignatures...)
+			merged.Materialize()
+merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
+			merged.Materialize()
+merged.ConstructSignatures = append(merged.ConstructSigs(), obj.ConstructSigs()...)
 		}
 		return merged, true
 	case *types.ArrayType, *types.TupleType, *types.MappedType:
@@ -289,16 +291,17 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	}
 
 	// Use the interface type's properties maps (either from placeholder or new)
-	properties := interfaceType.Properties
-	optionalProperties := interfaceType.OptionalProperties
+	properties := interfaceType.Props()
+	optionalProperties := interfaceType.OptionalProps()
 	if optionalProperties == nil {
 		optionalProperties = make(map[string]bool)
-		interfaceType.OptionalProperties = optionalProperties
+		interfaceType.Materialize()
+interfaceType.OptionalProperties = optionalProperties
 	}
 	var indexSignatures []*types.IndexSignature
 	var callSignatures []*types.Signature
 	var extendedObjs []*types.ObjectType
-	previousIndexSignatures := interfaceType.IndexSignatures
+	previousIndexSignatures := interfaceType.IndexSigs()
 
 	outerThisType := c.currentThisType
 	c.currentThisType = interfaceType
@@ -333,18 +336,18 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			c.recordDerived(extendedObjectType, interfaceType)
 			// Copy all properties from the extended interface
 			for _, propName := range extendedObjectType.PropertyNames() {
-				propType := extendedObjectType.Properties[propName]
+				propType := extendedObjectType.Props()[propName]
 				interfaceType.SetProperty(propName, c.rebindThisType(propType, extendedObjectType, interfaceType))
 				interfaceType.SetPropertyDoc(propName, extendedObjectType.PropertyDoc(propName))
-				setReadonlyProperty(interfaceType, propName, extendedObjectType.ReadOnlyProperties[propName])
+				setReadonlyProperty(interfaceType, propName, extendedObjectType.ReadOnlyProps()[propName])
 				// Copy optional property flags
-				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
+				if extendedObjectType.OptionalProps() != nil && extendedObjectType.OptionalProps()[propName] {
 					optionalProperties[propName] = true
 				}
 			}
 			if checkerDebug {
 				debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from extended interface\n",
-					node.Name.Value, len(extendedObjectType.Properties))
+					node.Name.Value, len(extendedObjectType.Props()))
 			}
 		} else if _, ok := extendedType.(*types.GenericTypeAliasForwardReference); ok {
 			// Allow inheritance from generic forward references (unresolved type-only imports)
@@ -359,11 +362,11 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			for _, baseObject := range baseObjects {
 				c.recordDerived(baseObject, interfaceType)
 				for _, propName := range baseObject.PropertyNames() {
-					propType := baseObject.Properties[propName]
+					propType := baseObject.Props()[propName]
 					interfaceType.SetProperty(propName, c.rebindThisType(propType, baseObject, interfaceType))
 					interfaceType.SetPropertyDoc(propName, baseObject.PropertyDoc(propName))
-					setReadonlyProperty(interfaceType, propName, baseObject.ReadOnlyProperties[propName])
-					if baseObject.OptionalProperties != nil && baseObject.OptionalProperties[propName] {
+					setReadonlyProperty(interfaceType, propName, baseObject.ReadOnlyProps()[propName])
+					if baseObject.OptionalProps() != nil && baseObject.OptionalProps()[propName] {
 						optionalProperties[propName] = true
 					}
 				}
@@ -411,7 +414,8 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			}
 			if sigs := c.extractConstructSignaturesFromType(constructorType); len(sigs) > 0 {
 				// A construct signature is a member of the interface type, not a property.
-				interfaceType.ConstructSignatures = append(interfaceType.ConstructSignatures, sigs...)
+				interfaceType.Materialize()
+interfaceType.ConstructSignatures = append(interfaceType.ConstructSigs(), sigs...)
 			} else {
 				interfaceType.SetProperty("new", constructorType)
 			}
@@ -504,18 +508,22 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// 3. Update the pre-registered ObjectType with index signatures and call signatures
 	indexSignatures = append(append([]*types.IndexSignature(nil), previousIndexSignatures...), indexSignatures...)
 	indexSignatures = inheritIndexSignatures(indexSignatures, extendedObjs)
-	interfaceType.IndexSignatures = indexSignatures
+	interfaceType.Materialize()
+interfaceType.IndexSignatures = indexSignatures
 	interfaceTypeChecked, sigsChecked := interfaceType, indexSignatures
 	c.deferRelationCheck(func() { c.checkInterfaceIndexConstraints(node, interfaceTypeChecked, sigsChecked) })
 	c.checkInterfaceExtends(node, interfaceType, extendedObjs)
 	if len(callSignatures) > 0 {
-		interfaceType.CallSignatures = append(interfaceType.CallSignatures, callSignatures...)
+		interfaceType.Materialize()
+interfaceType.CallSignatures = append(interfaceType.CallSigs(), callSignatures...)
 	}
 	// An interface's call and construct signatures follow those of the
 	// interfaces it extends (resolveObjectTypeMembers).
 	for _, ext := range extendedObjs {
-		interfaceType.CallSignatures = appendNewSignatures(interfaceType.CallSignatures, ext.CallSignatures)
-		interfaceType.ConstructSignatures = appendNewSignatures(interfaceType.ConstructSignatures, ext.ConstructSignatures)
+		interfaceType.Materialize()
+interfaceType.CallSignatures = appendNewSignatures(interfaceType.CallSigs(), ext.CallSigs())
+		interfaceType.Materialize()
+interfaceType.ConstructSignatures = appendNewSignatures(interfaceType.ConstructSigs(), ext.ConstructSigs())
 	}
 
 	if checkerDebug {
@@ -656,17 +664,19 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			IsInterface:        true,
 		}
 	}
-	if bodyType.Properties == nil {
-		bodyType.Properties = make(map[string]types.Type)
+	if bodyType.Props() == nil {
+		bodyType.Materialize()
+bodyType.Properties = make(map[string]types.Type)
 	}
-	if bodyType.OptionalProperties == nil {
-		bodyType.OptionalProperties = make(map[string]bool)
+	if bodyType.OptionalProps() == nil {
+		bodyType.Materialize()
+bodyType.OptionalProperties = make(map[string]bool)
 	}
 	nameGenericType(bodyType, node.Name.Value, typeParams)
-	properties := bodyType.Properties
-	optionalProperties := bodyType.OptionalProperties
-	indexSignatures := bodyType.IndexSignatures
-	callSignatures := bodyType.CallSignatures
+	properties := bodyType.Props()
+	optionalProperties := bodyType.OptionalProps()
+	indexSignatures := bodyType.IndexSigs()
+	callSignatures := bodyType.CallSigs()
 	var extendedObjs []*types.ObjectType
 	c.currentThisType = bodyType
 
@@ -695,9 +705,9 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			extendedObjs = append(extendedObjs, extendedObjectType)
 			c.recordDerived(extendedObjectType, bodyType)
 			for _, propName := range extendedObjectType.PropertyNames() {
-				propType := extendedObjectType.Properties[propName]
+				propType := extendedObjectType.Props()[propName]
 				bodyType.SetProperty(propName, c.rebindThisType(propType, extendedObjectType, bodyType))
-				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
+				if extendedObjectType.OptionalProps() != nil && extendedObjectType.OptionalProps()[propName] {
 					optionalProperties[propName] = true
 				}
 			}
@@ -730,7 +740,8 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 				constructorType = types.Any
 			}
 			if sigs := c.extractConstructSignaturesFromType(constructorType); len(sigs) > 0 {
-				bodyType.ConstructSignatures = append(bodyType.ConstructSignatures, sigs...)
+				bodyType.Materialize()
+bodyType.ConstructSignatures = append(bodyType.ConstructSigs(), sigs...)
 			} else {
 				bodyType.SetProperty("new", constructorType)
 			}
@@ -763,11 +774,15 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	}
 
 	indexSignatures = inheritIndexSignatures(indexSignatures, extendedObjs)
-	bodyType.IndexSignatures = indexSignatures
-	bodyType.CallSignatures = callSignatures
+	bodyType.Materialize()
+bodyType.IndexSignatures = indexSignatures
+	bodyType.Materialize()
+bodyType.CallSignatures = callSignatures
 	for _, ext := range extendedObjs {
-		bodyType.CallSignatures = appendNewSignatures(bodyType.CallSignatures, ext.CallSignatures)
-		bodyType.ConstructSignatures = appendNewSignatures(bodyType.ConstructSignatures, ext.ConstructSignatures)
+		bodyType.Materialize()
+bodyType.CallSignatures = appendNewSignatures(bodyType.CallSigs(), ext.CallSigs())
+		bodyType.Materialize()
+bodyType.ConstructSignatures = appendNewSignatures(bodyType.ConstructSigs(), ext.ConstructSigs())
 	}
 	bodyTypeChecked, sigsChecked := bodyType, indexSignatures
 	c.deferRelationCheck(func() { c.checkInterfaceIndexConstraints(node, bodyTypeChecked, sigsChecked) })
@@ -816,21 +831,23 @@ func mergeInterfaceFunctionMemberTypes(existingType, incomingType types.Type) (t
 	}
 
 	merged := types.NewObjectType()
-	merged.CallSignatures = append(merged.CallSignatures, existingSigs...)
-	merged.CallSignatures = append(merged.CallSignatures, incomingSigs...)
+	merged.Materialize()
+merged.CallSignatures = append(merged.CallSigs(), existingSigs...)
+	merged.Materialize()
+merged.CallSignatures = append(merged.CallSigs(), incomingSigs...)
 	return merged, true
 }
 
 func interfaceMemberCallSignatures(t types.Type) ([]*types.Signature, bool) {
 	switch typ := t.(type) {
 	case *types.ObjectType:
-		if len(typ.CallSignatures) == 0 {
+		if len(typ.CallSigs()) == 0 {
 			return nil, false
 		}
-		return typ.CallSignatures, true
+		return typ.CallSigs(), true
 	case *types.GenericType:
-		if body, ok := typ.Body.(*types.ObjectType); ok && len(body.CallSignatures) > 0 {
-			return body.CallSignatures, true
+		if body, ok := typ.Body.(*types.ObjectType); ok && len(body.CallSigs()) > 0 {
+			return body.CallSigs(), true
 		}
 	}
 	return nil, false
@@ -877,22 +894,24 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 		typ.CopyDisplay(result, func(a types.Type) types.Type { return c.rebindThisTypeWithVisited(a, from, to, visited) })
 
 		for _, propName := range typ.PropertyNames() {
-			propType := typ.Properties[propName]
+			propType := typ.Props()[propName]
 			result.SetProperty(propName, c.rebindThisTypeWithVisited(propType, from, to, visited))
 		}
-		for propName, isOptional := range typ.OptionalProperties {
-			result.OptionalProperties[propName] = isOptional
+		for propName, isOptional := range typ.OptionalProps() {
+			result.OptionalProps()[propName] = isOptional
 		}
-		for propName, isReadOnly := range typ.ReadOnlyProperties {
-			result.ReadOnlyProperties[propName] = isReadOnly
+		for propName, isReadOnly := range typ.ReadOnlyProps() {
+			result.ReadOnlyProps()[propName] = isReadOnly
 		}
-		for _, baseType := range typ.BaseTypes {
-			result.BaseTypes = append(result.BaseTypes, c.rebindThisTypeWithVisited(baseType, from, to, visited))
+		for _, baseType := range typ.Bases() {
+			result.Materialize()
+result.BaseTypes = append(result.Bases(), c.rebindThisTypeWithVisited(baseType, from, to, visited))
 		}
-		if typ.IndexSignatures != nil {
-			result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSignatures))
-			for i, sig := range typ.IndexSignatures {
-				result.IndexSignatures[i] = &types.IndexSignature{
+		if typ.IndexSigs() != nil {
+			result.Materialize()
+result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSigs()))
+			for i, sig := range typ.IndexSigs() {
+				result.IndexSigs()[i] = &types.IndexSignature{
 					KeyType:        c.rebindThisTypeWithVisited(sig.KeyType, from, to, visited),
 					ValueType:      c.rebindThisTypeWithVisited(sig.ValueType, from, to, visited),
 					IsMapped:       sig.IsMapped,
@@ -901,8 +920,10 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 				}
 			}
 		}
-		result.CallSignatures = c.rebindSignaturesThisType(typ.CallSignatures, from, to, visited)
-		result.ConstructSignatures = c.rebindSignaturesThisType(typ.ConstructSignatures, from, to, visited)
+		result.Materialize()
+result.CallSignatures = c.rebindSignaturesThisType(typ.CallSigs(), from, to, visited)
+		result.Materialize()
+result.ConstructSignatures = c.rebindSignaturesThisType(typ.ConstructSigs(), from, to, visited)
 		if typ.ClassMeta != nil {
 			// A full copy: SourceClassName and the inheritance fields drive
 			// protected/private access checks on an instantiated generic class (#613).
@@ -1438,7 +1459,7 @@ func (c *Checker) checkObjectDestructuringInForLoop(node *parser.ObjectDestructu
 		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
 			propKey := keyIdent.Value
 			if objType, ok := sourceType.(*types.ObjectType); ok {
-				if pt, exists := objType.Properties[propKey]; exists {
+				if pt, exists := objType.Props()[propKey]; exists {
 					propType = pt
 				} else {
 					propType = types.Any
@@ -1519,7 +1540,7 @@ func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.
 			if ident, ok := prop.Key.(*parser.Identifier); ok {
 				var propType types.Type
 				if objType, ok := typ.(*types.ObjectType); ok {
-					if pt, exists := objType.Properties[ident.Value]; exists {
+					if pt, exists := objType.Props()[ident.Value]; exists {
 						propType = pt
 					} else {
 						propType = types.Any
@@ -1734,7 +1755,7 @@ func (c *Checker) extractPropertiesFromType(typ types.Type) map[string]types.Typ
 	switch t := typ.(type) {
 	case *types.ObjectType:
 		// Copy all properties from the object type
-		for propName, propType := range t.Properties {
+		for propName, propType := range t.Props() {
 			properties[propName] = propType
 		}
 	case *types.Primitive:

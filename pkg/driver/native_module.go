@@ -1188,10 +1188,11 @@ func goTypeToTSTypeSeen(t reflect.Type, seen map[reflect.Type]types.Type) types.
 				// is optional; so a struct taken as an options argument does
 				// not need every field spelled out.
 				if f.Type.Kind() == reflect.Ptr || hasOmitEmpty(f) {
-					if obj.OptionalProperties == nil {
-						obj.OptionalProperties = map[string]bool{}
+					if obj.OptionalProps() == nil {
+						obj.Materialize()
+obj.OptionalProperties = map[string]bool{}
 					}
-					obj.OptionalProperties[name] = true
+					obj.OptionalProps()[name] = true
 				}
 			}
 		}

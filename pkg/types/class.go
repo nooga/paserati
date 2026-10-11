@@ -59,8 +59,8 @@ func NewSimpleClassType(name string, paramTypes []Type, instanceType *ObjectType
 
 // GetConstructorSignature returns the constructor signature for this class
 func (ct *ClassType) GetConstructorSignature() *Signature {
-	if ct.ConstructorType != nil && len(ct.ConstructorType.ConstructSignatures) > 0 {
-		return ct.ConstructorType.ConstructSignatures[0]
+	if ct.ConstructorType != nil && len(ct.ConstructorType.ConstructSigs()) > 0 {
+		return ct.ConstructorType.ConstructSigs()[0]
 	}
 	
 	// Return default constructor signature (no parameters, returns instance type)

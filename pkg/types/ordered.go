@@ -17,29 +17,31 @@ func SortedPropertyNames(props map[string]Type) []string {
 
 // SetProperty sets a property's type, remembering the order of first insertion.
 func (ot *ObjectType) SetProperty(name string, t Type) {
-	if ot.Properties == nil {
-		ot.Properties = make(map[string]Type)
+	if ot.Props() == nil {
+		ot.Materialize()
+ot.Properties = make(map[string]Type)
 	}
-	if _, exists := ot.Properties[name]; !exists {
-		ot.PropertyOrder = append(ot.PropertyOrder, name)
+	if _, exists := ot.Props()[name]; !exists {
+		ot.Materialize()
+ot.PropertyOrder = append(ot.PropOrder(), name)
 	}
-	ot.Properties[name] = t
+	ot.Props()[name] = t
 }
 
 // PropertyNames returns the type's own property names in declaration order.
 // Names added without SetProperty come last, sorted.
 func (ot *ObjectType) PropertyNames() []string {
-	names := make([]string, 0, len(ot.Properties))
-	seen := make(map[string]bool, len(ot.Properties))
-	for _, n := range ot.PropertyOrder {
-		if _, ok := ot.Properties[n]; ok && !seen[n] {
+	names := make([]string, 0, len(ot.Props()))
+	seen := make(map[string]bool, len(ot.Props()))
+	for _, n := range ot.PropOrder() {
+		if _, ok := ot.Props()[n]; ok && !seen[n] {
 			seen[n] = true
 			names = append(names, n)
 		}
 	}
-	if len(names) < len(ot.Properties) {
+	if len(names) < len(ot.Props()) {
 		var rest []string
-		for n := range ot.Properties {
+		for n := range ot.Props() {
 			if !seen[n] {
 				rest = append(rest, n)
 			}
@@ -63,7 +65,7 @@ func (ot *ObjectType) EffectivePropertyNames() []string {
 			names = append(names, n)
 		}
 	}
-	for _, bt := range ot.BaseTypes {
+	for _, bt := range ot.Bases() {
 		if baseObj, ok := resolveBaseType(bt).(*ObjectType); ok && baseObj != ot {
 			for _, n := range baseObj.EffectivePropertyNames() {
 				add(n)
@@ -103,10 +105,10 @@ func (ot *ObjectType) PropertyDoc(name string) string {
 	if doc, ok := ot.PropertyDocs[name]; ok {
 		return doc
 	}
-	if _, own := ot.Properties[name]; own {
+	if _, own := ot.Props()[name]; own {
 		return ""
 	}
-	for _, bt := range ot.BaseTypes {
+	for _, bt := range ot.Bases() {
 		if baseObj, ok := resolveBaseType(bt).(*ObjectType); ok && baseObj != ot {
 			if doc := baseObj.PropertyDoc(name); doc != "" {
 				return doc

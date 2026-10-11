@@ -94,7 +94,7 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 
 	// ReadonlyMap<K, V>: Map<K, V> without the mutating methods
 	readonlyBody := types.NewObjectType()
-	for name, propType := range mapInstanceType.Properties {
+	for name, propType := range mapInstanceType.Props() {
 		switch name {
 		case "set", "delete", "clear", "getOrInsert", "getOrInsertComputed":
 		default:

@@ -150,7 +150,7 @@ func (c *Checker) settleTypeDepth(t types.Type, depth int) types.Type {
 		// ordinary (possibly recursive) class type is returned as is.
 		var settled map[string]types.Type
 		for _, name := range tt.PropertyNames() {
-			prop := tt.Properties[name]
+			prop := tt.Props()[name]
 			// Forward references in members (`owner: OwnerList<T>`) resolve
 			// where they are read; copying a recursive interface to settle
 			// them would lose its identity.
@@ -167,7 +167,7 @@ func (c *Checker) settleTypeDepth(t types.Type, depth int) types.Type {
 		if settled != nil {
 			return cloneObjectTypeWithTypes(tt, func(p types.Type) types.Type {
 				for name, np := range settled {
-					if tt.Properties[name] == p {
+					if tt.Props()[name] == p {
 						return np
 					}
 				}
@@ -197,12 +197,12 @@ func reachesPending(t types.Type, depth int, seen map[types.Type]bool) bool {
 		if tt.Pending {
 			return true
 		}
-		for _, p := range tt.Properties {
+		for _, p := range tt.Props() {
 			if reachesPending(p, depth+1, seen) {
 				return true
 			}
 		}
-		for _, b := range tt.BaseTypes {
+		for _, b := range tt.Bases() {
 			if reachesPending(b, depth+1, seen) {
 				return true
 			}
@@ -1089,12 +1089,12 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 func (c *Checker) extractCallSignaturesFromType(typ types.Type) []*types.Signature {
 	switch t := typ.(type) {
 	case *types.ObjectType:
-		if len(t.CallSignatures) > 0 {
-			return strictSignatureCopies(t.CallSignatures, nil)
+		if len(t.CallSigs()) > 0 {
+			return strictSignatureCopies(t.CallSigs(), nil)
 		}
 	case *types.GenericType:
-		if bodyObj, ok := t.Body.(*types.ObjectType); ok && len(bodyObj.CallSignatures) > 0 {
-			return strictSignatureCopies(bodyObj.CallSignatures, t.TypeParameters)
+		if bodyObj, ok := t.Body.(*types.ObjectType); ok && len(bodyObj.CallSigs()) > 0 {
+			return strictSignatureCopies(bodyObj.CallSigs(), t.TypeParameters)
 		}
 	}
 	return nil
@@ -1103,12 +1103,12 @@ func (c *Checker) extractCallSignaturesFromType(typ types.Type) []*types.Signatu
 func (c *Checker) extractConstructSignaturesFromType(typ types.Type) []*types.Signature {
 	switch t := typ.(type) {
 	case *types.ObjectType:
-		if len(t.ConstructSignatures) > 0 {
-			return strictSignatureCopies(t.ConstructSignatures, nil)
+		if len(t.ConstructSigs()) > 0 {
+			return strictSignatureCopies(t.ConstructSigs(), nil)
 		}
 	case *types.GenericType:
-		if bodyObj, ok := t.Body.(*types.ObjectType); ok && len(bodyObj.ConstructSignatures) > 0 {
-			return strictSignatureCopies(bodyObj.ConstructSignatures, t.TypeParameters)
+		if bodyObj, ok := t.Body.(*types.ObjectType); ok && len(bodyObj.ConstructSigs()) > 0 {
+			return strictSignatureCopies(bodyObj.ConstructSigs(), t.TypeParameters)
 		}
 	}
 	return nil
@@ -1260,8 +1260,10 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 				curSigs, curOk := overloadableCallSignatures(propType)
 				if prevOk && curOk {
 					merged := &types.ObjectType{}
-					merged.CallSignatures = append(merged.CallSignatures, prevSigs...)
-					merged.CallSignatures = append(merged.CallSignatures, curSigs...)
+					merged.Materialize()
+merged.CallSignatures = append(merged.CallSigs(), prevSigs...)
+					merged.Materialize()
+merged.CallSignatures = append(merged.CallSigs(), curSigs...)
 					propType = merged
 				}
 			}
@@ -1769,7 +1771,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			// A class constructor: the instances it constructs instantiate
 			// the class's instance generic (`extends ZodType<string, ...>`
 			// instantiates the constructor).
-			for _, sig := range obj.ConstructSignatures {
+			for _, sig := range obj.ConstructSigs() {
 				if inst, ok := sig.ReturnType.(*types.ObjectType); ok && inst.Instantiates == nil &&
 					len(inst.GenericArgs) == len(genericType.InstanceType.TypeParameters) {
 					inst.Instantiates = genericType.InstanceType
@@ -1916,36 +1918,38 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			Doc:                typ.Doc,
 			OptionalProperties: make(map[string]bool),
 			ReadOnlyProperties: make(map[string]bool),
-			BaseTypes:          typ.BaseTypes,
+			BaseTypes:          typ.Bases(),
 			IsReflectIntrinsic: typ.IsReflectIntrinsic,
 		}
 		visited[typ] = result
 		typ.CopyDisplay(result, func(a types.Type) types.Type { return c.substituteTypesWithVisited(a, substitution, visited) })
 		// Inherited members come from the bases: ZodObject<..., Output>
 		// reads _output through `extends ZodType<Output, ...>`.
-		if len(typ.BaseTypes) > 0 {
-			result.BaseTypes = make([]types.Type, len(typ.BaseTypes))
-			for i, base := range typ.BaseTypes {
-				result.BaseTypes[i] = c.substituteTypesWithVisited(base, substitution, visited)
+		if len(typ.Bases()) > 0 {
+			result.Materialize()
+result.BaseTypes = make([]types.Type, len(typ.Bases()))
+			for i, base := range typ.Bases() {
+				result.Bases()[i] = c.substituteTypesWithVisited(base, substitution, visited)
 			}
 		}
 
 		// Copy and substitute property types
 		for _, propName := range typ.PropertyNames() {
-			propType := typ.Properties[propName]
+			propType := typ.Props()[propName]
 			result.SetProperty(propName, c.substituteTypesWithVisited(propType, substitution, visited))
 		}
-		for propName, isOptional := range typ.OptionalProperties {
-			result.OptionalProperties[propName] = isOptional
+		for propName, isOptional := range typ.OptionalProps() {
+			result.OptionalProps()[propName] = isOptional
 		}
-		for propName, isReadOnly := range typ.ReadOnlyProperties {
-			result.ReadOnlyProperties[propName] = isReadOnly
+		for propName, isReadOnly := range typ.ReadOnlyProps() {
+			result.ReadOnlyProps()[propName] = isReadOnly
 		}
 
-		if typ.IndexSignatures != nil {
-			result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSignatures))
-			for i, sig := range typ.IndexSignatures {
-				result.IndexSignatures[i] = &types.IndexSignature{
+		if typ.IndexSigs() != nil {
+			result.Materialize()
+result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSigs()))
+			for i, sig := range typ.IndexSigs() {
+				result.IndexSigs()[i] = &types.IndexSignature{
 					KeyType:        c.substituteTypesWithVisited(sig.KeyType, substitution, visited),
 					ValueType:      c.substituteTypesWithVisited(sig.ValueType, substitution, visited),
 					IsMapped:       sig.IsMapped,
@@ -1956,11 +1960,11 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		}
 
 		// Copy and substitute call signatures
-		if typ.CallSignatures != nil {
+		if typ.CallSigs() != nil {
 			// Assigned once complete: a recursive visit of result meanwhile
 			// (it is in visited) must not see empty slots.
-			callSignatures := make([]*types.Signature, len(typ.CallSignatures))
-			for i, sig := range typ.CallSignatures {
+			callSignatures := make([]*types.Signature, len(typ.CallSigs()))
+			for i, sig := range typ.CallSigs() {
 				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 				for j, paramType := range sig.ParameterTypes {
 					newParamTypes[j] = c.substituteTypesWithVisited(paramType, substitution, visited)
@@ -1980,13 +1984,14 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 					RestParameterType: newRestParamType,
 				}
 			}
-			result.CallSignatures = callSignatures
+			result.Materialize()
+result.CallSignatures = callSignatures
 		}
 
 		// Copy construct signatures (if any)
-		if typ.ConstructSignatures != nil {
-			constructSignatures := make([]*types.Signature, len(typ.ConstructSignatures))
-			for i, sig := range typ.ConstructSignatures {
+		if typ.ConstructSigs() != nil {
+			constructSignatures := make([]*types.Signature, len(typ.ConstructSigs()))
+			for i, sig := range typ.ConstructSigs() {
 				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 				for j, paramType := range sig.ParameterTypes {
 					newParamTypes[j] = c.substituteTypesWithVisited(paramType, substitution, visited)
@@ -2006,7 +2011,8 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 					RestParameterType: newRestParamType,
 				}
 			}
-			result.ConstructSignatures = constructSignatures
+			result.Materialize()
+result.ConstructSignatures = constructSignatures
 		}
 
 		// Copy ClassMeta to preserve class instance information
@@ -2350,7 +2356,7 @@ func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 		for _, name := range typ.PropertyNames() {
 			add(name)
 		}
-		if len(typ.BaseTypes) > 0 {
+		if len(typ.Bases()) > 0 {
 			inherited := typ.GetEffectiveProperties()
 			names := make([]string, 0, len(inherited))
 			for name := range inherited {
@@ -2361,7 +2367,7 @@ func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 				add(name)
 			}
 		}
-		for _, sig := range typ.IndexSignatures {
+		for _, sig := range typ.IndexSigs() {
 			if sig == nil {
 				continue
 			}
@@ -2869,7 +2875,7 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 	}
 	// A primitive key reads the matching index signature.
 	if obj, ok := objectType.(*types.ObjectType); ok && (indexType == types.String || indexType == types.Number) {
-		for _, sig := range obj.IndexSignatures {
+		for _, sig := range obj.IndexSigs() {
 			if sig.KeyType == indexType || (indexType == types.Number && sig.KeyType == types.String) {
 				return sig.ValueType
 			}
@@ -3035,7 +3041,8 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 		} else {
 			valueType = types.Any
 		}
-		resultObj.IndexSignatures = append(resultObj.IndexSignatures, &types.IndexSignature{
+		resultObj.Materialize()
+resultObj.IndexSignatures = append(resultObj.IndexSigs(), &types.IndexSignature{
 			KeyType:   types.String,
 			ValueType: valueType,
 		})
@@ -3052,7 +3059,8 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 		} else {
 			valueType = types.Any
 		}
-		resultObj.IndexSignatures = append(resultObj.IndexSignatures, &types.IndexSignature{
+		resultObj.Materialize()
+resultObj.IndexSignatures = append(resultObj.IndexSigs(), &types.IndexSignature{
 			KeyType:   types.Number,
 			ValueType: valueType,
 		})
@@ -3065,7 +3073,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 		case *types.KeyofType:
 			if objType, ok := ct.OperandType.(*types.ObjectType); ok {
 				sourceObjectType = objType
-				for propName := range objType.Properties {
+				for propName := range objType.Props() {
 					checkKeys = append(checkKeys, &types.LiteralType{Value: vm.String(propName)})
 				}
 			}
@@ -3163,7 +3171,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 			case "+":
 				readOnlyProperties[keyName] = true
 			case "":
-				if sourceObjectType != nil && sourceObjectType.ReadOnlyProperties[keyName] {
+				if sourceObjectType != nil && sourceObjectType.ReadOnlyProps()[keyName] {
 					readOnlyProperties[keyName] = true
 				}
 			}
@@ -3297,37 +3305,40 @@ func cloneObjectTypeWithTypesNotify(obj *types.ObjectType, rewrite func(types.Ty
 	}
 
 	result := &types.ObjectType{
-		Properties:         make(map[string]types.Type, len(obj.Properties)),
+		Properties:         make(map[string]types.Type, len(obj.Props())),
 		PropertyDocs:       obj.PropertyDocs,
 		Doc:                obj.Doc,
-		OptionalProperties: make(map[string]bool, len(obj.OptionalProperties)),
-		ReadOnlyProperties: make(map[string]bool, len(obj.ReadOnlyProperties)),
-		BaseTypes:          append([]types.Type(nil), obj.BaseTypes...),
+		OptionalProperties: make(map[string]bool, len(obj.OptionalProps())),
+		ReadOnlyProperties: make(map[string]bool, len(obj.ReadOnlyProps())),
+		BaseTypes:          append([]types.Type(nil), obj.Bases()...),
 		IsReflectIntrinsic: obj.IsReflectIntrinsic,
 	}
 	if created != nil {
 		created(result)
 	}
-	result.CallSignatures = cloneSignaturesWithTypes(obj.CallSignatures, rewrite)
-	result.ConstructSignatures = cloneSignaturesWithTypes(obj.ConstructSignatures, rewrite)
+	result.Materialize()
+result.CallSignatures = cloneSignaturesWithTypes(obj.CallSigs(), rewrite)
+	result.Materialize()
+result.ConstructSignatures = cloneSignaturesWithTypes(obj.ConstructSigs(), rewrite)
 
 	for _, name := range obj.PropertyNames() {
-		propType := obj.Properties[name]
+		propType := obj.Props()[name]
 		result.SetProperty(name, rewrite(propType))
 	}
-	for name, optional := range obj.OptionalProperties {
-		result.OptionalProperties[name] = optional
+	for name, optional := range obj.OptionalProps() {
+		result.OptionalProps()[name] = optional
 	}
-	for name, readonly := range obj.ReadOnlyProperties {
-		result.ReadOnlyProperties[name] = readonly
+	for name, readonly := range obj.ReadOnlyProps() {
+		result.ReadOnlyProps()[name] = readonly
 	}
-	if obj.IndexSignatures != nil {
-		result.IndexSignatures = make([]*types.IndexSignature, len(obj.IndexSignatures))
-		for i, sig := range obj.IndexSignatures {
+	if obj.IndexSigs() != nil {
+		result.Materialize()
+result.IndexSignatures = make([]*types.IndexSignature, len(obj.IndexSigs()))
+		for i, sig := range obj.IndexSigs() {
 			if sig == nil {
 				continue
 			}
-			result.IndexSignatures[i] = &types.IndexSignature{
+			result.IndexSigs()[i] = &types.IndexSignature{
 				KeyType:        rewrite(sig.KeyType),
 				ValueType:      rewrite(sig.ValueType),
 				IsMapped:       sig.IsMapped,
@@ -3536,37 +3547,37 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		debugPrintf("// [TryInfer] Both are ObjectType\n")
 		if ct, ok := checkType.(*types.ObjectType); ok {
 			if checkerDebug {
-				debugPrintf("// [TryInfer] Check has %d call sigs, %d construct sigs\n", len(ct.CallSignatures), len(ct.ConstructSignatures))
+				debugPrintf("// [TryInfer] Check has %d call sigs, %d construct sigs\n", len(ct.CallSigs()), len(ct.ConstructSigs()))
 			}
 			if checkerDebug {
-				debugPrintf("// [TryInfer] Extends has %d call sigs, %d construct sigs\n", len(et.CallSignatures), len(et.ConstructSignatures))
+				debugPrintf("// [TryInfer] Extends has %d call sigs, %d construct sigs\n", len(et.CallSigs()), len(et.ConstructSigs()))
 			}
 			// Try call signatures first
-			if len(ct.CallSignatures) > 0 && len(et.CallSignatures) > 0 {
+			if len(ct.CallSigs()) > 0 && len(et.CallSigs()) > 0 {
 				// Match function signature structure (use first call signature)
 				debugPrintf("// [TryInfer] Trying call signature inference\n")
-				return c.tryInferFromFunctionTypes(ct.CallSignatures[0], et.CallSignatures[0], inferences)
+				return c.tryInferFromFunctionTypes(ct.CallSigs()[0], et.CallSigs()[0], inferences)
 			}
 			// Try constructor signatures for ConstructorParameters<T> and InstanceType<T>
-			if len(ct.ConstructSignatures) > 0 && len(et.ConstructSignatures) > 0 {
+			if len(ct.ConstructSigs()) > 0 && len(et.ConstructSigs()) > 0 {
 				// Match constructor signature structure (use first construct signature)
 				debugPrintf("// [TryInfer] Trying constructor signature inference\n")
-				return c.tryInferFromFunctionTypes(ct.ConstructSignatures[0], et.ConstructSignatures[0], inferences)
+				return c.tryInferFromFunctionTypes(ct.ConstructSigs()[0], et.ConstructSigs()[0], inferences)
 			}
 			// Plain object types: infer property by property, e.g.
 			// { a: infer U, b: infer U } against { a: string, b: number }.
-			if len(et.Properties) > 0 && len(ct.CallSignatures) == 0 && len(ct.ConstructSignatures) == 0 {
-				names := make([]string, 0, len(et.Properties))
-				for name := range et.Properties {
+			if len(et.Props()) > 0 && len(ct.CallSigs()) == 0 && len(ct.ConstructSigs()) == 0 {
+				names := make([]string, 0, len(et.Props()))
+				for name := range et.Props() {
 					names = append(names, name)
 				}
 				sort.Strings(names)
 				for _, name := range names {
-					checkProp, ok := ct.Properties[name]
+					checkProp, ok := ct.Props()[name]
 					if !ok {
 						return false
 					}
-					if !c.tryInferTypes(checkProp, et.Properties[name], inferences) {
+					if !c.tryInferTypes(checkProp, et.Props()[name], inferences) {
 						return false
 					}
 				}
@@ -3790,7 +3801,7 @@ func (c *Checker) evaluateConditionalType(checkType, extendsType, trueType, fals
 	if keyofType, ok := checkType.(*types.KeyofType); ok {
 		if objType, ok := keyofType.OperandType.(*types.ObjectType); ok {
 			var keyTypes []types.Type
-			for propName := range objType.Properties {
+			for propName := range objType.Props() {
 				keyTypes = append(keyTypes, &types.LiteralType{Value: vm.String(propName)})
 			}
 			if len(keyTypes) > 0 {
@@ -3990,9 +4001,9 @@ func (c *Checker) substituteTypesPreservingInferVisited(typ types.Type, substitu
 
 	case *types.ObjectType:
 		// For function types, recursively handle call signatures
-		if len(t.CallSignatures) > 0 {
-			newSigs := make([]*types.Signature, len(t.CallSignatures))
-			for i, sig := range t.CallSignatures {
+		if len(t.CallSigs()) > 0 {
+			newSigs := make([]*types.Signature, len(t.CallSigs()))
+			for i, sig := range t.CallSigs() {
 				// Substitute in signature parameters and return type while preserving infer
 				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 				for j, paramType := range sig.ParameterTypes {
@@ -4146,11 +4157,11 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 func overloadableCallSignatures(t types.Type) ([]*types.Signature, bool) {
 	switch tt := t.(type) {
 	case *types.ObjectType:
-		if tt.IsCallable() && len(tt.Properties) == 0 && len(tt.ConstructSignatures) == 0 {
+		if tt.IsCallable() && len(tt.Props()) == 0 && len(tt.ConstructSigs()) == 0 {
 			return tt.GetCallSignatures(), true
 		}
 	case *types.GenericType:
-		if body, ok := tt.Body.(*types.ObjectType); ok && body.IsCallable() && len(body.Properties) == 0 && len(body.ConstructSignatures) == 0 {
+		if body, ok := tt.Body.(*types.ObjectType); ok && body.IsCallable() && len(body.Props()) == 0 && len(body.ConstructSigs()) == 0 {
 			var out []*types.Signature
 			for _, sig := range body.GetCallSignatures() {
 				cp := *sig
@@ -4185,14 +4196,14 @@ func (c *Checker) walkTypeofPath(node parser.Node, path []string, varType types.
 		}
 		switch t := varType.(type) {
 		case *types.ObjectType:
-			if prop, ok := t.Properties[seg]; ok {
+			if prop, ok := t.Props()[seg]; ok {
 				varType = prop
 			} else {
 				c.addError(node, fmt.Sprintf("property '%s' does not exist on type '%s'", seg, t.String()))
 				return nil, false
 			}
 		case *types.NamespaceType:
-			if prop, ok := t.ValueShape.Properties[seg]; ok {
+			if prop, ok := t.ValueShape.Props()[seg]; ok {
 				varType = prop
 			} else if member := t.LookupTypeMember(seg); member != nil {
 				varType = member
@@ -4283,31 +4294,34 @@ func (c *Checker) structuralObject(t types.Type) (*types.ObjectType, bool) {
 				return nil, false
 			}
 			for _, name := range obj.PropertyNames() {
-				prop := obj.Properties[name]
-				if prev, exists := merged.Properties[name]; exists {
+				prop := obj.Props()[name]
+				if prev, exists := merged.Props()[name]; exists {
 					merged.SetProperty(name, types.NewIntersectionType(prev, prop))
-					optional[name] = optional[name] && obj.OptionalProperties[name]
-					readonly[name] = readonly[name] && obj.ReadOnlyProperties[name]
+					optional[name] = optional[name] && obj.OptionalProps()[name]
+					readonly[name] = readonly[name] && obj.ReadOnlyProps()[name]
 				} else {
 					merged.SetProperty(name, prop)
-					optional[name] = obj.OptionalProperties[name]
-					readonly[name] = obj.ReadOnlyProperties[name]
+					optional[name] = obj.OptionalProps()[name]
+					readonly[name] = obj.ReadOnlyProps()[name]
 				}
 			}
-			merged.IndexSignatures = append(merged.IndexSignatures, obj.IndexSignatures...)
-			merged.CallSignatures = append(merged.CallSignatures, obj.CallSignatures...)
+			merged.Materialize()
+merged.IndexSignatures = append(merged.IndexSigs(), obj.IndexSigs()...)
+			merged.Materialize()
+merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
 		}
 		for name, opt := range optional {
 			if opt {
-				merged.OptionalProperties[name] = true
+				merged.OptionalProps()[name] = true
 			}
 		}
 		for name, ro := range readonly {
 			if ro {
-				if merged.ReadOnlyProperties == nil {
-					merged.ReadOnlyProperties = map[string]bool{}
+				if merged.ReadOnlyProps() == nil {
+					merged.Materialize()
+merged.ReadOnlyProperties = map[string]bool{}
 				}
-				merged.ReadOnlyProperties[name] = true
+				merged.ReadOnlyProps()[name] = true
 			}
 		}
 		return merged, true
@@ -4442,7 +4456,7 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 			}
 			return false
 		}
-		for _, p := range tt.Properties {
+		for _, p := range tt.Props() {
 			if mayMentionTypeParamNames(p, names, visited) {
 				return true
 			}
@@ -4452,12 +4466,12 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 				return true
 			}
 		}
-		for _, b := range tt.BaseTypes {
+		for _, b := range tt.Bases() {
 			if mayMentionTypeParamNames(b, names, visited) {
 				return true
 			}
 		}
-		for _, sigs := range [][]*types.Signature{tt.CallSignatures, tt.ConstructSignatures} {
+		for _, sigs := range [][]*types.Signature{tt.CallSigs(), tt.ConstructSigs()} {
 			for _, sig := range sigs {
 				if sig == nil {
 					continue
@@ -4479,7 +4493,7 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 				}
 			}
 		}
-		for _, sig := range tt.IndexSignatures {
+		for _, sig := range tt.IndexSigs() {
 			if sig != nil && (mayMentionTypeParamNames(sig.KeyType, names, visited) || mayMentionTypeParamNames(sig.ValueType, names, visited) || mayMentionTypeParamNames(sig.ConstraintType, names, visited)) {
 				return true
 			}

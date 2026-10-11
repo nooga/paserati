@@ -20,7 +20,7 @@ func (c *Checker) reportNotCallable(node *parser.CallExpression, calleeType type
 		}
 		return
 	}
-	if obj, ok := calleeType.(*types.ObjectType); ok && len(obj.ConstructSignatures) > 0 && len(obj.CallSignatures) == 0 {
+	if obj, ok := calleeType.(*types.ObjectType); ok && len(obj.ConstructSigs()) > 0 && len(obj.CallSigs()) == 0 {
 		c.addErrorWithCode(callee, errors.TS2348, fmt.Sprintf("Value of type '%s' is not callable. Did you mean to include 'new'?", calleeType.String()))
 		return
 	}

@@ -170,14 +170,14 @@ func (g *GlobalDeclarations) inheritLate(base, derived *types.ObjectType, seen m
 	seen[derived] = true
 	added := false
 	for _, name := range base.PropertyNames() {
-		if _, exists := derived.Properties[name]; exists {
+		if _, exists := derived.Props()[name]; exists {
 			continue
 		}
-		derived.SetProperty(name, base.Properties[name])
-		if base.OptionalProperties[name] {
-			derived.OptionalProperties[name] = true
+		derived.SetProperty(name, base.Props()[name])
+		if base.OptionalProps()[name] {
+			derived.OptionalProps()[name] = true
 		}
-		setReadonlyProperty(derived, name, base.ReadOnlyProperties[name])
+		setReadonlyProperty(derived, name, base.ReadOnlyProps()[name])
 		added = true
 	}
 	if !added {

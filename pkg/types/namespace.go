@@ -47,7 +47,7 @@ func (n *NamespaceType) typeNode() {}
 func (n *NamespaceType) String() string {
 	parts := []string{}
 	if n.ValueShape != nil {
-		for _, k := range SortedPropertyNames(n.ValueShape.Properties) {
+		for _, k := range SortedPropertyNames(n.ValueShape.Props()) {
 			parts = append(parts, k)
 		}
 	}
@@ -79,7 +79,7 @@ func (n *NamespaceType) LookupTypeMember(name string) Type {
 		return t
 	}
 	if n.ValueShape != nil {
-		if t, ok := n.ValueShape.Properties[name]; ok {
+		if t, ok := n.ValueShape.Props()[name]; ok {
 			// For classes/enums stored as values, return their instance/value type.
 			if cls, isClass := t.(*ClassType); isClass {
 				return cls.InstanceType

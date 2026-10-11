@@ -25,7 +25,8 @@ func simplifyMappedType(t Type) Type {
 		if valueType == nil {
 			valueType = Any
 		}
-		obj.IndexSignatures = append(obj.IndexSignatures, &IndexSignature{
+		obj.Materialize()
+obj.IndexSignatures = append(obj.IndexSigs(), &IndexSignature{
 			KeyType:   mt.ConstraintType,
 			ValueType: valueType,
 		})
@@ -91,7 +92,7 @@ func IsAssignableForCallArgument(source, target Type) bool {
 	// Only the call-signature return type gets the void-tolerant treatment;
 	// a target that also declares required properties must still have those
 	// checked normally, so don't take the lenient path for it.
-	if len(targetObj.Properties) > 0 {
+	if len(targetObj.Props()) > 0 {
 		return false
 	}
 
@@ -257,7 +258,7 @@ func isAssignable(source, target Type) bool {
 	// `object` has no members, so it is assignable to an object type that
 	// requires none (`{ t?: string }`, `{}`).
 	if source == NonPrimitive {
-		if tgt, ok := target.(*ObjectType); ok && !tgt.IsCallable() && len(tgt.ConstructSignatures) == 0 && len(tgt.IndexSignatures) == 0 {
+		if tgt, ok := target.(*ObjectType); ok && !tgt.IsCallable() && len(tgt.ConstructSigs()) == 0 && len(tgt.IndexSigs()) == 0 {
 			required := false
 			for name := range tgt.GetEffectiveProperties() {
 				if !tgt.IsPropertyOptional(name) {
@@ -307,9 +308,9 @@ func isAssignable(source, target Type) bool {
 	// When target is a GenericType (generic method signature) and source is an ObjectType (method implementation)
 	if targetGeneric, ok := target.(*GenericType); ok {
 		// A constructable source against a generic construct signature.
-		if sourceObj, ok := source.(*ObjectType); ok && len(sourceObj.ConstructSignatures) > 0 {
-			if bodyObj, ok := targetGeneric.Body.(*ObjectType); ok && len(bodyObj.ConstructSignatures) > 0 {
-				if len(sourceObj.ConstructSignatures[0].ParameterTypes) == len(bodyObj.ConstructSignatures[0].ParameterTypes) {
+		if sourceObj, ok := source.(*ObjectType); ok && len(sourceObj.ConstructSigs()) > 0 {
+			if bodyObj, ok := targetGeneric.Body.(*ObjectType); ok && len(bodyObj.ConstructSigs()) > 0 {
+				if len(sourceObj.ConstructSigs()[0].ParameterTypes) == len(bodyObj.ConstructSigs()[0].ParameterTypes) {
 					return true
 				}
 			}
@@ -536,10 +537,10 @@ func isAssignable(source, target Type) bool {
 	// essentially the TypeScript `{}` / `Object` type — any non-null, non-undefined,
 	// non-never value is assignable to it. This matches strictNullChecks:false semantics.
 	if targetIsObj &&
-		len(targetObj.Properties) == 0 &&
-		len(targetObj.IndexSignatures) == 0 &&
-		len(targetObj.CallSignatures) == 0 &&
-		len(targetObj.ConstructSignatures) == 0 {
+		len(targetObj.Props()) == 0 &&
+		len(targetObj.IndexSigs()) == 0 &&
+		len(targetObj.CallSigs()) == 0 &&
+		len(targetObj.ConstructSigs()) == 0 {
 		// Only exclude null/undefined/never/void (already handled above).
 		if source != Never && source != Void && (!StrictNullChecks || (source != Null && source != Undefined)) {
 			return true
@@ -807,7 +808,7 @@ func acceptsVoid(t Type) bool {
 // one property, every declared property is optional, and it has no call,
 // construct or index signatures (TypeScript's isWeakType).
 func IsWeakObject(t *ObjectType) bool {
-	if t == nil || len(t.CallSignatures) > 0 || len(t.ConstructSignatures) > 0 || len(t.IndexSignatures) > 0 {
+	if t == nil || len(t.CallSigs()) > 0 || len(t.ConstructSigs()) > 0 || len(t.IndexSigs()) > 0 {
 		return false
 	}
 	props := t.GetEffectiveProperties()
@@ -825,7 +826,7 @@ func IsWeakObject(t *ObjectType) bool {
 // ObjectHasMembers reports whether an object type has any property or
 // call/construct signature (the source condition of the weak type check).
 func ObjectHasMembers(t *ObjectType) bool {
-	return len(t.GetEffectiveProperties()) > 0 || len(t.CallSignatures) > 0 || len(t.ConstructSignatures) > 0
+	return len(t.GetEffectiveProperties()) > 0 || len(t.CallSigs()) > 0 || len(t.ConstructSigs()) > 0
 }
 
 // ObjectsShareProperty reports whether two object types have a property name
@@ -892,8 +893,8 @@ func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
 
 	// Call and construct signatures: every target signature must be
 	// matched by some source signature (signaturesRelatedTo).
-	if !signaturesRelated(sourceObj.CallSignatures, targetObj.CallSignatures) ||
-		!signaturesRelated(sourceObj.ConstructSignatures, targetObj.ConstructSignatures) {
+	if !signaturesRelated(sourceObj.CallSigs(), targetObj.CallSigs()) ||
+		!signaturesRelated(sourceObj.ConstructSigs(), targetObj.ConstructSigs()) {
 		return false
 	}
 
@@ -908,9 +909,9 @@ func paramRelated(sp, tp Type, strict bool) bool {
 	if !strict {
 		return isAssignable(tp, sp) || isAssignable(sp, tp)
 	}
-	if sObj, ok := sp.(*ObjectType); ok && len(sObj.CallSignatures) == 1 && len(sObj.Properties) == 0 {
-		if tObj, ok := tp.(*ObjectType); ok && len(tObj.CallSignatures) == 1 && len(tObj.Properties) == 0 {
-			return signatureRelated(tObj.CallSignatures[0], sObj.CallSignatures[0], false, true)
+	if sObj, ok := sp.(*ObjectType); ok && len(sObj.CallSigs()) == 1 && len(sObj.Props()) == 0 {
+		if tObj, ok := tp.(*ObjectType); ok && len(tObj.CallSigs()) == 1 && len(tObj.Props()) == 0 {
+			return signatureRelated(tObj.CallSigs()[0], sObj.CallSigs()[0], false, true)
 		}
 	}
 	return isAssignable(tp, sp)
@@ -997,7 +998,7 @@ func findIndexSignature(obj *ObjectType, keyType Type) *IndexSignature {
 		if depth > 8 {
 			return nil
 		}
-		for _, sig := range o.IndexSignatures {
+		for _, sig := range o.IndexSigs() {
 			if sig == nil || sig.IsMapped || sig.Synthetic {
 				continue
 			}
@@ -1010,7 +1011,7 @@ func findIndexSignature(obj *ObjectType, keyType Type) *IndexSignature {
 				anySig = sig
 			}
 		}
-		for _, base := range o.BaseTypes {
+		for _, base := range o.Bases() {
 			if bo, ok := base.(*ObjectType); ok {
 				if sig := visit(bo, depth+1); sig != nil {
 					return sig
@@ -1035,7 +1036,7 @@ func findIndexSignature(obj *ObjectType, keyType Type) *IndexSignature {
 // the source has none, an implicit one made from its properties (only for
 // object literal and type literal types, never interfaces or classes).
 func indexSignaturesRelated(sourceObj, targetObj *ObjectType, sourceProps map[string]Type) bool {
-	for _, tIdx := range targetObj.IndexSignatures {
+	for _, tIdx := range targetObj.IndexSigs() {
 		if tIdx == nil || tIdx.IsMapped || tIdx.Synthetic || tIdx.ValueType == nil {
 			continue
 		}
@@ -1049,7 +1050,7 @@ func indexSignaturesRelated(sourceObj, targetObj *ObjectType, sourceProps map[st
 			continue
 		}
 		if sourceObj.IsInterface || sourceObj.ClassMeta != nil ||
-			len(sourceObj.CallSignatures) > 0 || len(sourceObj.ConstructSignatures) > 0 {
+			len(sourceObj.CallSigs()) > 0 || len(sourceObj.ConstructSigs()) > 0 {
 			// No implicit index signature: tolerate only when nothing is declared
 			// that could violate it (an empty source relates vacuously).
 			if len(sourceProps) == 0 {
@@ -1112,19 +1113,22 @@ func mergeIntersectionObjects(inter *IntersectionType) *ObjectType {
 		effective := obj.GetEffectiveProperties()
 		for _, name := range obj.EffectivePropertyNames() {
 			pt := effective[name]
-			if prev, exists := merged.Properties[name]; exists {
+			if prev, exists := merged.Props()[name]; exists {
 				merged.SetProperty(name, NewIntersectionType(prev, pt))
 				if !obj.IsPropertyOptional(name) {
-					merged.OptionalProperties[name] = false
+					merged.OptionalProps()[name] = false
 				}
 				continue
 			}
 			merged.SetProperty(name, pt)
-			merged.OptionalProperties[name] = obj.IsPropertyOptional(name)
+			merged.OptionalProps()[name] = obj.IsPropertyOptional(name)
 		}
-		merged.CallSignatures = append(merged.CallSignatures, obj.CallSignatures...)
-		merged.ConstructSignatures = append(merged.ConstructSignatures, obj.ConstructSignatures...)
-		merged.IndexSignatures = append(merged.IndexSignatures, obj.IndexSignatures...)
+		merged.Materialize()
+merged.CallSignatures = append(merged.CallSigs(), obj.CallSigs()...)
+		merged.Materialize()
+merged.ConstructSignatures = append(merged.ConstructSigs(), obj.ConstructSigs()...)
+		merged.Materialize()
+merged.IndexSignatures = append(merged.IndexSigs(), obj.IndexSigs()...)
 	}
 	return merged
 }
@@ -1143,7 +1147,7 @@ func nonPublicMemberOwner(obj *ObjectType, name string, depth int) (string, bool
 			return "", false
 		}
 	}
-	for _, base := range obj.BaseTypes {
+	for _, base := range obj.Bases() {
 		if bo, ok := resolveBaseType(base).(*ObjectType); ok {
 			if owner, found := nonPublicMemberOwner(bo, name, depth+1); found {
 				return owner, true
@@ -1162,7 +1166,7 @@ func classDerivesFrom(obj *ObjectType, className string, depth int) bool {
 	if obj.ClassMeta != nil && obj.ClassMeta.ClassName == className {
 		return true
 	}
-	for _, base := range obj.BaseTypes {
+	for _, base := range obj.Bases() {
 		if bo, ok := resolveBaseType(base).(*ObjectType); ok && classDerivesFrom(bo, className, depth+1) {
 			return true
 		}
@@ -1200,7 +1204,7 @@ var PrimitivePrototypeMembers func(kind string) map[string]Type
 // apparentMembersAssignable reports whether source's apparent type (the wrapper
 // prototype of a primitive, array or tuple) satisfies the plain object type tgt.
 func apparentMembersAssignable(source Type, tgt *ObjectType) bool {
-	if PrimitivePrototypeMembers == nil || tgt.IsCallable() || len(tgt.ConstructSignatures) > 0 || len(tgt.IndexSignatures) > 0 {
+	if PrimitivePrototypeMembers == nil || tgt.IsCallable() || len(tgt.ConstructSigs()) > 0 || len(tgt.IndexSigs()) > 0 {
 		return false
 	}
 	kind := ""
@@ -1290,7 +1294,7 @@ func sameGenericWithLooserArgs(source, target *ObjectType, depth int) bool {
 		}
 		return true
 	}
-	for _, base := range source.BaseTypes {
+	for _, base := range source.Bases() {
 		switch b := base.(type) {
 		case *ObjectType:
 			if sameGenericWithLooserArgs(b, target, depth+1) {
@@ -1326,7 +1330,7 @@ func simplifyKeyof(t Type) Type {
 		return t
 	}
 	obj, ok := kt.OperandType.(*ObjectType)
-	if !ok || len(obj.IndexSignatures) > 0 {
+	if !ok || len(obj.IndexSigs()) > 0 {
 		return t
 	}
 	names := obj.PropertyNames()

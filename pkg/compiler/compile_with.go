@@ -114,7 +114,7 @@ func (c *Compiler) extractPropertiesFromType(typ types.Type) map[string]bool {
 	switch t := typ.(type) {
 	case *types.ObjectType:
 		// Mark all properties as known
-		for propName := range t.Properties {
+		for propName := range t.Props() {
 			properties[propName] = true
 		}
 	case *types.Primitive:

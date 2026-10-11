@@ -26,7 +26,8 @@ func (a *ArgumentsInitializer) InitTypes(ctx *TypeContext) error {
 		KeyType:   types.Number,
 		ValueType: types.Any,
 	}
-	iArgumentsType.IndexSignatures = append(iArgumentsType.IndexSignatures, indexSig)
+	iArgumentsType.Materialize()
+iArgumentsType.IndexSignatures = append(iArgumentsType.IndexSigs(), indexSig)
 
 	// Define the IArguments type globally
 	err := ctx.DefineGlobal("IArguments", iArgumentsType)

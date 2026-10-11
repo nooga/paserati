@@ -4781,12 +4781,12 @@ func (c *Compiler) GetReExports() map[string]vm.ModuleReExport {
 // This includes checking the object's own properties and any prototype chain
 func (c *Compiler) hasMethodInType(objType *types.ObjectType, methodName string) bool {
 	// Check own properties
-	if _, exists := objType.Properties[methodName]; exists {
+	if _, exists := objType.Props()[methodName]; exists {
 		return true
 	}
 
 	// Check in base types (prototypes)
-	for _, baseType := range objType.BaseTypes {
+	for _, baseType := range objType.Bases() {
 		if baseObjType, ok := baseType.(*types.ObjectType); ok {
 			if c.hasMethodInType(baseObjType, methodName) {
 				return true

@@ -46,7 +46,7 @@ func isValidRestParameterType(t types.Type) bool {
 	case *types.ObjectType:
 		// Interfaces extending Array carry no members here, so an empty object
 		// type gets the benefit of the doubt; one with members is not an array.
-		return len(tt.Properties) == 0 && len(tt.CallSignatures) == 0 && len(tt.ConstructSignatures) == 0
+		return len(tt.Props()) == 0 && len(tt.CallSigs()) == 0 && len(tt.ConstructSigs()) == 0
 	}
 	// Conditional, indexed-access, infer and other deferred types cannot be
 	// judged here.
@@ -76,11 +76,11 @@ func (c *Checker) getAwaitedType(t types.Type) types.Type {
 
 	if objType, ok := t.(*types.ObjectType); ok {
 		if thenProp, hasThen := objType.GetEffectiveProperties()["then"]; hasThen {
-			if thenFuncType, ok := thenProp.(*types.ObjectType); ok && len(thenFuncType.CallSignatures) > 0 {
-				sig := thenFuncType.CallSignatures[0]
+			if thenFuncType, ok := thenProp.(*types.ObjectType); ok && len(thenFuncType.CallSigs()) > 0 {
+				sig := thenFuncType.CallSigs()[0]
 				if len(sig.ParameterTypes) > 0 {
-					if callbackFuncType, ok := sig.ParameterTypes[0].(*types.ObjectType); ok && len(callbackFuncType.CallSignatures) > 0 {
-						callbackSig := callbackFuncType.CallSignatures[0]
+					if callbackFuncType, ok := sig.ParameterTypes[0].(*types.ObjectType); ok && len(callbackFuncType.CallSigs()) > 0 {
+						callbackSig := callbackFuncType.CallSigs()[0]
 						if len(callbackSig.ParameterTypes) > 0 {
 							return callbackSig.ParameterTypes[0]
 						}

@@ -67,14 +67,14 @@ func (c *Checker) checkInterfaceIndexConstraints(node *parser.InterfaceDeclarati
 		if prop.IsComputedProperty && prop.ComputedName != nil {
 			// String/number literal keys and other constant names.
 			if name := c.extractConstantPropertyName(prop.ComputedName); name != "" {
-				c.checkPropertyAgainstIndexSignatures(own, prop.ComputedName, name, own.Properties[name], sigs)
+				c.checkPropertyAgainstIndexSignatures(own, prop.ComputedName, name, own.Props()[name], sigs)
 			}
 			continue
 		}
 		if prop.Name == nil {
 			continue
 		}
-		c.checkPropertyAgainstIndexSignatures(own, prop.Name, prop.Name.Value, own.Properties[prop.Name.Value], sigs)
+		c.checkPropertyAgainstIndexSignatures(own, prop.Name, prop.Name.Value, own.Props()[prop.Name.Value], sigs)
 	}
 }
 
@@ -109,8 +109,8 @@ func (c *Checker) checkInterfaceExtends(node *parser.InterfaceDeclaration, own *
 // inherits its bases' signatures (its own are added to them, never required
 // to subsume them), so they cannot make it incompatible with a base.
 func membersView(t *types.ObjectType) *types.ObjectType {
-	props := make(map[string]types.Type, len(t.Properties))
-	for name, pt := range t.Properties {
+	props := make(map[string]types.Type, len(t.Props()))
+	for name, pt := range t.Props() {
 		if name == "new" || name == "__call" {
 			continue
 		}
@@ -118,10 +118,10 @@ func membersView(t *types.ObjectType) *types.ObjectType {
 	}
 	return &types.ObjectType{
 		Properties:         props,
-		OptionalProperties: t.OptionalProperties,
-		ReadOnlyProperties: t.ReadOnlyProperties,
-		IndexSignatures:    t.IndexSignatures,
-		BaseTypes:          t.BaseTypes,
+		OptionalProperties: t.OptionalProps(),
+		ReadOnlyProperties: t.ReadOnlyProps(),
+		IndexSignatures:    t.IndexSigs(),
+		BaseTypes:          t.Bases(),
 	}
 }
 
@@ -147,7 +147,7 @@ func appendNewSignatures(dst, extra []*types.Signature) []*types.Signature {
 // are not shadowed by one with the same key type already in sigs.
 func inheritIndexSignatures(sigs []*types.IndexSignature, extended []*types.ObjectType) []*types.IndexSignature {
 	for _, ext := range extended {
-		for _, es := range ext.IndexSignatures {
+		for _, es := range ext.IndexSigs() {
 			if es == nil {
 				continue
 			}

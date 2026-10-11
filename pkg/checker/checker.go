@@ -116,12 +116,12 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 				extractFromType(memberType)
 			}
 		case *types.ObjectType:
-			for _, __name := range types.SortedPropertyNames(typ.Properties) {
-				propType := typ.Properties[__name]
+			for _, __name := range types.SortedPropertyNames(typ.Props()) {
+				propType := typ.Props()[__name]
 				extractFromType(propType)
 			}
 			// Also search CallSignatures (function types are ObjectTypes with call signatures)
-			for _, callSig := range typ.CallSignatures {
+			for _, callSig := range typ.CallSigs() {
 				for _, paramType := range callSig.ParameterTypes {
 					extractFromType(paramType)
 				}
@@ -133,7 +133,7 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 				}
 			}
 			// Also search ConstructSignatures
-			for _, consSig := range typ.ConstructSignatures {
+			for _, consSig := range typ.ConstructSigs() {
 				for _, paramType := range consSig.ParameterTypes {
 					extractFromType(paramType)
 				}
@@ -231,9 +231,9 @@ func (c *Checker) resolveParameterizedForwardReference(paramRef *types.Parameter
 			instantiated := c.instantiateGenericType(genericType, paramRef.TypeArguments, nil)
 
 			// If the instantiation resulted in an ObjectType with the instance type, extract it
-			if objType, ok := instantiated.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+			if objType, ok := instantiated.(*types.ObjectType); ok && len(objType.ConstructSigs()) > 0 {
 				// Return the instance type (return type of the constructor)
-				return objType.ConstructSignatures[0].ReturnType
+				return objType.ConstructSigs()[0].ReturnType
 			}
 
 			return instantiated
@@ -680,8 +680,8 @@ func (c *Checker) isSubclassOf(currentClass, targetClass string) bool {
 		}
 	} else if objectType, ok := currentType.(*types.ObjectType); ok {
 		// If it's a constructor (has construct signatures), get the instance type
-		if len(objectType.ConstructSignatures) > 0 && objectType.ConstructSignatures[0].ReturnType != nil {
-			if instanceType, ok := objectType.ConstructSignatures[0].ReturnType.(*types.ObjectType); ok {
+		if len(objectType.ConstructSigs()) > 0 && objectType.ConstructSigs()[0].ReturnType != nil {
+			if instanceType, ok := objectType.ConstructSigs()[0].ReturnType.(*types.ObjectType); ok {
 				currentClassType = instanceType
 			}
 		} else if objectType.IsClassInstance() {
@@ -690,8 +690,8 @@ func (c *Checker) isSubclassOf(currentClass, targetClass string) bool {
 		}
 	} else if genericType, ok := currentType.(*types.GenericType); ok {
 		if constructorType, ok := genericType.Body.(*types.ObjectType); ok {
-			if len(constructorType.ConstructSignatures) > 0 && constructorType.ConstructSignatures[0].ReturnType != nil {
-				if instanceType, ok := constructorType.ConstructSignatures[0].ReturnType.(*types.ObjectType); ok {
+			if len(constructorType.ConstructSigs()) > 0 && constructorType.ConstructSigs()[0].ReturnType != nil {
+				if instanceType, ok := constructorType.ConstructSigs()[0].ReturnType.(*types.ObjectType); ok {
 					currentClassType = instanceType
 				}
 			}
@@ -709,8 +709,8 @@ func (c *Checker) isSubclassOf(currentClass, targetClass string) bool {
 // checkInheritanceChain recursively checks if a class inherits from targetClass
 func (c *Checker) checkInheritanceChain(classType *types.ObjectType, targetClass string) bool {
 	// Check direct parent
-	if classType.BaseTypes != nil {
-		for _, baseType := range classType.BaseTypes {
+	if classType.Bases() != nil {
+		for _, baseType := range classType.Bases() {
 			if baseObj, ok := baseType.(*types.ObjectType); ok {
 				baseClassName := baseObj.GetClassName()
 				// Check if this base class matches target
@@ -1527,13 +1527,13 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 
 		// Get the first call signature
-		if len(funcObjectType.CallSignatures) == 0 {
+		if len(funcObjectType.CallSigs()) == 0 {
 			debugPrintf("// [Checker Pass 3] ERROR: ObjectType has no call signatures for %s\n", funcNameForLog)
 			c.addError(funcLit, fmt.Sprintf("internal checker error: function has no call signatures for %s", funcNameForLog))
 			continue
 		}
 
-		funcSignature := funcObjectType.CallSignatures[0]
+		funcSignature := funcObjectType.CallSigs()[0]
 
 		// Save outer context & Set context for body check
 		outerExpectedReturnType := c.currentExpectedReturnType
@@ -3237,7 +3237,7 @@ func (c *Checker) visit(node parser.Node) {
 								propName = ident.Value
 							}
 							if propName != "" {
-								if _, exists := objTypeResolved.Properties[propName]; exists {
+								if _, exists := objTypeResolved.Props()[propName]; exists {
 									// Check if property is readonly (for built-in types like Math)
 									if objTypeResolved.IsReadOnly(propName) {
 										c.addError(node, "The operand of a 'delete' operator cannot be a read-only property.")
@@ -4316,8 +4316,8 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 
 			// Build remaining properties map
 			remainingProps := make(map[string]types.Type)
-			for _, propName := range types.SortedPropertyNames(objType.Properties) {
-				propType := objType.Properties[propName]
+			for _, propName := range types.SortedPropertyNames(objType.Props()) {
+				propType := objType.Props()[propName]
 				if _, wasExtracted := extractedProps[propName]; !wasExtracted {
 					remainingProps[propName] = propType
 				}
@@ -4521,7 +4521,7 @@ func discriminateObjectCandidates(lit *parser.ObjectLiteral, candidates []types.
 				kept = append(kept, cand)
 				continue
 			}
-			propType, declared := objType.Properties[keyName]
+			propType, declared := objType.Props()[keyName]
 			if !declared || types.IsAssignable(litType, propType) {
 				kept = append(kept, cand)
 			}
@@ -4543,8 +4543,8 @@ func discriminateObjectCandidates(lit *parser.ObjectLiteral, candidates []types.
 // checkArrowFunctionLiteralWithContext handles contextual typing for arrow functions
 func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctionLiteral, context *ContextualType) {
 	// Check if the expected type is a function type
-	if objType, ok := context.ExpectedType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
-		expectedSig := objType.CallSignatures[0] // Use the first signature for contextual typing
+	if objType, ok := context.ExpectedType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSigs()) > 0 {
+		expectedSig := objType.CallSigs()[0] // Use the first signature for contextual typing
 
 		// Check if parameter counts are compatible
 		nodeParamCount := len(node.Parameters)
@@ -4562,7 +4562,7 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 		// With several overloads that disagree on their parameters there is
 		// no single contextual signature (getContextualSignature), so the
 		// parameters stay untyped.
-		for _, other := range objType.CallSignatures[1:] {
+		for _, other := range objType.CallSigs()[1:] {
 			if !sameParameterTypes(expectedSig, other) {
 				canApplyContextualTyping = false
 				break
@@ -5120,8 +5120,8 @@ func importedTypeAlias(t types.Type) types.Type {
 	if g, ok := t.(*types.GenericType); ok && g.InstanceType != nil {
 		return g.InstanceType // a generic class: ZodType<Output, Def, Input>
 	}
-	if objType, ok := t.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
-		if ret := objType.ConstructSignatures[0].ReturnType; ret != nil {
+	if objType, ok := t.(*types.ObjectType); ok && len(objType.ConstructSigs()) > 0 {
+		if ret := objType.ConstructSigs()[0].ReturnType; ret != nil {
 			return ret
 		}
 	}
@@ -5158,7 +5158,7 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 				// import * as z: in a type position z.T names the module's
 				// exported type T (z.infer<typeof S>), so the type side is a
 				// namespace. The value side is the plain object.
-				ns := moduleNamespace(localName, objType.Properties)
+				ns := moduleNamespace(localName, objType.Props())
 				typeAliasValue, valueType = ns, ns.ValueShape
 			}
 			c.env.DefineTypeAlias(localName, typeAliasValue)

@@ -56,7 +56,7 @@ func (c *Compiler) isDataProperty(propType types.Type) bool {
 		// For object types, check if it's a function type (getters return function types)
 		objType := propType.(*types.ObjectType)
 		// If it has call signatures, it's probably a getter method, not a data property
-		return len(objType.CallSignatures) == 0
+		return len(objType.CallSigs()) == 0
 	default:
 		return true // Default to treating as data property
 	}

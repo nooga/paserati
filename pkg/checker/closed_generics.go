@@ -128,15 +128,15 @@ func (w *closedWalk) foreign(t types.Type, names []string) bool {
 			return false
 		}
 		w.visited[t] = true
-		for _, p := range tt.Properties {
+		for _, p := range tt.Props() {
 			if w.foreign(p, names) {
 				return true
 			}
 		}
-		if w.any(tt.GenericArgs, names) || w.any(tt.BaseTypes, names) {
+		if w.any(tt.GenericArgs, names) || w.any(tt.Bases(), names) {
 			return true
 		}
-		for _, sigs := range [][]*types.Signature{tt.CallSignatures, tt.ConstructSignatures} {
+		for _, sigs := range [][]*types.Signature{tt.CallSigs(), tt.ConstructSigs()} {
 			for _, sig := range sigs {
 				if sig == nil {
 					continue
@@ -155,7 +155,7 @@ func (w *closedWalk) foreign(t types.Type, names []string) bool {
 				}
 			}
 		}
-		for _, sig := range tt.IndexSignatures {
+		for _, sig := range tt.IndexSigs() {
 			if sig == nil {
 				continue
 			}
@@ -216,13 +216,13 @@ func collectInferTypeNames(t types.Type, names *[]string, seen map[types.Type]bo
 			return
 		}
 		seen[t] = true
-		for _, p := range tt.Properties {
+		for _, p := range tt.Props() {
 			collectInferTypeNames(p, names, seen)
 		}
 		for _, a := range tt.GenericArgs {
 			collectInferTypeNames(a, names, seen)
 		}
-		for _, sigs := range [][]*types.Signature{tt.CallSignatures, tt.ConstructSignatures} {
+		for _, sigs := range [][]*types.Signature{tt.CallSigs(), tt.ConstructSigs()} {
 			for _, sig := range sigs {
 				if sig == nil {
 					continue

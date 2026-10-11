@@ -17,8 +17,8 @@ func (t *TextEncoderInitializer) InitTypes(ctx *TypeContext) error {
 	if uint8ArrayCtor, ok := ctx.GetType("Uint8Array"); ok {
 		if objType, ok2 := uint8ArrayCtor.(*types.ObjectType); ok2 {
 			// Use the constructor's call signature return type (the instance type)
-			if len(objType.CallSignatures) > 0 && objType.CallSignatures[0].ReturnType != nil {
-				encodeReturnType = objType.CallSignatures[0].ReturnType
+			if len(objType.CallSigs()) > 0 && objType.CallSigs()[0].ReturnType != nil {
+				encodeReturnType = objType.CallSigs()[0].ReturnType
 			}
 		}
 	}
