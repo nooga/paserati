@@ -124,6 +124,16 @@ func (c *Checker) settleTypeDepth(t types.Type, depth int) types.Type {
 			return types.NewIntersectionType(members...)
 		}
 	case *types.KeyofType:
+		if tof, ok := tt.OperandType.(*types.TypeofType); ok {
+			// `keyof typeof C` written before C was declared.
+			if r := c.resolveTypeofTypeIfNeeded(tof); r != types.Any {
+				if _, still := r.(*types.TypeofType); !still {
+					tt.OperandType = r // in place: signatures captured it
+					return c.computeKeyofType(r)
+				}
+			}
+			return t
+		}
 		// Stays a keyof, so a mapped type over it remains homomorphic.
 		if operand := c.settleTypeDepth(tt.OperandType, depth+1); operand != tt.OperandType {
 			return &types.KeyofType{OperandType: operand}
@@ -2137,6 +2147,11 @@ func (c *Checker) resolveKeyofTypeExpression(node *parser.KeyofTypeExpression) t
 		return nil
 	}
 
+	if _, ok := operandType.(*types.TypeofType); ok {
+		// `type K = keyof typeof C` hoisted above `const C = {...}`: keyed
+		// once C has a type (resolveTypeofInType), not never now.
+		return &types.KeyofType{OperandType: operandType}
+	}
 	// Compute the actual keyof type by extracting keys from the operand type
 	return c.computeKeyofType(operandType)
 }
