@@ -15,6 +15,21 @@ var objectEqualsVisited sync.Map
 // string: Equals is hot in union de-duplication).
 type objectPair struct{ a, b *ObjectType }
 
+// Pairs ObjectType.Equals has proved equal during the current outermost
+// comparison, in proof order. Without them, comparing two large mutually
+// recursive graphs (playwright's BrowserContext against a `this`-rebound copy
+// of it) re-proves every pair once per path that reaches it: exponential.
+// A pair proved while an enclosing pair was still assumed equal holds only
+// if that one does, so a failing pair drops what was proved under it (like
+// TypeScript's maybe-keys); the rest is cleared when the outermost call
+// returns, since object types are still filled in between comparisons.
+// Checking runs on one goroutine, like objectEqualsVisited's other users.
+var (
+	objectEqualsDepth  int
+	objectEqualsProved = map[objectPair]bool{}
+	objectEqualsLog    []objectPair
+)
+
 // --- Function/Object Signatures ---
 
 // Signature represents a function or constructor signature
@@ -360,11 +375,37 @@ func (ot *ObjectType) Equals(other Type) bool {
 	}
 
 	pairKey := objectPair{ot, otherOt}
+	if objectEqualsProved[pairKey] {
+		return true
+	}
 	if _, visited := objectEqualsVisited.LoadOrStore(pairKey, true); visited {
 		return true
 	}
 	defer objectEqualsVisited.Delete(pairKey)
 
+	logLen := len(objectEqualsLog)
+	objectEqualsDepth++
+	equal := ot.structurallyEquals(otherOt)
+	objectEqualsDepth--
+	switch {
+	case objectEqualsDepth == 0:
+		clear(objectEqualsProved)
+		objectEqualsLog = objectEqualsLog[:0]
+	case equal:
+		objectEqualsProved[pairKey] = true
+		objectEqualsLog = append(objectEqualsLog, pairKey)
+	default:
+		for _, proved := range objectEqualsLog[logLen:] {
+			delete(objectEqualsProved, proved)
+		}
+		objectEqualsLog = objectEqualsLog[:logLen]
+	}
+	return equal
+}
+
+// structurallyEquals compares members, signatures, bases, class metadata and
+// index signatures; Equals handles identity, cycles and memoization.
+func (ot *ObjectType) structurallyEquals(otherOt *ObjectType) bool {
 	// Check properties
 	if len(ot.Props()) != len(otherOt.Props()) {
 		return false // Different number of properties
