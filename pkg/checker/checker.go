@@ -181,7 +181,9 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 // resolveParameterizedForwardReference attempts to resolve a ParameterizedForwardReferenceType
 // to its actual instantiated generic type
 func (c *Checker) resolveParameterizedForwardReference(paramRef *types.ParameterizedForwardReferenceType) types.Type {
-	debugPrintf("// [Checker ResolveParamRef] Attempting to resolve %s\n", paramRef.String())
+	if checkerDebug {
+		debugPrintf("// [Checker ResolveParamRef] Attempting to resolve %s\n", paramRef.String())
+	}
 
 	// For generic classes, during method body checking, we can access the current forward reference
 	// to get the instance type directly without going through the constructor
@@ -191,19 +193,25 @@ func (c *Checker) resolveParameterizedForwardReference(paramRef *types.Parameter
 		// If we're inside the same generic class, we need to create an instantiated version
 		// of the current class's instance type with the type arguments from the paramRef
 		if c.currentClassInstanceType != nil {
-			debugPrintf("// [Checker ResolveParamRef] Found current class instance type: %s\n", c.currentClassInstanceType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ResolveParamRef] Found current class instance type: %s\n", c.currentClassInstanceType.String())
+			}
 
 			// Create a substitution map from type parameters to the provided type arguments
 			if len(paramRef.TypeArguments) == len(c.currentForwardRef.TypeParameters) {
 				substitution := make(map[string]types.Type)
 				for i, typeParam := range c.currentForwardRef.TypeParameters {
 					substitution[typeParam.Name] = paramRef.TypeArguments[i]
-					debugPrintf("// [Checker ResolveParamRef] Mapping %s -> %s\n", typeParam.Name, paramRef.TypeArguments[i].String())
+					if checkerDebug {
+						debugPrintf("// [Checker ResolveParamRef] Mapping %s -> %s\n", typeParam.Name, paramRef.TypeArguments[i].String())
+					}
 				}
 
 				// Substitute the type parameters in the instance type
 				resolvedType := c.substituteTypes(c.currentClassInstanceType, substitution)
-				debugPrintf("// [Checker ResolveParamRef] Substituted instance type: %s\n", resolvedType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker ResolveParamRef] Substituted instance type: %s\n", resolvedType.String())
+				}
 				return resolvedType
 			}
 		}
@@ -215,7 +223,9 @@ func (c *Checker) resolveParameterizedForwardReference(paramRef *types.Parameter
 
 		// Check if it's a generic type
 		if genericType, ok := typ.(*types.GenericType); ok {
-			debugPrintf("// [Checker ResolveParamRef] It's a generic type, instantiating with %d type args\n", len(paramRef.TypeArguments))
+			if checkerDebug {
+				debugPrintf("// [Checker ResolveParamRef] It's a generic type, instantiating with %d type args\n", len(paramRef.TypeArguments))
+			}
 
 			// Instantiate the generic type with the provided type arguments
 			instantiated := c.instantiateGenericType(genericType, paramRef.TypeArguments, nil)
@@ -850,7 +860,9 @@ func (c *Checker) hoistVarLikeDeclarationsPass2(declarations []*parser.VarDeclar
 			}
 			c.pass2VarSeen[varName.Value] = true
 		} else {
-			debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
+			}
 		}
 		// Set type on the Name node itself
 		varName.SetComputedType(preliminaryType)
@@ -931,7 +943,9 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 
 	// Use contextual typing if we have a type annotation (not Any)
 	if typeAnnotation != nil && variableType != types.Any {
-		debugPrintf("// [Checker Pass 5] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Pass 5] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
+		}
 		c.visitWithContext(initializer, &ContextualType{
 			ExpectedType: variableType,
 			IsContextual: true,
@@ -1012,14 +1026,18 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 
 		// Update the environment only if the refined type is different from the current one
 		if variableType != finalInferredType {
-			debugPrintf("// [Checker Pass 5] Refining type for '%s' (no annotation). Old: %s, New: %s\n", varName.Value, variableType.String(), finalInferredType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Pass 5] Refining type for '%s' (no annotation). Old: %s, New: %s\n", varName.Value, variableType.String(), finalInferredType.String())
+			}
 			if !globalEnv.Update(varName.Value, finalInferredType) {
 				debugPrintf("// [Checker Pass 5] WARNING: Failed env update refinement for '%s'\n", varName.Value)
 			}
 			// Also update the type on the name node itself for consistency
 			varName.SetComputedType(finalInferredType)
 		} else {
-			debugPrintf("// [Checker Pass 5] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Pass 5] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
+			}
 		}
 
 		// See flow_narrowing.go: a widened literal keeps its
@@ -1379,7 +1397,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					break
 				}
 			}
-			debugPrintf("// [Checker Pass 2] Defined hoisted func '%s' with initial type: %s\n", name, initialSignature.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Pass 2] Defined hoisted func '%s' with initial type: %s\n", name, initialSignature.String())
+			}
 		}
 	}
 
@@ -1531,7 +1551,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// Set the 'this' context from the first parameter's type
 			if thisType := funcLit.Parameters[0].ComputedType; thisType != nil {
 				c.currentThisType = thisType
-				debugPrintf("// [Checker Pass 3] Setting this type from explicit parameter: %s\n", c.currentThisType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Pass 3] Setting this type from explicit parameter: %s\n", c.currentThisType.String())
+				}
 			} else {
 				// Should not happen if resolution worked correctly
 				c.currentThisType = types.Any
@@ -1616,7 +1638,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				if !funcEnv.Define(funcLit.RestParameter.Name.Value, funcSignature.RestParameterType, false) {
 					c.redeclarationReportedByBinder()
 				}
-				debugPrintf("// [Checker Pass 3] Defined rest parameter '%s' with type: %s\n", funcLit.RestParameter.Name.Value, funcSignature.RestParameterType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Pass 3] Defined rest parameter '%s' with type: %s\n", funcLit.RestParameter.Name.Value, funcSignature.RestParameterType.String())
+				}
 			} else if funcLit.RestParameter.Pattern != nil {
 				// Destructuring rest parameter like ...[x, y] or ...{a, b}
 				// Extract element type from the rest array type (which is an array of T)
@@ -1635,7 +1659,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 								if !funcEnv.Define(ident.Value, elementType, false) {
 									c.redeclarationReportedByBinder()
 								}
-								debugPrintf("// [Checker Pass 3] Defined rest destructured param '%s' with type: %s\n", ident.Value, elementType.String())
+								if checkerDebug {
+									debugPrintf("// [Checker Pass 3] Defined rest destructured param '%s' with type: %s\n", ident.Value, elementType.String())
+								}
 							}
 						}
 					}
@@ -1647,12 +1673,16 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 								if !funcEnv.Define(ident.Value, elementType, false) {
 									c.redeclarationReportedByBinder()
 								}
-								debugPrintf("// [Checker Pass 3] Defined rest destructured prop '%s' with type: %s\n", ident.Value, elementType.String())
+								if checkerDebug {
+									debugPrintf("// [Checker Pass 3] Defined rest destructured prop '%s' with type: %s\n", ident.Value, elementType.String())
+								}
 							}
 						}
 					}
 				}
-				debugPrintf("// [Checker Pass 3] Rest parameter with destructuring pattern (type: %s)\n", funcSignature.RestParameterType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Pass 3] Rest parameter with destructuring pattern (type: %s)\n", funcSignature.RestParameterType.String())
+				}
 			}
 			// Set computed type on the RestParameter node itself
 			funcLit.RestParameter.ComputedType = funcSignature.RestParameterType
@@ -1684,7 +1714,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			} else {
 				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
 			}
-			debugPrintf("// [Checker Pass 3] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Pass 3] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
+			}
 		}
 
 		// Handle async generator functions (both flags) first
@@ -1692,13 +1724,17 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			debugPrintf("// [Checker Pass 3] Async generator function detected, wrapping return type in AsyncGenerator\n")
 			asyncGeneratorType := c.createAsyncGeneratorType(actualReturnType, c.currentInferredYieldTypes)
 			actualReturnType = asyncGeneratorType
-			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+			}
 		} else if funcLit.IsGenerator {
 			// For generator functions, wrap the return type in Generator<T, TReturn, TNext>
 			debugPrintf("// [Checker Pass 3] Generator function detected, wrapping return type in Generator\n")
 			generatorType := c.createGeneratorType(actualReturnType, c.currentInferredYieldTypes)
 			actualReturnType = generatorType
-			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+			}
 		} else if funcLit.IsAsync {
 			// For async functions, wrap the return type in Promise<T>
 			// But skip wrapping if the annotated type is already Promise<T>
@@ -1716,7 +1752,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 				promiseType := c.createPromiseType(innerType)
 				actualReturnType = promiseType
-				debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+				}
 			}
 		}
 
@@ -1748,7 +1786,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			if !globalEnv.Update(targetName, finalFuncType) {
 				debugPrintf("// [Checker Pass 3] WARNING: Failed global env update for '%s'\n", targetName)
 			} else {
-				debugPrintf("// [Checker Pass 3] Updated global env for '%s' to final type: %s\n", targetName, finalFuncType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Pass 3] Updated global env for '%s' to final type: %s\n", targetName, finalFuncType.String())
+				}
 			}
 
 			// --- NEW: Check for overload completion ---
@@ -1763,7 +1803,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 
 		// ALWAYS set the final computed type on the FunctionLiteral node itself
-		debugPrintf("// [Checker Pass 3] SETTING final computed type on node %p for '%s': %s\n", funcLit, funcNameForLog, finalFuncType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Pass 3] SETTING final computed type on node %p for '%s': %s\n", funcLit, funcNameForLog, finalFuncType.String())
+		}
 		funcLit.SetComputedType(finalFuncType)
 
 		// Restore outer environment and context
@@ -1948,7 +1990,9 @@ func (c *Checker) resolveTypeofInEnvironment(env *Environment) {
 
 	// Get all type aliases from the environment
 	aliases := env.GetAllTypeAliases()
-	debugPrintf("// [Checker resolveTypeofInEnvironment] Found %d type aliases to check\n", len(aliases))
+	if checkerDebug {
+		debugPrintf("// [Checker resolveTypeofInEnvironment] Found %d type aliases to check\n", len(aliases))
+	}
 
 	// For each type alias, check if it contains TypeofType and resolve it
 	for name, aliasType := range aliases {
@@ -1957,8 +2001,10 @@ func (c *Checker) resolveTypeofInEnvironment(env *Environment) {
 		// Recursively resolve any TypeofType instances in the alias
 		resolvedType := c.resolveTypeofInType(aliasType)
 		if resolvedType != aliasType {
-			debugPrintf("// [Checker resolveTypeofInEnvironment] Updated alias '%s' from %s to %s\n",
-				name, aliasType.String(), resolvedType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker resolveTypeofInEnvironment] Updated alias '%s' from %s to %s\n",
+					name, aliasType.String(), resolvedType.String())
+			}
 			env.DefineTypeAlias(name, resolvedType)
 		}
 	}
@@ -2077,7 +2123,9 @@ func (c *Checker) updateVariableTypesAfterAliasResolution(env *Environment) {
 
 	// Get all variables from the environment
 	variables := env.GetAllVariables()
-	debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Found %d variables to check\n", len(variables))
+	if checkerDebug {
+		debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Found %d variables to check\n", len(variables))
+	}
 
 	// For each variable, check if its type needs to be updated
 	for name, symbolInfo := range variables {
@@ -2086,8 +2134,10 @@ func (c *Checker) updateVariableTypesAfterAliasResolution(env *Environment) {
 		// Check if the variable's type contains unresolved conditional types or type aliases
 		updatedType := c.resolveTypeofInType(symbolInfo.Type)
 		if updatedType != symbolInfo.Type {
-			debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Updated variable '%s' from %s to %s\n",
-				name, symbolInfo.Type.String(), updatedType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Updated variable '%s' from %s to %s\n",
+					name, symbolInfo.Type.String(), updatedType.String())
+			}
 			// Update the variable's type in the environment
 			env.Update(name, updatedType)
 		}
@@ -2189,7 +2239,9 @@ func (c *Checker) visit(node parser.Node) {
 				// If Define fails here, it's a true redeclaration error.
 				c.redeclarationReportedByBinder()
 			}
-			debugPrintf("// [Checker LetStmt] Temp Define '%s' as: %s\n", declarator.Name.Value, tempType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker LetStmt] Temp Define '%s' as: %s\n", declarator.Name.Value, tempType.String())
+			}
 			var bsInfo *blockScopedInfo
 			if !node.Declare {
 				bsInfo = c.declareBlockScoped(c.env, declarator.Name.Value, declarator.Name.Token, bsVariable)
@@ -2258,30 +2310,40 @@ func (c *Checker) visit(node parser.Node) {
 				if computedInitializerType != nil {
 					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && isFreshLiteralExpression(declarator.Value) {
 						finalVariableType = types.GetWidenedType(computedInitializerType)
-						debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+						if checkerDebug {
+							debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+						}
 					} else {
 						finalVariableType = computedInitializerType
 						if isWideningInitializer(declarator.Value) {
 							finalVariableType = types.DeeplyWidenType(computedInitializerType)
 						}
 						finalVariableType = types.WidenEnumMember(finalVariableType)
-						debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+						if checkerDebug {
+							debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+						}
 					}
 				} else {
 					// No type annotation and no initializer: let x; → implicitly 'any' (like TypeScript)
 					finalVariableType = types.Any
-					debugPrintf("// [Checker LetStmt] '%s': Inferred final type (no initializer, implicit any): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+					if checkerDebug {
+						debugPrintf("// [Checker LetStmt] '%s': Inferred final type (no initializer, implicit any): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+					}
 				}
 			}
 
 			// 4. UPDATE variable type in the current environment with the final type
 			currentType, _, _ := c.env.Resolve(declarator.Name.Value)
-			debugPrintf("// [Checker LetStmt] Updating '%s'. Current type: %s, Final type: %s\n", declarator.Name.Value, currentType.String(), finalVariableType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker LetStmt] Updating '%s'. Current type: %s, Final type: %s\n", declarator.Name.Value, currentType.String(), finalVariableType.String())
+			}
 			if !c.env.Update(declarator.Name.Value, finalVariableType) {
 				debugPrintf("// [Checker LetStmt] WARNING: Update failed unexpectedly for '%s'\n", declarator.Name.Value)
 			}
 			updatedType, _, _ := c.env.Resolve(declarator.Name.Value)
-			debugPrintf("// [Checker LetStmt] Updated '%s'. Type after update: %s\n", declarator.Name.Value, updatedType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker LetStmt] Updated '%s'. Type after update: %s\n", declarator.Name.Value, updatedType.String())
+			}
 
 			// Set computed type on the Name Identifier node itself and the declarator
 			declarator.Name.SetComputedType(finalVariableType)
@@ -2351,7 +2413,9 @@ func (c *Checker) visit(node parser.Node) {
 					bsInfo.initializing = declarator.Value != nil
 				}
 			}
-			debugPrintf("// [Checker ConstStmt] Temp Define '%s' as: %s (ok=%v)\n", declarator.Name.Value, tempType.String(), preDefined)
+			if checkerDebug {
+				debugPrintf("// [Checker ConstStmt] Temp Define '%s' as: %s (ok=%v)\n", declarator.Name.Value, tempType.String(), preDefined)
+			}
 
 			// 2. Handle Initializer (Must be present for const)
 			var computedInitializerType types.Type
@@ -2499,7 +2563,9 @@ func (c *Checker) visit(node parser.Node) {
 				}
 				// If exists, silently allow redeclaration (JavaScript var semantics)
 			} else {
-				debugPrintf("// [Checker VarStmt] Temp Define '%s' as: %s in function scope\n", declarator.Name.Value, tempType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker VarStmt] Temp Define '%s' as: %s in function scope\n", declarator.Name.Value, tempType.String())
+				}
 			}
 
 			// 2. Handle Initializer (if present)
@@ -2559,19 +2625,25 @@ func (c *Checker) visit(node parser.Node) {
 				if computedInitializerType != nil {
 					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && isFreshLiteralExpression(declarator.Value) {
 						finalVariableType = types.GetWidenedType(computedInitializerType)
-						debugPrintf("// [Checker VarStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+						if checkerDebug {
+							debugPrintf("// [Checker VarStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+						}
 					} else {
 						finalVariableType = computedInitializerType
 						if isWideningInitializer(declarator.Value) {
 							finalVariableType = types.DeeplyWidenType(computedInitializerType)
 						}
 						finalVariableType = types.WidenEnumMember(finalVariableType)
-						debugPrintf("// [Checker VarStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+						if checkerDebug {
+							debugPrintf("// [Checker VarStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+						}
 					}
 				} else {
 					// No type annotation and no initializer: var x; → implicitly 'any' (like TypeScript)
 					finalVariableType = types.Any
-					debugPrintf("// [Checker VarStmt] '%s': Inferred final type (no initializer, implicit any): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+					if checkerDebug {
+						debugPrintf("// [Checker VarStmt] '%s': Inferred final type (no initializer, implicit any): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+					}
 				}
 			}
 
@@ -2587,12 +2659,16 @@ func (c *Checker) visit(node parser.Node) {
 
 			// 4. UPDATE variable type in function scope with the final type
 			currentType, _, _ := funcScope.Resolve(declarator.Name.Value)
-			debugPrintf("// [Checker VarStmt] Updating '%s'. Current type: %s, Final type: %s\n", declarator.Name.Value, currentType.String(), finalVariableType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker VarStmt] Updating '%s'. Current type: %s, Final type: %s\n", declarator.Name.Value, currentType.String(), finalVariableType.String())
+			}
 			if !funcScope.Update(declarator.Name.Value, finalVariableType) {
 				debugPrintf("// [Checker VarStmt] WARNING: Update failed unexpectedly for '%s'\n", declarator.Name.Value)
 			}
 			updatedType, _, _ := funcScope.Resolve(declarator.Name.Value)
-			debugPrintf("// [Checker VarStmt] Updated '%s'. Type after update: %s\n", declarator.Name.Value, updatedType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker VarStmt] Updated '%s'. Type after update: %s\n", declarator.Name.Value, updatedType.String())
+			}
 
 			// Set computed type on the Name Identifier node itself and the declarator
 			declarator.Name.SetComputedType(finalVariableType)
@@ -2644,8 +2720,10 @@ func (c *Checker) visit(node parser.Node) {
 
 		// Check against expected type if available
 		if c.currentExpectedReturnType != nil {
-			debugPrintf("// [Checker Return] Checking return type: actual=%T(%s) vs expected=%T(%s)\n",
-				actualReturnType, actualReturnType.String(), c.currentExpectedReturnType, c.currentExpectedReturnType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Return] Checking return type: actual=%T(%s) vs expected=%T(%s)\n",
+					actualReturnType, actualReturnType.String(), c.currentExpectedReturnType, c.currentExpectedReturnType.String())
+			}
 
 			// Debug type parameter instances
 			if actualTPT, ok := actualReturnType.(*types.TypeParameterType); ok {
@@ -2729,7 +2807,9 @@ func (c *Checker) visit(node parser.Node) {
 
 				// Set the computed type on the FunctionLiteral node itself NOW.
 				funcLit.SetComputedType(funcObjectType)
-				debugPrintf("// [Checker Block Hoisting] Hoisted and defined func '%s' with type: %s\n", name, funcObjectType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Block Hoisting] Hoisted and defined func '%s' with type: %s\n", name, funcObjectType.String())
+				}
 			}
 		}
 		// --- END Block Hoisted Declarations Processing ---
@@ -2738,7 +2818,9 @@ func (c *Checker) visit(node parser.Node) {
 		if node.Statements == nil {
 			debugPrintf("// [Checker Visit Block] WARNING: node.Statements is nil for Block %p\n", node)
 		} else {
-			debugPrintf("// [Checker Visit Block] node.Statements length: %d\n", len(node.Statements))
+			if checkerDebug {
+				debugPrintf("// [Checker Visit Block] node.Statements length: %d\n", len(node.Statements))
+			}
 		}
 		// --- END DEBUG ---
 
@@ -2856,7 +2938,9 @@ func (c *Checker) visit(node parser.Node) {
 		// In method context, 'this' refers to the object the method is called on
 		if c.currentThisType != nil {
 			node.SetComputedType(c.currentThisType)
-			debugPrintf("// [Checker ThisExpr] Using context this type: %s\n", c.currentThisType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ThisExpr] Using context this type: %s\n", c.currentThisType.String())
+			}
 		} else {
 			// Top level: 'this' is typeof globalThis (script) or undefined
 			// (module); we cannot tell them apart reliably, so stay permissive.
@@ -2984,7 +3068,9 @@ func (c *Checker) visit(node parser.Node) {
 			// Check for built-in function before reporting error
 			builtinType := c.getBuiltinType(node.Value)
 			if builtinType != nil {
-				debugPrintf("// [Checker Debug] visit(Identifier): '%s' resolved as built-in type: %s\n", node.Value, builtinType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Debug] visit(Identifier): '%s' resolved as built-in type: %s\n", node.Value, builtinType.String())
+				}
 				node.SetComputedType(builtinType)
 				node.IsConstant = true // Built-ins are effectively constants
 			} else if c.allowForwardReferences {
@@ -3004,7 +3090,9 @@ func (c *Checker) visit(node parser.Node) {
 			// --- END DEBUG ---
 
 			if typ != nil {
-				debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: %s\n", node.Value, c.env, typ.String()) // DEBUG - Uncommented
+				if checkerDebug {
+					debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: %s\n", node.Value, c.env, typ.String())
+				} // DEBUG - Uncommented
 			} else {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: <nil>\n", node.Value, c.env) // DEBUG - Nil type
 			}
@@ -3588,8 +3676,10 @@ func (c *Checker) visit(node parser.Node) {
 				if defaultValueType != nil {
 					// Widen literal types for parameter inference (like let/const inference)
 					resolvedParamType = types.GetWidenedType(defaultValueType)
-					debugPrintf("// [Checker ShorthandMethod] Inferred parameter '%s' type from default value: %s -> %s\n",
-						param.Name.Value, defaultValueType.String(), resolvedParamType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker ShorthandMethod] Inferred parameter '%s' type from default value: %s -> %s\n",
+							param.Name.Value, defaultValueType.String(), resolvedParamType.String())
+					}
 				}
 			}
 
@@ -3700,7 +3790,9 @@ func (c *Checker) visit(node parser.Node) {
 				c.redeclarationReportedByBinder()
 			}
 			node.RestParameter.ComputedType = restParameterType
-			debugPrintf("// [Checker ShorthandMethod] Defined rest parameter '%s' with type: %s\n", node.RestParameter.Name.Value, restParameterType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ShorthandMethod] Defined rest parameter '%s' with type: %s\n", node.RestParameter.Name.Value, restParameterType.String())
+			}
 		}
 		// --- END NEW ---
 
@@ -3718,7 +3810,9 @@ func (c *Checker) visit(node parser.Node) {
 			} else {
 				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
 			}
-			debugPrintf("// [Checker ShorthandMethod] Inferred return type for '%s': %s\n", methodNameForLog, actualReturnType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ShorthandMethod] Inferred return type for '%s': %s\n", methodNameForLog, actualReturnType.String())
+			}
 		}
 
 		// 7. Create the final function type with optional parameters using unified ObjectType
@@ -3732,7 +3826,9 @@ func (c *Checker) visit(node parser.Node) {
 		finalMethodType := types.NewFunctionType(methodSignature)
 
 		// 8. Set the computed type on the ShorthandMethod node
-		debugPrintf("// [Checker ShorthandMethod] Setting computed type for '%s': %s\n", methodNameForLog, finalMethodType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker ShorthandMethod] Setting computed type for '%s': %s\n", methodNameForLog, finalMethodType.String())
+		}
 		node.SetComputedType(finalMethodType)
 
 		// 9. Restore outer environment and context
@@ -4256,7 +4352,9 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		}
 	}
 
-	debugPrintf("// [Checker VisitContext] Node: %T, Expected: %s\n", node, context.ExpectedType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker VisitContext] Node: %T, Expected: %s\n", node, context.ExpectedType.String())
+	}
 
 	// A union expected type (`number[] | null`, `Options | undefined`,
 	// `(() => void) | null`) contextually types a literal through the one
@@ -4265,7 +4363,9 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 	// would then reject.
 	if union, ok := context.ExpectedType.(*types.UnionType); ok {
 		if narrowed := c.contextualTypeFromUnion(node, union); narrowed != nil {
-			debugPrintf("// [Checker VisitContext] Narrowed union context to constituent: %s\n", narrowed.String())
+			if checkerDebug {
+				debugPrintf("// [Checker VisitContext] Narrowed union context to constituent: %s\n", narrowed.String())
+			}
 			context = &ContextualType{ExpectedType: narrowed, IsContextual: context.IsContextual}
 		}
 	}
@@ -4451,7 +4551,9 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 		}
 
 		if canApplyContextualTyping {
-			debugPrintf("// [Checker ArrowFuncContext] Applying contextual typing from signature: %s\n", expectedSig.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ArrowFuncContext] Applying contextual typing from signature: %s\n", expectedSig.String())
+			}
 
 			// Check if the return type is generic - if so, try to use its constraint for contextual typing
 			var contextualReturnType types.Type = nil
@@ -4460,15 +4562,21 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				if typeParam, isTypeParam := expectedSig.ReturnType.(*types.TypeParameterType); isTypeParam {
 					if typeParam.Parameter != nil && typeParam.Parameter.Constraint != nil {
 						contextualReturnType = typeParam.Parameter.Constraint
-						debugPrintf("// [Checker ArrowFuncContext] Using type parameter constraint as contextual return type: %s -> %s\n",
-							expectedSig.ReturnType.String(), contextualReturnType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker ArrowFuncContext] Using type parameter constraint as contextual return type: %s -> %s\n",
+								expectedSig.ReturnType.String(), contextualReturnType.String())
+						}
 					} else {
-						debugPrintf("// [Checker ArrowFuncContext] Skipping type parameter without constraint for inference: %s\n", expectedSig.ReturnType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker ArrowFuncContext] Skipping type parameter without constraint for inference: %s\n", expectedSig.ReturnType.String())
+						}
 					}
 				} else {
 					// Use concrete return type directly
 					contextualReturnType = expectedSig.ReturnType
-					debugPrintf("// [Checker ArrowFuncContext] Using concrete contextual return type: %s\n", contextualReturnType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker ArrowFuncContext] Using concrete contextual return type: %s\n", contextualReturnType.String())
+					}
 				}
 			}
 
@@ -4504,7 +4612,9 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			} else if ctx.ContextualReturnType != nil {
 				expectedReturnTypeForBodyCheck = preliminarySignature.ReturnType
 				if expectedReturnTypeForBodyCheck != nil {
-					debugPrintf("// [Checker ArrowFuncContext] Using contextual return type for body check: %s\n", expectedReturnTypeForBodyCheck.String())
+					if checkerDebug {
+						debugPrintf("// [Checker ArrowFuncContext] Using contextual return type for body check: %s\n", expectedReturnTypeForBodyCheck.String())
+					}
 				} else {
 					debugPrintf("// [Checker ArrowFuncContext] Using contextual return type for body check: <nil>\n")
 				}
@@ -4513,7 +4623,9 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				debugPrintf("// [Checker ArrowFuncContext] Using return type inference (nil expected return type)\n")
 			}
 			finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBodyCheck)
-			debugPrintf("// [Checker ArrowFuncContext] Inferred final return type: %s\n", finalReturnType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ArrowFuncContext] Inferred final return type: %s\n", finalReturnType.String())
+			}
 
 			// Check if we used a type parameter constraint for contextual typing
 			// If so, the final return type should be the original type parameter, not the constraint
@@ -4522,7 +4634,9 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 					if typeParam.Parameter != nil && typeParam.Parameter.Constraint != nil && contextualReturnType != nil {
 						// We used the constraint for inference, but the final type should be the type parameter
 						finalReturnType = expectedSig.ReturnType
-						debugPrintf("// [Checker ArrowFuncContext] Overriding final return type to type parameter: %s\n", finalReturnType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker ArrowFuncContext] Overriding final return type to type parameter: %s\n", finalReturnType.String())
+						}
 					}
 				}
 			}
@@ -4531,7 +4645,9 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			finalFuncType := c.createFinalFunctionType(ctx, paramTypes, finalReturnType, restParameterType)
 
 			// 5. Set computed type on the ArrowFunctionLiteral node
-			debugPrintf("// [Checker ArrowFuncContext] Setting contextual computed type: %s\n", finalFuncType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ArrowFuncContext] Setting contextual computed type: %s\n", finalFuncType.String())
+			}
 			node.SetComputedType(finalFuncType)
 
 			// 6. Restore environment
@@ -4853,7 +4969,9 @@ func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, o
 	for _, typeParam := range genericType.TypeParameters {
 		if inferredType, found := solution[typeParam]; found {
 			typeArgs = append(typeArgs, inferredType)
-			debugPrintf("// [Checker ExtractInferred] %s = %s\n", typeParam.Name, inferredType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ExtractInferred] %s = %s\n", typeParam.Name, inferredType.String())
+			}
 		} else {
 			// Type parameter not inferred - use Any as fallback
 			typeArgs = append(typeArgs, types.Any)
@@ -4903,7 +5021,9 @@ func (c *Checker) GetModuleExports() map[string]types.Type {
 	debugPrintf("// [Checker GetModuleExports] Called. moduleEnv=%v\n", c.moduleEnv != nil)
 	if c.moduleEnv != nil {
 		exports := c.moduleEnv.GetAllExports()
-		debugPrintf("// [Checker GetModuleExports] Returning %d exports\n", len(exports))
+		if checkerDebug {
+			debugPrintf("// [Checker GetModuleExports] Returning %d exports\n", len(exports))
+		}
 		return exports
 	}
 	debugPrintf("// [Checker GetModuleExports] No moduleEnv, returning empty map\n")
@@ -5007,7 +5127,9 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 		// Try to resolve the actual type from the source module
 		resolvedType := c.moduleEnv.ResolveImportedType(localName)
 		if resolvedType != nil && resolvedType != types.Any {
-			debugPrintf("// [Checker] Imported %s: %s = %s (resolved, type-only: %v)\n", localName, sourceName, resolvedType.String(), isTypeOnly)
+			if checkerDebug {
+				debugPrintf("// [Checker] Imported %s: %s = %s (resolved, type-only: %v)\n", localName, sourceName, resolvedType.String(), isTypeOnly)
+			}
 
 			// Register the imported type in the local type environment for type annotation resolution
 			// For classes (constructor types), register the instance type (not the constructor)
@@ -5172,7 +5294,9 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 						if c.IsModuleMode() {
 							c.moduleEnv.DefineExport(localName, exportName, localType, nil)
 						}
-						debugPrintf("// [Checker] Exported: %s as %s (type: %s)\n", localName, exportName, localType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker] Exported: %s as %s (type: %s)\n", localName, exportName, localType.String())
+						}
 					} else {
 						c.addError(node, fmt.Sprintf("exported name '%s' not found in current scope", localName))
 					}
@@ -5202,7 +5326,9 @@ func (c *Checker) checkExportDefaultDeclaration(node *parser.ExportDefaultDeclar
 		}
 
 		c.moduleEnv.DefineExport("default", "default", exportType, nil)
-		debugPrintf("// [Checker] Default export registered (type: %s)\n", exportType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker] Default export registered (type: %s)\n", exportType.String())
+		}
 	} else {
 		debugPrintf("// [Checker] Default export processed (no module mode)\n")
 	}
@@ -5216,14 +5342,16 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 	}
 
 	sourceModule := node.Source.Value
-	debugPrintf("// [Checker] Processing export%s * from: %s\n",
-		func() string {
-			if node.IsTypeOnly {
-				return " type"
-			} else {
-				return ""
-			}
-		}(), sourceModule)
+	if checkerDebug {
+		debugPrintf("// [Checker] Processing export%s * from: %s\n",
+			func() string {
+				if node.IsTypeOnly {
+					return " type"
+				} else {
+					return ""
+				}
+			}(), sourceModule)
+	}
 
 	if node.Exported != nil {
 		// export * as name from "module" or export * as "string" from "module"
@@ -5258,7 +5386,9 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 
 				// Get all export names from the source module (excluding default export)
 				exportNames := moduleRecord.GetExportNames()
-				debugPrintf("// [Checker] Source module '%s' has %d exports: %v\n", sourceModule, len(exportNames), exportNames)
+				if checkerDebug {
+					debugPrintf("// [Checker] Source module '%s' has %d exports: %v\n", sourceModule, len(exportNames), exportNames)
+				}
 
 				// Create individual re-export bindings for each named export
 				for _, exportName := range exportNames {
@@ -5268,7 +5398,9 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 					}
 				}
 
-				debugPrintf("// [Checker] Completed export * expansion for %d exports from '%s'\n", len(exportNames), sourceModule)
+				if checkerDebug {
+					debugPrintf("// [Checker] Completed export * expansion for %d exports from '%s'\n", len(exportNames), sourceModule)
+				}
 			} else {
 				c.addError(node, "module loader not available for resolving exports")
 			}
@@ -5298,7 +5430,9 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 				exportType = types.Any
 			}
 			c.moduleEnv.DefineExport(localName, localName, exportType, decl)
-			debugPrintf("// [Checker] Exported declaration binding: %s (type: %s)\n", localName, exportType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker] Exported declaration binding: %s (type: %s)\n", localName, exportType.String())
+			}
 		}
 
 	case *parser.ExpressionStatement:
@@ -5315,7 +5449,9 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 				if c.IsModuleMode() {
 					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 				}
-				debugPrintf("// [Checker] Exported function: %s (type: %s)\n", localName, exportType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker] Exported function: %s (type: %s)\n", localName, exportType.String())
+				}
 			}
 
 		case *parser.ClassExpression:
@@ -5329,7 +5465,9 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 				if c.IsModuleMode() {
 					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 				}
-				debugPrintf("// [Checker] Exported class: %s (type: %s)\n", localName, exportType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker] Exported class: %s (type: %s)\n", localName, exportType.String())
+				}
 			}
 
 		case *parser.EnumDeclaration:
@@ -5343,7 +5481,9 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 				if c.IsModuleMode() {
 					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 				}
-				debugPrintf("// [Checker] Exported enum: %s (type: %s)\n", localName, exportType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker] Exported enum: %s (type: %s)\n", localName, exportType.String())
+				}
 			}
 
 		default:
@@ -5361,7 +5501,9 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 			if c.IsModuleMode() {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
-			debugPrintf("// [Checker] Exported class declaration: %s (type: %s)\n", localName, exportType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker] Exported class declaration: %s (type: %s)\n", localName, exportType.String())
+			}
 		}
 
 	case *parser.InterfaceDeclaration:
@@ -5376,7 +5518,9 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 			if c.IsModuleMode() {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
-			debugPrintf("// [Checker] Exported interface: %s (type: %s)\n", localName, exportType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker] Exported interface: %s (type: %s)\n", localName, exportType.String())
+			}
 		}
 
 	case *parser.TypeAliasStatement:
@@ -5391,7 +5535,9 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 			if c.IsModuleMode() {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
-			debugPrintf("// [Checker] Exported type: %s (type: %s)\n", localName, exportType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker] Exported type: %s (type: %s)\n", localName, exportType.String())
+			}
 		}
 
 	case *parser.FunctionSignature:

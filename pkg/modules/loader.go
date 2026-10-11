@@ -134,7 +134,9 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	cachedRecord := ml.registry.Get(cacheKey)
 	debugPrintf("// [ModuleLoader] Cache check for %s: %v\n", specifier, cachedRecord != nil)
 	if cachedRecord != nil {
-		debugPrintf("// [ModuleLoader] Returning cached module: %s (has error: %v)\n", specifier, cachedRecord.GetError() != nil)
+		if moduleLoaderDebug {
+			debugPrintf("// [ModuleLoader] Returning cached module: %s (has error: %v)\n", specifier, cachedRecord.GetError() != nil)
+		}
 		return cachedRecord, nil
 	}
 
@@ -199,7 +201,9 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	// Extract and load dependencies before type checking
 	debugPrintf("// [ModuleLoader] About to extract imports for: %s (AST=%v)\n", specifier, record.AST != nil)
 	importSpecs := extractImportSpecs(record.AST)
-	debugPrintf("// [ModuleLoader] Found %d import specs in %s\n", len(importSpecs), record.ResolvedPath)
+	if moduleLoaderDebug {
+		debugPrintf("// [ModuleLoader] Found %d import specs in %s\n", len(importSpecs), record.ResolvedPath)
+	}
 
 	// Load dependencies recursively
 	for _, importSpec := range importSpecs {
@@ -253,10 +257,14 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			if !record.isNative {
 				record.Exports = moduleChecker.GetModuleExports()
 				for name, typ := range record.Exports {
-					debugPrintf("// [ModuleLoader]   Export '%s': %s\n", name, typ.String())
+					if moduleLoaderDebug {
+						debugPrintf("// [ModuleLoader]   Export '%s': %s\n", name, typ.String())
+					}
 				}
 			} else {
-				debugPrintf("// [ModuleLoader] Skipping export extraction for native module %s (already has %d exports)\n", record.ResolvedPath, len(record.Exports))
+				if moduleLoaderDebug {
+					debugPrintf("// [ModuleLoader] Skipping export extraction for native module %s (already has %d exports)\n", record.ResolvedPath, len(record.Exports))
+				}
 			}
 		}
 
@@ -265,7 +273,9 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		if len(checkErrors) > 0 && !ml.config.IgnoreTypeErrors {
 			record.Error = paseratiErrors.NewPositionedError("type checking failed", checkErrors[0])
 			record.State = ModuleError
-			debugPrintf("// [ModuleLoader] Type check error in %s (exports still extracted): %s\n", specifier, checkErrors[0].Error())
+			if moduleLoaderDebug {
+				debugPrintf("// [ModuleLoader] Type check error in %s (exports still extracted): %s\n", specifier, checkErrors[0].Error())
+			}
 			return record, nil
 		}
 
@@ -281,7 +291,9 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 
 			chunk, compileErrors := moduleCompiler.Compile(record.AST)
 			if len(compileErrors) > 0 {
-				debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
+				if moduleLoaderDebug {
+					debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
+				}
 				record.Error = paseratiErrors.NewPositionedError("compilation failed", compileErrors[0])
 				record.State = ModuleError
 				return record, nil
@@ -308,7 +320,9 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			ml.applyCompilerExports(record, moduleCompiler)
 
 			record.ReleaseSyntax(moduleCompiler)
-			debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(record.ExportIndices), record.ResolvedPath)
+			if moduleLoaderDebug {
+				debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(record.ExportIndices), record.ResolvedPath)
+			}
 		}
 		record.State = ModuleCompiled
 	} else if ml.config.SkipTypeCheck && ml.compilerFactory != nil {
@@ -323,7 +337,9 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 
 		chunk, compileErrors := moduleCompiler.Compile(record.AST)
 		if len(compileErrors) > 0 {
-			debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
+			if moduleLoaderDebug {
+				debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
+			}
 			record.Error = paseratiErrors.NewPositionedError("compilation failed", compileErrors[0])
 			record.State = ModuleError
 			return record, nil
@@ -350,7 +366,9 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		ml.applyCompilerExports(record, moduleCompiler)
 
 		record.ReleaseSyntax(moduleCompiler)
-		debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(record.ExportIndices), record.ResolvedPath)
+		if moduleLoaderDebug {
+			debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(record.ExportIndices), record.ResolvedPath)
+		}
 		record.State = ModuleCompiled
 	} else {
 		// No checker factory, just mark as parsed
@@ -539,7 +557,9 @@ func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string
 	// Main processing loop
 	debugPrintf("// [ModuleLoader] Entering main processing loop\n")
 	for !ml.parseQueue.IsEmpty() || ml.workerPool.HasActiveJobs() {
-		debugPrintf("// [ModuleLoader] Loop: queue empty=%v, active jobs=%v\n", ml.parseQueue.IsEmpty(), ml.workerPool.HasActiveJobs())
+		if moduleLoaderDebug {
+			debugPrintf("// [ModuleLoader] Loop: queue empty=%v, active jobs=%v\n", ml.parseQueue.IsEmpty(), ml.workerPool.HasActiveJobs())
+		}
 		select {
 		case result := <-ml.workerPool.Results():
 			debugPrintf("// [ModuleLoader] Received result for: %s\n", result.ModulePath)
@@ -866,7 +886,9 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 				// Skip type extraction for native modules - they already have their exports set
 				if !record.isNative {
 					record.Exports = moduleChecker.GetModuleExports()
-					debugPrintf("// [ModuleLoader] Extracted %d exports from %s\n", len(record.Exports), modulePath)
+					if moduleLoaderDebug {
+						debugPrintf("// [ModuleLoader] Extracted %d exports from %s\n", len(record.Exports), modulePath)
+					}
 				}
 			}
 		} else {
@@ -947,7 +969,9 @@ type NativeModuleInterface interface {
 func (ml *moduleLoader) checkForNativeModule(source io.ReadCloser) NativeModuleInterface {
 	debugPrintf("// [ModuleLoader] checkForNativeModule: Checking source type: %T\n", source)
 	if nativeSource, ok := source.(NativeModuleSource); ok {
-		debugPrintf("// [ModuleLoader] checkForNativeModule: Source is NativeModuleSource, IsNativeModule=%v\n", nativeSource.IsNativeModule())
+		if moduleLoaderDebug {
+			debugPrintf("// [ModuleLoader] checkForNativeModule: Source is NativeModuleSource, IsNativeModule=%v\n", nativeSource.IsNativeModule())
+		}
 		if nativeSource.IsNativeModule() {
 			nativeModuleInterface := nativeSource.GetNativeModule()
 			debugPrintf("// [ModuleLoader] checkForNativeModule: Found native module: %T\n", nativeModuleInterface)
@@ -965,7 +989,9 @@ func (ml *moduleLoader) checkForNativeModule(source io.ReadCloser) NativeModuleI
 
 // handleNativeModuleSource processes a native module and populates the module record
 func (ml *moduleLoader) handleNativeModuleSource(record *ModuleRecord, nativeModule NativeModuleInterface) error {
-	debugPrintf("// [ModuleLoader] Processing native module: %s\n", nativeModule.GetName())
+	if moduleLoaderDebug {
+		debugPrintf("// [ModuleLoader] Processing native module: %s\n", nativeModule.GetName())
+	}
 
 	// Use the VM instance if available, otherwise create a temporary one
 	vmInstance := ml.vmInstance
@@ -976,11 +1002,15 @@ func (ml *moduleLoader) handleNativeModuleSource(record *ModuleRecord, nativeMod
 
 	// Initialize the native module to get runtime values and type information
 	runtimeValues := nativeModule.InitializeExports(vmInstance)
-	debugPrintf("// [ModuleLoader] Native module exported %d runtime values\n", len(runtimeValues))
+	if moduleLoaderDebug {
+		debugPrintf("// [ModuleLoader] Native module exported %d runtime values\n", len(runtimeValues))
+	}
 
 	// Get type information from the native module
 	typeExports := nativeModule.GetTypeExports()
-	debugPrintf("// [ModuleLoader] Native module has %d type exports\n", len(typeExports))
+	if moduleLoaderDebug {
+		debugPrintf("// [ModuleLoader] Native module has %d type exports\n", len(typeExports))
+	}
 
 	// Directly populate both type and runtime exports
 	record.Exports = typeExports        // Type information for type checker

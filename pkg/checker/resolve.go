@@ -387,12 +387,16 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 
 			// Check if this is a constructor type (like Date, Array, String builtins)
 			if objType, ok := value.(*types.ObjectType); ok {
-				debugPrintf("// [Checker resolveTypeAnno Ident] '%s' is ObjectType, IsCallable: %v, IsConstructable: %v\n", node.Value, objType.IsCallable(), objType.IsConstructable())
+				if checkerDebug {
+					debugPrintf("// [Checker resolveTypeAnno Ident] '%s' is ObjectType, IsCallable: %v, IsConstructable: %v\n", node.Value, objType.IsCallable(), objType.IsConstructable())
+				}
 
 				// Check for construct signatures first (preferred for type annotations)
 				if objType.IsConstructable() {
 					constructSigs := objType.GetConstructSignatures()
-					debugPrintf("// [Checker resolveTypeAnno Ident] '%s' has %d construct signatures\n", node.Value, len(constructSigs))
+					if checkerDebug {
+						debugPrintf("// [Checker resolveTypeAnno Ident] '%s' has %d construct signatures\n", node.Value, len(constructSigs))
+					}
 					if len(constructSigs) > 0 {
 						returnType := constructSigs[0].ReturnType
 						debugPrintf("// [Checker resolveTypeAnno Ident] Found constructor type '%s', using return type: %T\n", node.Value, returnType)
@@ -403,7 +407,9 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				// Check for call signatures (for builtins that are callable as constructors)
 				if objType.IsCallable() {
 					callSigs := objType.GetCallSignatures()
-					debugPrintf("// [Checker resolveTypeAnno Ident] '%s' has %d call signatures\n", node.Value, len(callSigs))
+					if checkerDebug {
+						debugPrintf("// [Checker resolveTypeAnno Ident] '%s' has %d call signatures\n", node.Value, len(callSigs))
+					}
 					if len(callSigs) > 0 {
 						returnType := callSigs[0].ReturnType
 						debugPrintf("// [Checker resolveTypeAnno Ident] Found callable constructor type '%s', using return type: %T\n", node.Value, returnType)
@@ -623,7 +629,9 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 
 	// --- NEW: Handle GenericTypeRef ---
 	case *parser.GenericTypeRef:
-		debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Processing GenericTypeRef: %s with %d type args\n", node.Name.Value, len(node.TypeArguments))
+		if checkerDebug {
+			debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Processing GenericTypeRef: %s with %d type args\n", node.Name.Value, len(node.TypeArguments))
+		}
 		// A qualified reference (N.Array<T>) never names a builtin.
 		builtinName := node.Name.Value
 		if node.Qualifier != nil {
@@ -762,7 +770,9 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 			// Check if it's a ForwardReferenceType (self-reference during class definition)
 			if _, ok := baseType.(*types.ForwardReferenceType); ok {
 				// Create a parameterized forward reference that preserves type arguments
-				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating ParameterizedForwardReferenceType for '%s' with %d type args\n", node.Name.Value, len(node.TypeArguments))
+				if checkerDebug {
+					debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating ParameterizedForwardReferenceType for '%s' with %d type args\n", node.Name.Value, len(node.TypeArguments))
+				}
 
 				// Resolve type arguments
 				typeArgs := make([]types.Type, len(node.TypeArguments))
@@ -822,7 +832,9 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				// Special case: if baseType is Any (unresolved import) and we have type arguments,
 				// allow it and create a placeholder generic instantiation
 				// This is common for type-only imports where we don't have the full type information
-				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Allowing generic syntax on unresolved type '%s' with %d type args\n", node.Name.Value, len(node.TypeArguments))
+				if checkerDebug {
+					debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Allowing generic syntax on unresolved type '%s' with %d type args\n", node.Name.Value, len(node.TypeArguments))
+				}
 
 				// Resolve type arguments even though we don't know the base type
 				typeArgs := make([]types.Type, len(node.TypeArguments))
@@ -1189,8 +1201,10 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			}
 
 			// We'll add this to the ObjectType's IndexSignatures field
-			debugPrintf("// [Checker ObjectType] Index signature [%s: %s]: %s\n",
-				prop.KeyName.Value, keyType.String(), valueType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ObjectType] Index signature [%s: %s]: %s\n",
+					prop.KeyName.Value, keyType.String(), valueType.String())
+			}
 
 			// Add to our collected index signatures
 			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, keyType)
@@ -1214,8 +1228,10 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 				if prop.Optional {
 					optionalProperties[computedName] = true
 				}
-				debugPrintf("// [Checker ObjectType] Computed property '%s': %s\n",
-					computedName, propType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker ObjectType] Computed property '%s': %s\n",
+						computedName, propType.String())
+				}
 			} else {
 				// Dynamic computed property - treat as index signature for now
 				debugPrintf("// [Checker ObjectType] Dynamic computed property, treating as index signature\n")
@@ -1259,16 +1275,18 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			if prop.Readonly {
 				readOnlyProperties[prop.Name.Value] = true
 			}
-			debugPrintf("// [Checker ObjectType] Property '%s'%s: %s\n",
-				prop.Name.Value,
-				func() string {
-					if prop.Optional {
-						return "?"
-					} else {
-						return ""
-					}
-				}(),
-				propType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ObjectType] Property '%s'%s: %s\n",
+					prop.Name.Value,
+					func() string {
+						if prop.Optional {
+							return "?"
+						} else {
+							return ""
+						}
+					}(),
+					propType.String())
+			}
 		}
 		// Skip properties with nil names that aren't call signatures
 	}
@@ -1469,8 +1487,10 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 				if paramNode.Name != nil {
 					paramName = paramNode.Name.Value
 				}
-				debugPrintf("// [Checker resolveFuncLitType] Inferred parameter '%s' type from default value: %s -> %s\n",
-					paramName, defaultValueType.String(), resolvedParamType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker resolveFuncLitType] Inferred parameter '%s' type from default value: %s -> %s\n",
+						paramName, defaultValueType.String(), resolvedParamType.String())
+				}
 			}
 		}
 
@@ -1595,7 +1615,9 @@ func functionTypeParameterNameStrings(params []parser.Expression) []string {
 func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArgs []types.Type, typeArgNodes []parser.Expression) types.Type {
 	debugPrintf("// [InstantiateGeneric] === INSTANTIATING GENERIC TYPE ===\n")
 	debugPrintf("// [InstantiateGeneric] Generic name: %s\n", genericType.Name)
-	debugPrintf("// [InstantiateGeneric] Body type: %s (Go type: %T)\n", genericType.Body.String(), genericType.Body)
+	if checkerDebug {
+		debugPrintf("// [InstantiateGeneric] Body type: %s (Go type: %T)\n", genericType.Body.String(), genericType.Body)
+	}
 	// Handle default type parameters when fewer arguments are provided
 	finalTypeArgs := make([]types.Type, len(genericType.TypeParameters))
 
@@ -1615,8 +1637,10 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 				earlier[genericType.TypeParameters[j].Name] = finalTypeArgs[j]
 			}
 			finalTypeArgs[i] = c.substituteTypes(typeParam.Default, earlier)
-			debugPrintf("// [Checker] Using default type '%s' for parameter '%s'\n",
-				typeParam.Default.String(), typeParam.Name)
+			if checkerDebug {
+				debugPrintf("// [Checker] Using default type '%s' for parameter '%s'\n",
+					typeParam.Default.String(), typeParam.Name)
+			}
 		} else {
 			// Error: no type argument provided and no default (TS2314 / TS2707)
 			minArgs := len(genericType.TypeParameters)
@@ -1637,8 +1661,10 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	for _, t := range finalTypeArgs {
 		typeStrs = append(typeStrs, t.String())
 	}
-	debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n",
-		genericType.Name, strings.Join(typeStrs, ", "))
+	if checkerDebug {
+		debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n",
+			genericType.Name, strings.Join(typeStrs, ", "))
+	}
 
 	// Create substitution map from type parameters to concrete types. Use it for
 	// constraint validation too, since constraints may reference sibling type
@@ -1670,8 +1696,10 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			}
 			constraintType := c.substituteTypes(typeParam.Constraint, substitution)
 
-			debugPrintf("// [Checker] Checking constraint: %s extends %s\n",
-				argType.String(), constraintType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker] Checking constraint: %s extends %s\n",
+					argType.String(), constraintType.String())
+			}
 
 			if reachesPending(argType, 0, nil) || reachesPending(constraintType, 0, nil) {
 				// A class or interface not filled in yet is reachable (a
@@ -1759,7 +1787,9 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 		c.genericInstCache[key] = instantiatedType
 	}
 
-	debugPrintf("// [Checker] Instantiated type: %s\n", instantiatedType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker] Instantiated type: %s\n", instantiatedType.String())
+	}
 	return instantiatedType
 }
 
@@ -1792,7 +1822,9 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 	case *types.TypeParameterType:
 		// Replace type parameter with concrete type
 		if replacement, exists := substitution[typ.Parameter.Name]; exists {
-			debugPrintf("// [Checker] Substituting %s -> %s\n", typ.Parameter.Name, replacement.String())
+			if checkerDebug {
+				debugPrintf("// [Checker] Substituting %s -> %s\n", typ.Parameter.Name, replacement.String())
+			}
 			return replacement
 		}
 		// Type parameter not found in substitution - this shouldn't happen if validation is correct
@@ -2087,7 +2119,9 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		debugPrintf("// [SubstituteTypes] About to compute conditional type...\n")
 		resolvedType := c.computeConditionalType(newCheckType, newExtendsType, newTrueType, newFalseType)
 		if resolvedType != nil {
-			debugPrintf("// [SubstituteTypes] Conditional type resolved to: %s\n", resolvedType.String())
+			if checkerDebug {
+				debugPrintf("// [SubstituteTypes] Conditional type resolved to: %s\n", resolvedType.String())
+			}
 			return resolvedType
 		}
 		debugPrintf("// [SubstituteTypes] Conditional type computation returned nil, keeping conditional type\n")
@@ -2643,10 +2677,18 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		return nil // a part failed to resolve: nothing to decide
 	}
 	debugPrintf("// [ConditionalType] === STARTING CONDITIONAL TYPE COMPUTATION ===\n")
-	debugPrintf("// [ConditionalType] CheckType: %s (Go type: %T)\n", checkType.String(), checkType)
-	debugPrintf("// [ConditionalType] ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
-	debugPrintf("// [ConditionalType] TrueType: %s (Go type: %T)\n", trueType.String(), trueType)
-	debugPrintf("// [ConditionalType] FalseType: %s (Go type: %T)\n", falseType.String(), falseType)
+	if checkerDebug {
+		debugPrintf("// [ConditionalType] CheckType: %s (Go type: %T)\n", checkType.String(), checkType)
+	}
+	if checkerDebug {
+		debugPrintf("// [ConditionalType] ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
+	}
+	if checkerDebug {
+		debugPrintf("// [ConditionalType] TrueType: %s (Go type: %T)\n", trueType.String(), trueType)
+	}
+	if checkerDebug {
+		debugPrintf("// [ConditionalType] FalseType: %s (Go type: %T)\n", falseType.String(), falseType)
+	}
 
 	// Distributive conditional types: when checkType is a union, distribute over its members
 	// This implements TypeScript's distributive conditional types behavior
@@ -2738,13 +2780,19 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 	checkType = c.resolveTypeofTypeIfNeeded(checkType)
 	extendsType = c.resolveTypeofTypeIfNeeded(extendsType)
 
-	debugPrintf("// [ConditionalType] After resolving typeof: CheckType: %s (Go type: %T)\n", checkType.String(), checkType)
-	debugPrintf("// [ConditionalType] After resolving typeof: ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
+	if checkerDebug {
+		debugPrintf("// [ConditionalType] After resolving typeof: CheckType: %s (Go type: %T)\n", checkType.String(), checkType)
+	}
+	if checkerDebug {
+		debugPrintf("// [ConditionalType] After resolving typeof: ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
+	}
 
 	// Check if the extends type contains infer types that we need to match
 	inferences := make(map[string]types.Type)
 	if c.tryInferTypes(checkType, extendsType, inferences) {
-		debugPrintf("// [ConditionalType] Inference successful with %d captured types\n", len(inferences))
+		if checkerDebug {
+			debugPrintf("// [ConditionalType] Inference successful with %d captured types\n", len(inferences))
+		}
 
 		// `any extends U ? X : Y` is both branches: NonNullable<any> is any.
 		if checkType == types.Any && len(inferences) == 0 {
@@ -2753,8 +2801,10 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 
 		// Apply the inferences to the true type
 		substitutedTrueType := c.substituteInferredTypes(trueType, inferences)
-		debugPrintf("// [ConditionalType] YES with inference: %s extends %s -> %s\n",
-			checkType.String(), extendsType.String(), substitutedTrueType.String())
+		if checkerDebug {
+			debugPrintf("// [ConditionalType] YES with inference: %s extends %s -> %s\n",
+				checkType.String(), extendsType.String(), substitutedTrueType.String())
+		}
 		return substitutedTrueType
 	}
 
@@ -2765,10 +2815,14 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 
 	// Fallback to basic assignability check without inference
 	if types.IsAssignable(checkType, extendsType) {
-		debugPrintf("// [ConditionalType] YES: %s extends %s -> %s\n", checkType.String(), extendsType.String(), trueType.String())
+		if checkerDebug {
+			debugPrintf("// [ConditionalType] YES: %s extends %s -> %s\n", checkType.String(), extendsType.String(), trueType.String())
+		}
 		return trueType
 	} else {
-		debugPrintf("// [ConditionalType] NO: %s does not extend %s -> %s\n", checkType.String(), extendsType.String(), falseType.String())
+		if checkerDebug {
+			debugPrintf("// [ConditionalType] NO: %s does not extend %s -> %s\n", checkType.String(), extendsType.String(), falseType.String())
+		}
 		return falseType
 	}
 }
@@ -3323,8 +3377,12 @@ func cloneSignaturesWithTypes(signatures []*types.Signature, rewrite func(types.
 // but first expands any mapped types to concrete object types
 func (c *Checker) isAssignableWithExpansion(source, target types.Type) bool {
 	debugPrintf("// [Checker] isAssignableWithExpansion: source=%T target=%T\n", source, target)
-	debugPrintf("// [Checker] source: %s\n", source.String())
-	debugPrintf("// [Checker] target: %s\n", target.String())
+	if checkerDebug {
+		debugPrintf("// [Checker] source: %s\n", source.String())
+	}
+	if checkerDebug {
+		debugPrintf("// [Checker] target: %s\n", target.String())
+	}
 
 	// Resolve typeof forward references before assignability checking
 	source = c.resolveTypeofTypeIfNeeded(source)
@@ -3365,16 +3423,26 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 	}
 	typ = c.settleType(typ)
 
-	debugPrintf("// [Checker] expandIfMappedType called with type: %T %s\n", typ, typ.String())
+	if checkerDebug {
+		debugPrintf("// [Checker] expandIfMappedType called with type: %T %s\n", typ, typ.String())
+	}
 
 	// Direct mapped type
 	if mappedType, ok := typ.(*types.MappedType); ok {
-		debugPrintf("// [Checker] Found direct mapped type: %s\n", mappedType.String())
-		debugPrintf("// [Checker] Constraint: %T %s\n", mappedType.ConstraintType, mappedType.ConstraintType.String())
-		debugPrintf("// [Checker] ValueType: %T %s\n", mappedType.ValueType, mappedType.ValueType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker] Found direct mapped type: %s\n", mappedType.String())
+		}
+		if checkerDebug {
+			debugPrintf("// [Checker] Constraint: %T %s\n", mappedType.ConstraintType, mappedType.ConstraintType.String())
+		}
+		if checkerDebug {
+			debugPrintf("// [Checker] ValueType: %T %s\n", mappedType.ValueType, mappedType.ValueType.String())
+		}
 		expanded := c.expandMappedType(mappedType)
 		if expanded != nil {
-			debugPrintf("// [Checker] Direct mapped type expanded to: %s\n", expanded.String())
+			if checkerDebug {
+				debugPrintf("// [Checker] Direct mapped type expanded to: %s\n", expanded.String())
+			}
 			return c.settleType(expanded)
 		}
 		debugPrintf("// [Checker] Direct mapped type expansion failed\n")
@@ -3419,16 +3487,22 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 		debugPrintf("// [Checker] Found InstantiatedType, checking body...\n")
 		// Check if the instantiated type's body is a mapped type
 		if instantiated.Generic != nil && instantiated.Generic.Body != nil {
-			debugPrintf("// [Checker] InstantiatedType body: %T %s\n", instantiated.Generic.Body, instantiated.Generic.Body.String())
+			if checkerDebug {
+				debugPrintf("// [Checker] InstantiatedType body: %T %s\n", instantiated.Generic.Body, instantiated.Generic.Body.String())
+			}
 			if mappedType, ok := instantiated.Generic.Body.(*types.MappedType); ok {
 				debugPrintf("// [Checker] InstantiatedType contains mapped type, substituting...\n")
 				// We need to substitute the type arguments in the mapped type
 				substitutedMappedType := c.substituteMappedType(mappedType, instantiated.Generic.TypeParameters, instantiated.TypeArguments)
 				if substitutedMappedType != nil {
-					debugPrintf("// [Checker] Substituted mapped type: %s\n", substitutedMappedType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker] Substituted mapped type: %s\n", substitutedMappedType.String())
+					}
 					expanded := c.expandMappedType(substitutedMappedType)
 					if expanded != nil {
-						debugPrintf("// [Checker] InstantiatedType expanded to: %s\n", expanded.String())
+						if checkerDebug {
+							debugPrintf("// [Checker] InstantiatedType expanded to: %s\n", expanded.String())
+						}
 						return expanded
 					}
 				}
@@ -3442,7 +3516,9 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 
 // tryInferTypes attempts to match checkType against extendsType and capture infer types
 func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences map[string]types.Type) bool {
-	debugPrintf("// [TryInfer] Trying to infer from %s to %s\n", checkType.String(), extendsType.String())
+	if checkerDebug {
+		debugPrintf("// [TryInfer] Trying to infer from %s to %s\n", checkType.String(), extendsType.String())
+	}
 	switch et := extendsType.(type) {
 	case *types.InferType:
 		// This is an infer type - capture the checkType
@@ -3459,8 +3535,12 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		// Handle function type inference like (...args: any[]) => infer R
 		debugPrintf("// [TryInfer] Both are ObjectType\n")
 		if ct, ok := checkType.(*types.ObjectType); ok {
-			debugPrintf("// [TryInfer] Check has %d call sigs, %d construct sigs\n", len(ct.CallSignatures), len(ct.ConstructSignatures))
-			debugPrintf("// [TryInfer] Extends has %d call sigs, %d construct sigs\n", len(et.CallSignatures), len(et.ConstructSignatures))
+			if checkerDebug {
+				debugPrintf("// [TryInfer] Check has %d call sigs, %d construct sigs\n", len(ct.CallSignatures), len(ct.ConstructSignatures))
+			}
+			if checkerDebug {
+				debugPrintf("// [TryInfer] Extends has %d call sigs, %d construct sigs\n", len(et.CallSignatures), len(et.ConstructSignatures))
+			}
 			// Try call signatures first
 			if len(ct.CallSignatures) > 0 && len(et.CallSignatures) > 0 {
 				// Match function signature structure (use first call signature)
@@ -3506,7 +3586,9 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 			debugPrintf("// [TryInfer] Tuple to array: checking if all tuple elements match array element type\n")
 			// All tuple elements must be assignable to the array element type
 			for i, tupleElementType := range ct.ElementTypes {
-				debugPrintf("// [TryInfer] Checking tuple element %d: %s -> %s\n", i, tupleElementType.String(), et.ElementType.String())
+				if checkerDebug {
+					debugPrintf("// [TryInfer] Checking tuple element %d: %s -> %s\n", i, tupleElementType.String(), et.ElementType.String())
+				}
 				if !c.tryInferTypes(tupleElementType, et.ElementType, inferences) {
 					debugPrintf("// [TryInfer] Tuple element %d failed inference\n", i)
 					return false
@@ -3543,8 +3625,12 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 		return false
 	}
 
-	debugPrintf("// [TryInferFunc] Check return: %s\n", checkSig.ReturnType.String())
-	debugPrintf("// [TryInferFunc] Extends return: %s\n", extendsSig.ReturnType.String())
+	if checkerDebug {
+		debugPrintf("// [TryInferFunc] Check return: %s\n", checkSig.ReturnType.String())
+	}
+	if checkerDebug {
+		debugPrintf("// [TryInferFunc] Extends return: %s\n", extendsSig.ReturnType.String())
+	}
 	// Try to infer from return type
 	if !c.tryInferTypes(checkSig.ReturnType, extendsSig.ReturnType, inferences) {
 		debugPrintf("// [TryInferFunc] Return type inference failed\n")
@@ -3553,7 +3639,9 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 	debugPrintf("// [TryInferFunc] Return type inference succeeded\n")
 
 	// Try to infer from parameter types
-	debugPrintf("// [TryInferFunc] Check params: %d, Extends params: %d\n", len(checkSig.ParameterTypes), len(extendsSig.ParameterTypes))
+	if checkerDebug {
+		debugPrintf("// [TryInferFunc] Check params: %d, Extends params: %d\n", len(checkSig.ParameterTypes), len(extendsSig.ParameterTypes))
+	}
 	minParams := len(checkSig.ParameterTypes)
 	if len(extendsSig.ParameterTypes) < minParams {
 		minParams = len(extendsSig.ParameterTypes)
@@ -3565,7 +3653,9 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 			debugPrintf("// [TryInferFunc] Parameter %d type is nil\n", i)
 			return false
 		}
-		debugPrintf("// [TryInferFunc] Inferring param %d: %s -> %s\n", i, checkSig.ParameterTypes[i].String(), extendsSig.ParameterTypes[i].String())
+		if checkerDebug {
+			debugPrintf("// [TryInferFunc] Inferring param %d: %s -> %s\n", i, checkSig.ParameterTypes[i].String(), extendsSig.ParameterTypes[i].String())
+		}
 		if !c.tryInferTypes(checkSig.ParameterTypes[i], extendsSig.ParameterTypes[i], inferences) {
 			debugPrintf("// [TryInferFunc] Parameter %d inference failed\n", i)
 			return false
@@ -3576,7 +3666,9 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 	// NEW: Handle rest parameter inference
 	// This is crucial for Parameters<T> utility type
 	if extendsSig.RestParameterType != nil {
-		debugPrintf("// [TryInferFunc] Rest parameter inference needed. Extends rest type: %s\n", extendsSig.RestParameterType.String())
+		if checkerDebug {
+			debugPrintf("// [TryInferFunc] Rest parameter inference needed. Extends rest type: %s\n", extendsSig.RestParameterType.String())
+		}
 		// For Parameters<T>, we want to infer the parameter types as a tuple
 		// The extends pattern is (...args: infer P) => any where P should be the parameter tuple
 
@@ -3611,7 +3703,9 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 			OptionalElements: optionalElements,
 			RestElementType:  restElementType,
 		}
-		debugPrintf("// [TryInferFunc] Created tuple: %s\n", tupleType.String())
+		if checkerDebug {
+			debugPrintf("// [TryInferFunc] Created tuple: %s\n", tupleType.String())
+		}
 
 		if !c.tryInferTypes(tupleType, extendsSig.RestParameterType, inferences) {
 			debugPrintf("// [TryInferFunc] Rest parameter inference failed\n")
@@ -3970,8 +4064,10 @@ func (c *Checker) computeTemplateLiteralType(tlt *types.TemplateLiteralType) typ
 // 'Color.Red', 'N.MyType', or arbitrarily deep 'A.B.C.D'.
 // node.Object may be an *Identifier (simple name) or another *MemberExpression (chained).
 func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression) types.Type {
-	debugPrintf("// [Checker resolveEnumMemberType] Resolving %s.%s\n",
-		node.Object.String(), node.Property.String())
+	if checkerDebug {
+		debugPrintf("// [Checker resolveEnumMemberType] Resolving %s.%s\n",
+			node.Object.String(), node.Property.String())
+	}
 
 	memberIdent, ok := node.Property.(*parser.Identifier)
 	if !ok {
@@ -4032,8 +4128,10 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on enum %s", memberName, node.Object.String()))
 			return nil
 		}
-		debugPrintf("// [Checker resolveEnumMemberType] Resolved %s.%s to %s\n",
-			node.Object.String(), memberName, memberType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker resolveEnumMemberType] Resolved %s.%s to %s\n",
+				node.Object.String(), memberName, memberType.String())
+		}
 		return memberType
 	default:
 		c.addError(node.Object, fmt.Sprintf("'%s' is not a namespace or enum type", node.Object.String()))

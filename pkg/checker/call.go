@@ -96,7 +96,9 @@ func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, is
 						ElementTypes: tupleElementTypes,
 					}
 
-					debugPrintf("// [Checker SpreadValidation] Using contextual tuple type: %s for array literal\n", expectedTupleType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker SpreadValidation] Using contextual tuple type: %s for array literal\n", expectedTupleType.String())
+					}
 
 					// Use contextual typing to check the array literal
 					c.visitWithContext(spreadElement.Argument, &ContextualType{
@@ -570,14 +572,18 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		// Try to resolve the type parameter to its constraint or a concrete type
 		if typeParamType.Parameter != nil && typeParamType.Parameter.Constraint != nil {
 			constraintType := typeParamType.Parameter.Constraint
-			debugPrintf("// [Checker CallExpr] Type parameter '%s' has constraint: %s\n",
-				typeParamType.Parameter.Name, constraintType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker CallExpr] Type parameter '%s' has constraint: %s\n",
+					typeParamType.Parameter.Name, constraintType.String())
+			}
 
 			// If the constraint is callable, use it for the call
 			if objType, ok := constraintType.(*types.ObjectType); ok && objType.IsCallable() {
 				// Use the constraint type instead of the type parameter
 				funcNodeType = constraintType
-				debugPrintf("// [Checker CallExpr] Using constraint type for type parameter call: %s\n", constraintType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker CallExpr] Using constraint type for type parameter call: %s\n", constraintType.String())
+				}
 			} else {
 				// If constraint is not callable, this is an error
 				c.reportNotCallable(node, funcNodeType)
@@ -598,7 +604,9 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	if genericType, ok := funcNodeType.(*types.GenericType); ok {
 		// The body should be the callable function type
 		if bodyObj, ok := genericType.Body.(*types.ObjectType); ok && bodyObj.IsCallable() {
-			debugPrintf("// [Checker CallExpr] Calling generic method, using body type: %s\n", bodyObj.String())
+			if checkerDebug {
+				debugPrintf("// [Checker CallExpr] Calling generic method, using body type: %s\n", bodyObj.String())
+			}
 			funcNodeType = bodyObj
 		} else {
 			c.addError(node, fmt.Sprintf("cannot call generic type '%s' (body is not callable)", funcNodeType.String()))
@@ -681,7 +689,9 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 	// Handle overloaded functions (multiple call signatures)
 	if len(objType.CallSignatures) > 1 {
-		debugPrintf("// [Checker CallExpr] Processing overloaded function with %d signatures\n", len(objType.CallSignatures))
+		if checkerDebug {
+			debugPrintf("// [Checker CallExpr] Processing overloaded function with %d signatures\n", len(objType.CallSignatures))
+		}
 		c.checkOverloadedCallUnified(node, objType)
 		return
 	}
@@ -689,16 +699,22 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// Handle single call signature
 	funcSignature := objType.CallSignatures[0]
 
-	debugPrintf("// [Checker CallExpr] Processing function signature: %s, IsVariadic: %t\n", funcSignature.String(), funcSignature.IsVariadic)
+	if checkerDebug {
+		debugPrintf("// [Checker CallExpr] Processing function signature: %s, IsVariadic: %t\n", funcSignature.String(), funcSignature.IsVariadic)
+	}
 
 	// Check if this is a generic function call that needs type inference
 	isGeneric := c.isGenericSignature(funcSignature)
-	debugPrintf("// [Checker CallExpr] isGenericSignature returned: %t for signature: %s\n", isGeneric, funcSignature.String())
+	if checkerDebug {
+		debugPrintf("// [Checker CallExpr] isGenericSignature returned: %t for signature: %s\n", isGeneric, funcSignature.String())
+	}
 	if isGeneric {
 		debugPrintf("// [Checker CallExpr] Detected generic function call, attempting type inference\n")
 		inferredSignature := c.inferGenericFunctionCall(node, funcSignature)
 		if inferredSignature != nil {
-			debugPrintf("// [Checker CallExpr] Type inference successful, using inferred signature: %s\n", inferredSignature.String())
+			if checkerDebug {
+				debugPrintf("// [Checker CallExpr] Type inference successful, using inferred signature: %s\n", inferredSignature.String())
+			}
 			funcSignature = inferredSignature
 		} else {
 			debugPrintf("// [Checker CallExpr] Type inference failed, using original signature with type parameters\n")
@@ -731,7 +747,9 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	if skipArityCheck {
 		debugPrintf("// [Checker CallExpr] Skipping arity check due to unknown-length array spreads\n")
 	} else {
-		debugPrintf("// [Checker CallExpr] actualArgCount after spread expansion: %d (from %d raw arguments)\n", actualArgCount, len(node.Arguments))
+		if checkerDebug {
+			debugPrintf("// [Checker CallExpr] actualArgCount after spread expansion: %d (from %d raw arguments)\n", actualArgCount, len(node.Arguments))
+		}
 	}
 
 	if funcSignature.IsVariadic {
@@ -865,18 +883,24 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// If the result type is a ParameterizedForwardReferenceType with concrete type arguments,
 	// we need to instantiate the generic type to get a proper object type
 	if paramRef, ok := resultType.(*types.ParameterizedForwardReferenceType); ok {
-		debugPrintf("// [Checker CallExpr] Result type is parameterized forward reference: %s\n", paramRef.String())
+		if checkerDebug {
+			debugPrintf("// [Checker CallExpr] Result type is parameterized forward reference: %s\n", paramRef.String())
+		}
 
 		// Try to resolve the generic class and instantiate it
 		if resolvedType := c.resolveParameterizedForwardReference(paramRef); resolvedType != nil {
-			debugPrintf("// [Checker CallExpr] Resolved parameterized type to: %T (%s)\n", resolvedType, resolvedType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker CallExpr] Resolved parameterized type to: %T (%s)\n", resolvedType, resolvedType.String())
+			}
 			resultType = resolvedType
 		}
 	}
 
 	resultType = c.narrowFilterResult(node, resultType)
 
-	debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), resultType, resultType)
+	if checkerDebug {
+		debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), resultType, resultType)
+	}
 	node.SetComputedType(resultType)
 
 }
@@ -1068,12 +1092,16 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 
 	// Found a matching signature
 	matchedSignature := objType.CallSignatures[signatureIndex]
-	debugPrintf("// [Checker OverloadCall] Found matching signature %d: %s for call with args (%v)\n",
-		signatureIndex, matchedSignature.String(), argTypes)
+	if checkerDebug {
+		debugPrintf("// [Checker OverloadCall] Found matching signature %d: %s for call with args (%v)\n",
+			signatureIndex, matchedSignature.String(), argTypes)
+	}
 
 	// Set the result type from the matched signature
 	node.SetComputedType(resultType)
-	debugPrintf("// [Checker OverloadCall] Set result type to: %s\n", resultType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker OverloadCall] Set result type to: %s\n", resultType.String())
+	}
 }
 
 // isGenericSignature checks if a function signature contains unresolved type parameters
@@ -1212,7 +1240,9 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 
 	// === PHASE 0: Check for explicit type arguments ===
 	if len(callNode.TypeArguments) > 0 {
-		debugPrintf("// [Checker Inference] Found %d explicit type arguments\n", len(callNode.TypeArguments))
+		if checkerDebug {
+			debugPrintf("// [Checker Inference] Found %d explicit type arguments\n", len(callNode.TypeArguments))
+		}
 
 		// Extract type parameters from the signature
 		typeParams := c.extractTypeParametersFromSignature(genericSig)
@@ -1239,7 +1269,9 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 			}
 			if i < len(typeParams) {
 				solution[typeParams[i]] = typeArg
-				debugPrintf("// [Checker Inference] Explicit type argument: %s = %s\n", typeParams[i].Name, typeArg.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Inference] Explicit type argument: %s = %s\n", typeParams[i].Name, typeArg.String())
+				}
 			}
 		}
 
@@ -1247,7 +1279,9 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 
 		// Substitute type parameters to create concrete signature
 		inferredSig := c.substituteTypeParameters(genericSig, solution)
-		debugPrintf("// [Checker Inference] Created signature from explicit type args: %s\n", inferredSig.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Inference] Created signature from explicit type args: %s\n", inferredSig.String())
+		}
 
 		// Now visit arguments with contextual typing from the concrete signature
 		for i, argNode := range callNode.Arguments {
@@ -1286,29 +1320,39 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 			spreadElement.SetComputedType(argType)
 		}
 		argTypes = append(argTypes, argType)
-		debugPrintf("// [Checker Inference] Phase 1: Argument %d type: %s\n", i, argType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Inference] Phase 1: Argument %d type: %s\n", i, argType.String())
+		}
 	}
 
 	// Collect constraints from non-function arguments only
 	constraints := c.collectTypeParameterConstraintsPhase1(genericSig, argTypes)
-	debugPrintf("// [Checker Inference] Phase 1: Collected %d type parameter constraints\n", len(constraints))
+	if checkerDebug {
+		debugPrintf("// [Checker Inference] Phase 1: Collected %d type parameter constraints\n", len(constraints))
+	}
 
 	// Solve constraints from phase 1
 	partialSolution := c.solveTypeParameterConstraints(constraints)
-	debugPrintf("// [Checker Inference] Phase 1: Solved %d type parameter bindings\n", len(partialSolution))
+	if checkerDebug {
+		debugPrintf("// [Checker Inference] Phase 1: Solved %d type parameter bindings\n", len(partialSolution))
+	}
 
 	// === PHASE 2: Re-visit function arguments with inferred types ===
 	if len(partialSolution) > 0 {
 		// Create partially instantiated signature for contextual typing
 		partialSig := c.substituteTypeParameters(genericSig, partialSolution)
-		debugPrintf("// [Checker Inference] Phase 2: Using partially inferred signature: %s\n", partialSig.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Inference] Phase 2: Using partially inferred signature: %s\n", partialSig.String())
+		}
 
 		// Re-visit function arguments with better contextual typing
 		for i, argNode := range callNode.Arguments {
 			if argTypes[i] == nil { // This was a function argument skipped in phase 1
 				if i < len(partialSig.ParameterTypes) {
 					paramType := partialSig.ParameterTypes[i]
-					debugPrintf("// [Checker Inference] Phase 2: Re-visiting function argument %d with context: %s\n", i, paramType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker Inference] Phase 2: Re-visiting function argument %d with context: %s\n", i, paramType.String())
+					}
 					c.visitWithContext(argNode, &ContextualType{
 						ExpectedType: paramType,
 						IsContextual: true,
@@ -1322,7 +1366,9 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 					argType = types.Any
 				}
 				argTypes[i] = argType
-				debugPrintf("// [Checker Inference] Phase 2: Function argument %d type: %s\n", i, argType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Inference] Phase 2: Function argument %d type: %s\n", i, argType.String())
+				}
 			}
 		}
 
@@ -1332,12 +1378,16 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 
 		// Solve all constraints together
 		finalSolution := c.solveTypeParameterConstraints(allConstraints)
-		debugPrintf("// [Checker Inference] Phase 2: Final solution with %d type parameter bindings\n", len(finalSolution))
+		if checkerDebug {
+			debugPrintf("// [Checker Inference] Phase 2: Final solution with %d type parameter bindings\n", len(finalSolution))
+		}
 
 		if len(finalSolution) > 0 {
 			c.fallBackToConstraints(finalSolution)
 			inferredSig := c.substituteTypeParameters(genericSig, finalSolution)
-			debugPrintf("// [Checker Inference] Created final inferred signature: %s\n", inferredSig.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Inference] Created final inferred signature: %s\n", inferredSig.String())
+			}
 			return inferredSig
 		}
 	}
@@ -1389,7 +1439,9 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 
 	c.fallBackToConstraints(solution)
 	inferredSig := c.substituteTypeParameters(genericSig, solution)
-	debugPrintf("// [Checker Inference] Created fallback inferred signature: %s\n", inferredSig.String())
+	if checkerDebug {
+		debugPrintf("// [Checker Inference] Created fallback inferred signature: %s\n", inferredSig.String())
+	}
 
 	return inferredSig
 }
@@ -1526,8 +1578,10 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			// constraint (`T extends {..}`, `list.slice()` is `T[]`).
 			inferredType = argType
 		}
-		debugPrintf("// [Checker Constraints] Widening type for %s: %s -> %s\n",
-			pType.Parameter.Name, argType.String(), inferredType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Constraints] Widening type for %s: %s -> %s\n",
+				pType.Parameter.Name, argType.String(), inferredType.String())
+		}
 
 		constraints = append(constraints, TypeParameterConstraint{
 			TypeParameter: pType.Parameter,
@@ -1535,7 +1589,9 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			Confidence:    100, // High confidence for direct matches
 			Combine:       keepsLiteral,
 		})
-		debugPrintf("// [Checker Constraints] Direct constraint: %s = %s\n", pType.Parameter.Name, inferredType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Constraints] Direct constraint: %s = %s\n", pType.Parameter.Name, inferredType.String())
+		}
 
 	case *types.ArrayType:
 		// Array<T> matched against Array<U> or U[]
@@ -1667,8 +1723,10 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 						InferredType:  inferredKeyType,
 						Confidence:    90, // Slightly lower confidence for mapped type inference
 					})
-					debugPrintf("// [Checker Constraints] Mapped type key constraint: %s = %s\n",
-						constraintTypeParam.Parameter.Name, inferredKeyType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker Constraints] Mapped type key constraint: %s = %s\n",
+							constraintTypeParam.Parameter.Name, inferredKeyType.String())
+					}
 				}
 			}
 
@@ -1694,7 +1752,9 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		}
 		if len(bestMemberConstraints) > 0 {
 			constraints = append(constraints, bestMemberConstraints...)
-			debugPrintf("// [Checker Constraints] Union type: collected %d constraints from best-matching member\n", len(bestMemberConstraints))
+			if checkerDebug {
+				debugPrintf("// [Checker Constraints] Union type: collected %d constraints from best-matching member\n", len(bestMemberConstraints))
+			}
 		}
 
 		// Add more cases for other generic type constructs as needed
@@ -1738,8 +1798,10 @@ func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConst
 			inferredType = types.NewUnionType(inferredTypes...)
 		}
 		solution[typeParam] = inferredType
-		debugPrintf("// [Checker Solve] %s = %s (confidence: %d)\n",
-			typeParam.Name, inferredType.String(), bestConfidence[typeParam])
+		if checkerDebug {
+			debugPrintf("// [Checker Solve] %s = %s (confidence: %d)\n",
+				typeParam.Name, inferredType.String(), bestConfidence[typeParam])
+		}
 	}
 
 	return solution
@@ -1968,8 +2030,10 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			if expanded == nil {
 				return substitutedMapped
 			}
-			debugPrintf("// [Checker Substitute] Expanded mapped type: %s -> %s\n",
-				substitutedMapped.String(), expanded.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Substitute] Expanded mapped type: %s -> %s\n",
+					substitutedMapped.String(), expanded.String())
+			}
 			return expanded
 		case *types.KeyofType:
 			return c.computeKeyofType(substitute(typ.OperandType))
@@ -2135,7 +2199,9 @@ func (c *Checker) handlePaseratiReflect(node *parser.CallExpression) {
 		return
 	}
 
-	debugPrintf("// [Checker] Paserati.reflect<T>() resolved T to: %s\n", typeArg.String())
+	if checkerDebug {
+		debugPrintf("// [Checker] Paserati.reflect<T>() resolved T to: %s\n", typeArg.String())
+	}
 
 	// Store the resolved type on the AST node for the compiler
 	node.ResolvedReflectType = typeArg

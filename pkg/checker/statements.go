@@ -88,7 +88,9 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 	if !c.env.DefineTypeAlias(node.Name.Value, aliasedType) {
 		debugPrintf("// [Checker TypeAlias P1] WARNING: DefineTypeAlias failed for '%s'.\n", node.Name.Value)
 	} else {
-		debugPrintf("// [Checker TypeAlias P1] Defined alias '%s' as type '%s' in env %p\n", node.Name.Value, aliasedType.String(), c.env)
+		if checkerDebug {
+			debugPrintf("// [Checker TypeAlias P1] Defined alias '%s' as type '%s' in env %p\n", node.Name.Value, aliasedType.String(), c.env)
+		}
 	}
 	// No need to set computed type on the TypeAliasStatement node itself
 }
@@ -96,8 +98,10 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 // checkGenericTypeAliasStatement handles generic type alias declarations
 func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement) {
 	defer c.markGenericComplete(node.Name.Value)
-	debugPrintf("// [Checker TypeAlias P1] Processing generic type alias '%s' with %d type parameters\n",
-		node.Name.Value, len(node.TypeParameters))
+	if checkerDebug {
+		debugPrintf("// [Checker TypeAlias P1] Processing generic type alias '%s' with %d type parameters\n",
+			node.Name.Value, len(node.TypeParameters))
+	}
 
 	// Mark this type alias as being resolved to prevent infinite recursion
 	c.resolvingTypeAliases[node.Name.Value] = true
@@ -183,8 +187,10 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 	if !c.env.DefineTypeAlias(node.Name.Value, genericType) {
 		debugPrintf("// [Checker TypeAlias P1] WARNING: DefineTypeAlias failed for generic type alias '%s'.\n", node.Name.Value)
 	} else {
-		debugPrintf("// [Checker TypeAlias P1] Defined generic type alias '%s' with %d type parameters in env %p\n",
-			node.Name.Value, len(typeParams), c.env)
+		if checkerDebug {
+			debugPrintf("// [Checker TypeAlias P1] Defined generic type alias '%s' with %d type parameters in env %p\n",
+				node.Name.Value, len(typeParams), c.env)
+		}
 	}
 }
 
@@ -336,13 +342,17 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 					optionalProperties[propName] = true
 				}
 			}
-			debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from extended interface\n",
-				node.Name.Value, len(extendedObjectType.Properties))
+			if checkerDebug {
+				debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from extended interface\n",
+					node.Name.Value, len(extendedObjectType.Properties))
+			}
 		} else if _, ok := extendedType.(*types.GenericTypeAliasForwardReference); ok {
 			// Allow inheritance from generic forward references (unresolved type-only imports)
 			// We can't copy properties since we don't know the structure, but we allow the syntax
-			debugPrintf("// [Checker Interface P1] Interface '%s' extends unresolved generic type '%s', allowing for type-only imports\n",
-				node.Name.Value, extendedType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Interface P1] Interface '%s' extends unresolved generic type '%s', allowing for type-only imports\n",
+					node.Name.Value, extendedType.String())
+			}
 		} else if baseObjects, valid := c.interfaceBaseObjects(extendedType); valid {
 			// Arrays, tuples, `any` (e.g. Function) and intersections of object
 			// types are valid bases; inherit whatever object members they have.
@@ -387,8 +397,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, keyType)
 			indexSignatures = append(indexSignatures, indexSignature)
 
-			debugPrintf("// [Checker Interface P1] Interface '%s' has index signature [%s]: %s\n",
-				node.Name.Value, keyType.String(), valueType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Interface P1] Interface '%s' has index signature [%s]: %s\n",
+					node.Name.Value, keyType.String(), valueType.String())
+			}
 		} else if prop.IsConstructorSignature {
 			// For constructor signatures, add them as a special "new" property
 			// This allows the interface to describe both instance properties and constructor behavior
@@ -424,8 +436,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				if prop.Optional {
 					optionalProperties[computedName] = true
 				}
-				debugPrintf("// [Checker Interface P1] Interface '%s' has computed property '%s': %s\n",
-					node.Name.Value, computedName, propType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Interface P1] Interface '%s' has computed property '%s': %s\n",
+						node.Name.Value, computedName, propType.String())
+				}
 			} else {
 				// Dynamic computed property - treat as index signature for now
 				// TODO: Better handling of dynamic computed properties
@@ -445,7 +459,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			if propType == nil {
 				propType = types.Any
 			}
-			debugPrintf("// [Checker Interface P1] Interface '%s' has call signature: %s\n", node.Name.Value, propType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Interface P1] Interface '%s' has call signature: %s\n", node.Name.Value, propType.String())
+			}
 			if sigs := c.extractCallSignaturesFromType(propType); len(sigs) > 0 {
 				callSignatures = append(callSignatures, sigs...)
 			} else {
@@ -465,8 +481,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				if mergedType, merged := mergeInterfaceFunctionMemberTypes(existingType, propType); merged {
 					propType = mergedType
 				}
-				debugPrintf("// [Checker Interface P1] Interface '%s' overrides property '%s' (was: %s, now: %s)\n",
-					node.Name.Value, prop.Name.Value, existingType.String(), propType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Interface P1] Interface '%s' overrides property '%s' (was: %s, now: %s)\n",
+						node.Name.Value, prop.Name.Value, existingType.String(), propType.String())
+				}
 			}
 
 			interfaceType.SetProperty(prop.Name.Value, propType)
@@ -500,15 +518,19 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		interfaceType.ConstructSignatures = appendNewSignatures(interfaceType.ConstructSignatures, ext.ConstructSignatures)
 	}
 
-	debugPrintf("// [Checker Interface P1] Finalized interface '%s' as type '%s' in env %p (inherited from %d interfaces)\n",
-		node.Name.Value, interfaceType.String(), c.env, len(node.Extends))
+	if checkerDebug {
+		debugPrintf("// [Checker Interface P1] Finalized interface '%s' as type '%s' in env %p (inherited from %d interfaces)\n",
+			node.Name.Value, interfaceType.String(), c.env, len(node.Extends))
+	}
 }
 
 // checkGenericInterfaceDeclaration handles generic interface declarations
 func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	defer c.markGenericComplete(node.Name.Value)
-	debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n",
-		node.Name.Value, len(node.TypeParameters))
+	if checkerDebug {
+		debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n",
+			node.Name.Value, len(node.TypeParameters))
+	}
 
 	var existingGeneric *types.GenericType
 	var bodyType *types.ObjectType
@@ -756,8 +778,10 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 
 	if existingGeneric != nil {
 		existingGeneric.Body = bodyType
-		debugPrintf("// [Checker Interface P1] Merged generic interface '%s' with %d type parameters in env %p\n",
-			node.Name.Value, len(typeParams), c.env)
+		if checkerDebug {
+			debugPrintf("// [Checker Interface P1] Merged generic interface '%s' with %d type parameters in env %p\n",
+				node.Name.Value, len(typeParams), c.env)
+		}
 		return
 	}
 
@@ -776,8 +800,10 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	if !c.env.DefineTypeAlias(node.Name.Value, genericType) {
 		debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for generic interface '%s'.\n", node.Name.Value)
 	} else {
-		debugPrintf("// [Checker Interface P1] Defined generic interface '%s' with %d type parameters in env %p\n",
-			node.Name.Value, len(typeParams), c.env)
+		if checkerDebug {
+			debugPrintf("// [Checker Interface P1] Defined generic interface '%s' with %d type parameters in env %p\n",
+				node.Name.Value, len(typeParams), c.env)
+		}
 	}
 }
 
@@ -1672,9 +1698,13 @@ func (c *Checker) checkWithStatement(node *parser.WithStatement) {
 			Properties: properties,
 		}
 
-		debugPrintf("// [Checker WithStmt] Expression type: %s, extracted %d properties\n", exprType.String(), len(properties))
+		if checkerDebug {
+			debugPrintf("// [Checker WithStmt] Expression type: %s, extracted %d properties\n", exprType.String(), len(properties))
+		}
 		for propName, propType := range properties {
-			debugPrintf("// [Checker WithStmt] Property '%s': %s\n", propName, propType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker WithStmt] Property '%s': %s\n", propName, propType.String())
+			}
 		}
 
 		// Push the with object onto the environment stack

@@ -249,8 +249,10 @@ func (e *Environment) UpdateInChain(name string, typ types.Type) bool {
 			if current.outer != nil && !current.isFunctionScope {
 				if _, _, outerFound := current.outer.Resolve(name); outerFound {
 					// This is a narrowing shadow — safe to update
-					debugPrintf("// [Env UpdateInChain] Updating shadow '%s' from %s to %s in env %p\n",
-						name, info.Type.String(), typ.String(), current)
+					if checkerDebug {
+						debugPrintf("// [Env UpdateInChain] Updating shadow '%s' from %s to %s in env %p\n",
+							name, info.Type.String(), typ.String(), current)
+					}
 					current.symbols[name] = SymbolInfo{Type: typ, IsConst: info.IsConst}
 					return true
 				}
@@ -316,7 +318,9 @@ func (e *Environment) Resolve(name string) (typ types.Type, isConst bool, found 
 				debugPrintf("// [Env Resolve] '%s' is a forward reference, checking outer scope for real type...\n", name)
 				outerType, outerIsConst, outerFound := e.outer.Resolve(name)
 				if outerFound {
-					debugPrintf("// [Env Resolve] Outer type for '%s': %T = %s\n", name, outerType, outerType.String())
+					if checkerDebug {
+						debugPrintf("// [Env Resolve] Outer type for '%s': %T = %s\n", name, outerType, outerType.String())
+					}
 					// Prefer the outer type if it's not also a forward reference
 					if _, isOuterForwardRef := outerType.(*types.ForwardReferenceType); !isOuterForwardRef {
 						debugPrintf("// [Env Resolve] Using real type from outer scope for '%s'\n", name)
@@ -646,7 +650,9 @@ func (e *Environment) PopWithObject() {
 // ResolveWithFallback tries to resolve an identifier, checking with objects if not found as a variable
 // Returns: (type, isFromWith, found)
 func (e *Environment) ResolveWithFallback(name string) (types.Type, bool, bool) {
-	debugPrintf("// [Env ResolveWithFallback] Looking for '%s', withObjects count: %d\n", name, len(e.withObjects))
+	if checkerDebug {
+		debugPrintf("// [Env ResolveWithFallback] Looking for '%s', withObjects count: %d\n", name, len(e.withObjects))
+	}
 
 	// First try normal variable resolution
 	if info, found := e.symbols[name]; found {
@@ -657,9 +663,13 @@ func (e *Environment) ResolveWithFallback(name string) (types.Type, bool, bool) 
 	// If not found in current scope, check with objects
 	for i := len(e.withObjects) - 1; i >= 0; i-- {
 		withObj := e.withObjects[i]
-		debugPrintf("// [Env ResolveWithFallback] Checking with object %d for '%s', properties: %d\n", i, name, len(withObj.Properties))
+		if checkerDebug {
+			debugPrintf("// [Env ResolveWithFallback] Checking with object %d for '%s', properties: %d\n", i, name, len(withObj.Properties))
+		}
 		if propType, exists := withObj.Properties[name]; exists {
-			debugPrintf("// [Env ResolveWithFallback] Found '%s' in with object as property type: %s\n", name, propType.String())
+			if checkerDebug {
+				debugPrintf("// [Env ResolveWithFallback] Found '%s' in with object as property type: %s\n", name, propType.String())
+			}
 			return propType, true, true
 		}
 	}

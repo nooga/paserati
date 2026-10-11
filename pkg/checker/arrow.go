@@ -43,14 +43,18 @@ func (c *Checker) checkArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) {
 		// Create Promise<T> type
 		promiseType := c.createPromiseType(innerType)
 		finalReturnType = promiseType
-		debugPrintf("// [Checker ArrowFunc] Created Promise type: %s\n", finalReturnType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker ArrowFunc] Created Promise type: %s\n", finalReturnType.String())
+		}
 	}
 
 	// 5. Create final function type
 	finalFuncType := c.createFinalFunctionType(ctx, paramTypes, finalReturnType, restParameterType)
 
 	// 6. Set computed type on the ArrowFunctionLiteral node
-	debugPrintf("// [Checker ArrowFunc] Setting computed type: %s\n", finalFuncType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker ArrowFunc] Setting computed type: %s\n", finalFuncType.String())
+	}
 	node.SetComputedType(finalFuncType)
 
 	// 7. Restore environment

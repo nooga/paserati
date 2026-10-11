@@ -186,7 +186,9 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	}
 
 	node.SetComputedType(enumType)
-	debugPrintf("// [Checker Enum] Successfully defined enum '%s' with %d members\n", enumName, len(enumType.Members))
+	if checkerDebug {
+		debugPrintf("// [Checker Enum] Successfully defined enum '%s' with %d members\n", enumName, len(enumType.Members))
+	}
 }
 
 // enumMemberNumber is the runtime value type EnumMemberType carries for numeric

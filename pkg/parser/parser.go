@@ -498,7 +498,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.LBRACKET, p.parseTupleTypeExpression) // NEW: Tuple type literals like [string, number, boolean?]
 	// --- NEW: Leading pipe union types that start with '|' ---
 	p.registerTypePrefix(lexer.PIPE, p.parseLeadingPipeUnionType) // NEW: Leading pipe union types like | A | B
-	p.registerTypePrefix(lexer.BITWISE_AND, func() Expression {     // Leading ampersand: & A & B
+	p.registerTypePrefix(lexer.BITWISE_AND, func() Expression {   // Leading ampersand: & A & B
 		p.nextToken()
 		return p.parseTypeExpression()
 	})
@@ -1744,7 +1744,9 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 			return leftExp
 		}
 
-		debugPrint("parseTypeExpressionRecursive: Found TYPE infix for peek='%s' (%s), type precedence=%d", p.peekToken.Literal, peekType, p.peekTypePrecedence())
+		if debugParser {
+			debugPrint("parseTypeExpressionRecursive: Found TYPE infix for peek='%s' (%s), type precedence=%d", p.peekToken.Literal, peekType, p.peekTypePrecedence())
+		}
 		p.nextToken() // Consume the type operator token (e.g., '|' or '[')
 		debugPrint("parseTypeExpressionRecursive: After infix nextToken(), cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
 
@@ -2120,8 +2122,10 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 		return nil
 	}
 
-	debugPrint("parseTupleTypeExpression: Completed, elements: %d, rest: %v",
-		len(tupleTypeExp.ElementTypes), tupleTypeExp.RestElement != nil)
+	if debugParser {
+		debugPrint("parseTupleTypeExpression: Completed, elements: %d, rest: %v",
+			len(tupleTypeExp.ElementTypes), tupleTypeExp.RestElement != nil)
+	}
 
 	if variadic {
 		return &ArrayTypeExpression{
@@ -2476,7 +2480,9 @@ func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expr
 			return leftExp
 		}
 
-		debugPrint("parseExpression(prec=%d): found infix for peek='%s' (%s), precedence=%d", precedence, p.peekToken.Literal, p.peekToken.Type, p.peekPrecedence())
+		if debugParser {
+			debugPrint("parseExpression(prec=%d): found infix for peek='%s' (%s), precedence=%d", precedence, p.peekToken.Literal, p.peekToken.Type, p.peekPrecedence())
+		}
 		p.nextToken()
 		debugPrint("parseExpression(prec=%d): after infix nextToken(), cur='%s' (%s)", precedence, p.curToken.Literal, p.curToken.Type)
 
@@ -5513,7 +5519,9 @@ func (p *Parser) parseIfExpression() Expression {
 				if alternativeBlock.Statements == nil {
 					debugPrint(", Statements=nil\n")
 				} else {
-					debugPrint(", Statements.Len=%d\n", len(alternativeBlock.Statements))
+					if debugParser {
+						debugPrint(", Statements.Len=%d\n", len(alternativeBlock.Statements))
+					}
 				}
 			} else {
 				debugPrint(", Block=nil\n")
@@ -7386,7 +7394,9 @@ func (p *Parser) parseArrayLiteral() Expression {
 		}
 		p.nextToken() // move to ']'
 	}
-	debugPrint("parseArrayLiteral: end ']' elements=%d", len(elements))
+	if debugParser {
+		debugPrint("parseArrayLiteral: end ']' elements=%d", len(elements))
+	}
 	if !p.curTokenIs(lexer.RBRACKET) {
 		p.peekError(lexer.RBRACKET)
 		return nil
@@ -12880,7 +12890,9 @@ func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
 		Property: memberName,
 	}
 
-	debugPrint("parseEnumMemberTypeExpression: created %s.%s", left.String(), memberName.Value)
+	if debugParser {
+		debugPrint("parseEnumMemberTypeExpression: created %s.%s", left.String(), memberName.Value)
+	}
 	// Qualified generic reference: N.C<T>
 	if p.peekTokenIs(lexer.LT) && p.peekToken.Line == p.curToken.Line {
 		if g, ok := p.tryParseGenericTypeRef(memberName).(*GenericTypeRef); ok {

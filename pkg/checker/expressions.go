@@ -95,17 +95,23 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 	// Set the computed type for the ArrayLiteral node itself
 	node.SetComputedType(arrayType)
 
-	debugPrintf("// [Checker ArrayLit] Computed ElementType: %s, Full ArrayType: %s\n", finalElementType.String(), arrayType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker ArrayLit] Computed ElementType: %s, Full ArrayType: %s\n", finalElementType.String(), arrayType.String())
+	}
 }
 
 // checkArrayLiteralWithContext checks array literals with contextual type information
 func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, context *ContextualType) {
 	expectedType := context.ExpectedType
-	debugPrintf("// [Checker ArrayLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker ArrayLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
+	}
 
 	// Check if expected type is a tuple type
 	if tupleType, isTuple := expectedType.(*types.TupleType); isTuple {
-		debugPrintf("// [Checker ArrayLitContext] Expected tuple with %d element types\n", len(tupleType.ElementTypes))
+		if checkerDebug {
+			debugPrintf("// [Checker ArrayLitContext] Expected tuple with %d element types\n", len(tupleType.ElementTypes))
+		}
 
 		// For tuple context, check if we have enough elements
 		// Count required (non-optional) elements
@@ -156,12 +162,16 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 
 		// Check element count
 		if len(node.Elements) < minRequired {
-			debugPrintf("// [Checker ArrayLitContext] Not enough elements: expected at least %d, got %d. Using regular array checking.\n", minRequired, len(node.Elements))
+			if checkerDebug {
+				debugPrintf("// [Checker ArrayLitContext] Not enough elements: expected at least %d, got %d. Using regular array checking.\n", minRequired, len(node.Elements))
+			}
 			c.checkArrayLiteral(node)
 			return
 		}
 		if maxAllowed >= 0 && len(node.Elements) > maxAllowed {
-			debugPrintf("// [Checker ArrayLitContext] Too many elements: expected at most %d, got %d. Using regular array checking.\n", maxAllowed, len(node.Elements))
+			if checkerDebug {
+				debugPrintf("// [Checker ArrayLitContext] Too many elements: expected at most %d, got %d. Using regular array checking.\n", maxAllowed, len(node.Elements))
+			}
 			c.checkArrayLiteral(node)
 			return
 		}
@@ -202,14 +212,18 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 			// Check if the element type is assignable to the expected tuple element type
 			if !types.IsAssignable(actualElemType, expectedElemType) {
 				elementTypesMatch = false
-				debugPrintf("// [Checker ArrayLitContext] Element %d type mismatch: expected %s, got %s\n", i, expectedElemType.String(), actualElemType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker ArrayLitContext] Element %d type mismatch: expected %s, got %s\n", i, expectedElemType.String(), actualElemType.String())
+				}
 			}
 		}
 
 		if elementTypesMatch {
 			// All elements match - use the tuple type
 			node.SetComputedType(tupleType)
-			debugPrintf("// [Checker ArrayLitContext] All elements match tuple. Set type to: %s\n", tupleType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ArrayLitContext] All elements match tuple. Set type to: %s\n", tupleType.String())
+			}
 			return
 		} else {
 			// Elements don't match - fall back to regular array checking but don't return error
@@ -222,7 +236,9 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 
 	// Check if expected type is an array type
 	if arrayType, isArray := expectedType.(*types.ArrayType); isArray {
-		debugPrintf("// [Checker ArrayLitContext] Expected array with element type: %s\n", arrayType.ElementType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker ArrayLitContext] Expected array with element type: %s\n", arrayType.ElementType.String())
+		}
 
 		// Check each element against the expected element type
 		for _, elemNode := range node.Elements {
@@ -274,7 +290,9 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 
 		// Use the expected array type as the result (even if there are errors)
 		node.SetComputedType(arrayType)
-		debugPrintf("// [Checker ArrayLitContext] Set type to expected array type: %s\n", arrayType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker ArrayLitContext] Set type to expected array type: %s\n", arrayType.String())
+		}
 		return
 	}
 
@@ -287,7 +305,9 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 // This allows array literals in property values to be typed as tuples when expected
 func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, context *ContextualType) {
 	expectedType := context.ExpectedType
-	debugPrintf("// [Checker ObjectLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker ObjectLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
+	}
 
 	// Try to get the expected type as an ObjectType
 	var expectedObjType *types.ObjectType
@@ -309,7 +329,9 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 		return
 	}
 
-	debugPrintf("// [Checker ObjectLitContext] Using object type with %d properties\n", len(expectedObjType.Properties))
+	if checkerDebug {
+		debugPrintf("// [Checker ObjectLitContext] Using object type with %d properties\n", len(expectedObjType.Properties))
+	}
 
 	// Process the object literal with contextual typing for property values
 	fields := make(map[string]types.Type)
@@ -380,7 +402,9 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 		// Visit the property value with context if we have an expected type for this property
 		expectedPropType := expectedObjType.Properties[keyName]
 		if expectedPropType != nil {
-			debugPrintf("// [Checker ObjectLitContext] Property '%s' has expected type: %s\n", keyName, expectedPropType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ObjectLitContext] Property '%s' has expected type: %s\n", keyName, expectedPropType.String())
+			}
 			c.visitWithContext(prop.Value, &ContextualType{
 				ExpectedType: expectedPropType,
 				IsContextual: true,
@@ -413,7 +437,9 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 	// Create the result type
 	resultType := &types.ObjectType{Properties: fields}
 	node.SetComputedType(resultType)
-	debugPrintf("// [Checker ObjectLitContext] Result type: %s\n", resultType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker ObjectLitContext] Result type: %s\n", resultType.String())
+	}
 }
 
 // mergeSpreadOperand merges a spread operand's properties into fields,
@@ -425,10 +451,14 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type) bool {
 	switch spreadType := t.(type) {
 	case *types.ObjectType:
-		debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadType.String())
+		}
 		for propName, propType := range spreadType.Properties {
 			fields[propName] = propType // Later properties override earlier ones
-			debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
+			}
 		}
 		return true
 	case *types.ArrayType:
@@ -814,7 +844,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	outerInObjectMethod := c.inObjectMethod // Save outer object method context
 	c.currentThisType = preliminaryObjType  // Set this context to the object being constructed
 	c.inObjectMethod = true                 // Mark that we're in an object method (for super support)
-	debugPrintf("// [Checker ObjectLit] Set this context to: %s\n", preliminaryObjType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker ObjectLit] Set this context to: %s\n", preliminaryObjType.String())
+	}
 
 	for _, prop := range node.Properties {
 		var keyName string
@@ -1012,7 +1044,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 	// Set the computed type for the ObjectLiteral node itself
 	node.SetComputedType(objType)
-	debugPrintf("// [Checker ObjectLit] Computed type: %s\n", objType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker ObjectLit] Computed type: %s\n", objType.String())
+	}
 	debugPrintf("// [Checker ObjectLit] Has computed properties: %v, final fields: %v\n", hasComputedProperties, finalFields)
 }
 
@@ -1085,7 +1119,9 @@ func (c *Checker) checkTemplateLiteral(node *parser.TemplateLiteral) {
 				// In JavaScript/TypeScript, any expression in template literal interpolation
 				// gets converted to string, so we don't need to enforce any particular type.
 				// However, we can warn about problematic types if needed in the future.
-				debugPrintf("// [Checker TemplateLit] Interpolated expression type: %s\n", exprType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker TemplateLit] Interpolated expression type: %s\n", exprType.String())
+				}
 			} else {
 				debugPrintf("// [Checker TemplateLit] WARNING: Non-expression part in template literal: %T\n", part)
 			}
@@ -1208,7 +1244,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	memberKey := expressionToNarrowingKey(node)
 	if memberKey != "" {
 		if narrowedType, exists := c.env.narrowings[memberKey]; exists {
-			debugPrintf("// [MemberExpr] Using narrowed type for %s: %s\n", memberKey, narrowedType.String())
+			if checkerDebug {
+				debugPrintf("// [MemberExpr] Using narrowed type for %s: %s\n", memberKey, narrowedType.String())
+			}
 			node.SetComputedType(narrowedType)
 			return
 		}
@@ -1250,7 +1288,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 							} else {
 								remainingType = unionType.RemoveType(complementType)
 							}
-							debugPrintf("// [MemberExpr] Using complement narrowing for %s: %s (removing %s)\n", memberKey, remainingType.String(), complementType.String())
+							if checkerDebug {
+								debugPrintf("// [MemberExpr] Using complement narrowing for %s: %s (removing %s)\n", memberKey, remainingType.String(), complementType.String())
+							}
 							node.SetComputedType(remainingType)
 							return
 						}
@@ -1262,7 +1302,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		for env := c.env.outer; env != nil; env = env.outer {
 			if env.narrowings != nil {
 				if narrowedType, exists := env.narrowings[memberKey]; exists {
-					debugPrintf("// [MemberExpr] Using narrowed type from outer env for %s: %s\n", memberKey, narrowedType.String())
+					if checkerDebug {
+						debugPrintf("// [MemberExpr] Using narrowed type from outer env for %s: %s\n", memberKey, narrowedType.String())
+					}
 					node.SetComputedType(narrowedType)
 					return
 				}
@@ -1301,7 +1343,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 									} else {
 										remainingType = unionType.RemoveType(complementType)
 									}
-									debugPrintf("// [MemberExpr] Using complement narrowing from outer env for %s: %s\n", memberKey, remainingType.String())
+									if checkerDebug {
+										debugPrintf("// [MemberExpr] Using complement narrowing from outer env for %s: %s\n", memberKey, remainingType.String())
+									}
 									node.SetComputedType(remainingType)
 									return
 								}
@@ -1456,12 +1500,16 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				} else {
 					// Property not found in explicit properties - check index signatures
 					if len(obj.IndexSignatures) > 0 {
-						debugPrintf("// [Checker MemberExpr] Property '%s' not found, checking %d index signatures\n", propertyName, len(obj.IndexSignatures))
+						if checkerDebug {
+							debugPrintf("// [Checker MemberExpr] Property '%s' not found, checking %d index signatures\n", propertyName, len(obj.IndexSignatures))
+						}
 						for _, indexSig := range obj.IndexSignatures {
 							// For string index signatures, allow any string property access
 							if indexSig.KeyType == types.String {
 								resultType = indexSig.ValueType
-								debugPrintf("// [Checker MemberExpr] Property '%s' matches string index signature: %s\n", propertyName, resultType.String())
+								if checkerDebug {
+									debugPrintf("// [Checker MemberExpr] Property '%s' matches string index signature: %s\n", propertyName, resultType.String())
+								}
 								break
 							}
 							// TODO: Handle number index signatures, symbol index signatures, etc.
@@ -1478,12 +1526,16 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 							// Check for function prototype methods if this is a callable object
 							if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
 								resultType = methodType
-								debugPrintf("// [Checker MemberExpr] Found function prototype method '%s': %s\n", propertyName, methodType.String())
+								if checkerDebug {
+									debugPrintf("// [Checker MemberExpr] Found function prototype method '%s': %s\n", propertyName, methodType.String())
+								}
 							} else {
 								// NEW: Check for Object prototype methods for all objects
 								if methodType := c.env.GetPrimitivePrototypeMethodType("object", propertyName); methodType != nil {
 									resultType = methodType
-									debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
+									if checkerDebug {
+										debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
+									}
 								} else {
 									// Property not found
 									c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
@@ -1494,7 +1546,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 							// NEW: Check for Object prototype methods for all objects
 							if methodType := c.env.GetPrimitivePrototypeMethodType("object", propertyName); methodType != nil {
 								resultType = methodType
-								debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
+								if checkerDebug {
+									debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
+								}
 							} else {
 								// Property not found
 								c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
@@ -1549,16 +1603,22 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			}
 		case *types.MappedType:
 			// Handle property access on mapped types by expanding them first
-			debugPrintf("// [Checker MemberExpr] Found mapped type, expanding for property access: %s\n", obj.String())
+			if checkerDebug {
+				debugPrintf("// [Checker MemberExpr] Found mapped type, expanding for property access: %s\n", obj.String())
+			}
 			expandedType := c.expandIfMappedType(obj)
 			if expandedObj, ok := expandedType.(*types.ObjectType); ok {
-				debugPrintf("// [Checker MemberExpr] Mapped type expanded to ObjectType: %s\n", expandedObj.String())
+				if checkerDebug {
+					debugPrintf("// [Checker MemberExpr] Mapped type expanded to ObjectType: %s\n", expandedObj.String())
+				}
 				if propType, exists := expandedObj.Properties[propertyName]; exists {
 					resultType = propType
 					if expandedObj.IsPropertyOptional(propertyName) {
 						resultType = types.NewUnionType(propType, types.Undefined)
 					}
-					debugPrintf("// [Checker MemberExpr] Found property '%s' in expanded type: %s\n", propertyName, propType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker MemberExpr] Found property '%s' in expanded type: %s\n", propertyName, propType.String())
+					}
 				} else {
 					// Check index signatures before reporting error
 					found := false
@@ -1585,7 +1645,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				debugPrintf("// [Checker MemberExpr] Mapped type expanded to any, allowing property access\n")
 				resultType = types.Any
 			} else {
-				debugPrintf("// [Checker MemberExpr] Mapped type expansion failed, result: %T %s\n", expandedType, expandedType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker MemberExpr] Mapped type expansion failed, result: %T %s\n", expandedType, expandedType.String())
+				}
 				c.addError(node.Object, fmt.Sprintf("property access is not supported on mapped type %s", obj.String()))
 				resultType = types.Never
 			}
@@ -1624,8 +1686,10 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if obj.Parameter != nil && obj.Parameter.Constraint != nil {
 				// If the type parameter has a constraint, check property access on the constraint
 				constraintType := obj.Parameter.Constraint
-				debugPrintf("// [Checker MemberExpr] Type parameter '%s' has constraint: %s, checking property '%s'\n",
-					obj.Parameter.Name, constraintType.String(), propertyName)
+				if checkerDebug {
+					debugPrintf("// [Checker MemberExpr] Type parameter '%s' has constraint: %s, checking property '%s'\n",
+						obj.Parameter.Name, constraintType.String(), propertyName)
+				}
 
 				// Use the helper function to get property type from the constraint
 				resultType = c.getPropertyTypeFromType(constraintType, propertyName, false)
@@ -1746,7 +1810,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			// Handle property access on enum types (enum member access)
 			if memberType, exists := obj.Members[propertyName]; exists {
 				resultType = memberType
-				debugPrintf("// [Checker MemberExpr] Found enum member '%s.%s': %s\n", obj.Name, propertyName, memberType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker MemberExpr] Found enum member '%s.%s': %s\n", obj.Name, propertyName, memberType.String())
+				}
 			} else {
 				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'typeof %s'.", propertyName, obj.Name))
 				resultType = types.Never
@@ -1756,18 +1822,24 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			resultType = c.handleForwardReferenceStaticAccess(obj, propertyName, node)
 		case *types.ParameterizedForwardReferenceType:
 			// Handle property access on parameterized generic types like LinkedNode<T>
-			debugPrintf("// [Checker MemberExpr] ParameterizedForwardReferenceType: %s, property: %s\n", obj.String(), propertyName)
+			if checkerDebug {
+				debugPrintf("// [Checker MemberExpr] ParameterizedForwardReferenceType: %s, property: %s\n", obj.String(), propertyName)
+			}
 
 			// The issue is that during method body checking, the generic class might not be fully resolved yet
 			// Instead of trying to resolve the constructor, resolve the ParameterizedForwardReferenceType directly
 			resolvedType := c.resolveParameterizedForwardReference(obj)
 			if resolvedType != nil {
-				debugPrintf("// [Checker MemberExpr] Resolved ParameterizedForwardReferenceType to: %T = %s\n", resolvedType, resolvedType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker MemberExpr] Resolved ParameterizedForwardReferenceType to: %T = %s\n", resolvedType, resolvedType.String())
+				}
 				if objType, ok := resolvedType.(*types.ObjectType); ok {
 					// Check if the property exists on the resolved type
 					if propType, exists := objType.Properties[propertyName]; exists {
 						resultType = propType
-						debugPrintf("// [Checker MemberExpr] Found property '%s' on resolved type: %s\n", propertyName, propType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker MemberExpr] Found property '%s' on resolved type: %s\n", propertyName, propType.String())
+						}
 					} else {
 						c.reportPropertyNotFound(node.Property, node.Object, propertyName, resolvedType.String())
 						resultType = types.Never
@@ -1787,7 +1859,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if resolvedAlias, found := c.env.ResolveType(obj.AliasName); found {
 				if _, stillForward := resolvedAlias.(*types.TypeAliasForwardReference); !stillForward {
 					// Type has been resolved - recursively check property access
-					debugPrintf("// [Checker MemberExpr] Resolved type alias '%s' to: %T = %s\n", obj.AliasName, resolvedAlias, resolvedAlias.String())
+					if checkerDebug {
+						debugPrintf("// [Checker MemberExpr] Resolved type alias '%s' to: %T = %s\n", obj.AliasName, resolvedAlias, resolvedAlias.String())
+					}
 					savedObjectType := node.Object.GetComputedType()
 					node.Object.SetComputedType(resolvedAlias)
 					c.checkMemberExpression(node)
@@ -1852,7 +1926,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 
 	// 5. Set the computed type on the MemberExpression node itself
 	node.SetComputedType(resultType)
-	debugPrintf("// [Checker MemberExpr] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker MemberExpr] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
+	}
 }
 
 // handleForwardReferenceStaticAccess handles static member access on a forward reference
@@ -1967,11 +2043,15 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					if idx >= 0 && idx < len(base.ElementTypes) {
 						// Valid index into fixed elements
 						resultType = base.ElementTypes[idx]
-						debugPrintf("// [Checker IndexExpr] Tuple literal index %d -> %s\n", idx, resultType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker IndexExpr] Tuple literal index %d -> %s\n", idx, resultType.String())
+						}
 					} else if base.RestElementType != nil && idx >= len(base.ElementTypes) {
 						// Index into rest element
 						resultType = base.RestElementType
-						debugPrintf("// [Checker IndexExpr] Tuple rest index %d -> %s\n", idx, resultType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker IndexExpr] Tuple rest index %d -> %s\n", idx, resultType.String())
+						}
 					} else {
 						if indexValue < 0 {
 							c.addErrorWithCode(node.Index, errors.TS2514, "A tuple type cannot be indexed with a negative value.")
@@ -1984,7 +2064,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				} else {
 					// General number index - return union of all possible element types
 					resultType = getTupleElementUnion(base)
-					debugPrintf("// [Checker IndexExpr] Tuple general number index -> %s\n", resultType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker IndexExpr] Tuple general number index -> %s\n", resultType.String())
+					}
 				}
 			} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
 				// String or Symbol index - accessing tuple properties (like length, Symbol.iterator)
@@ -2216,7 +2298,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				continue
 			}
 			if narrowedType, exists := env.narrowings[indexKey]; exists {
-				debugPrintf("// [Checker IndexExpr] Using narrowed type for %s: %s\n", indexKey, narrowedType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker IndexExpr] Using narrowed type for %s: %s\n", indexKey, narrowedType.String())
+				}
 				resultType = narrowedType
 				break
 			}
@@ -2231,7 +2315,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					} else {
 						resultType = unionType.RemoveType(complementType)
 					}
-					debugPrintf("// [Checker IndexExpr] Using complement narrowing for %s: %s\n", indexKey, resultType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker IndexExpr] Using complement narrowing for %s: %s\n", indexKey, resultType.String())
+					}
 				}
 				break
 			}
@@ -2240,7 +2326,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 
 	// Set computed type on the IndexExpression node
 	node.SetComputedType(resultType)
-	debugPrintf("// [Checker IndexExpr] Computed type: %s\n", resultType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker IndexExpr] Computed type: %s\n", resultType.String())
+	}
 }
 
 // checkOptionalChainingExpression handles optional chaining property access (e.g., obj?.prop)
@@ -2352,7 +2440,9 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				// Check for function prototype methods if this is a callable object
 				if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
 					baseResultType = methodType
-					debugPrintf("// [Checker OptionalChaining] Found function prototype method '%s': %s\n", propertyName, methodType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker OptionalChaining] Found function prototype method '%s': %s\n", propertyName, methodType.String())
+					}
 				} else {
 					// Property not found - for optional chaining, this is OK, just return undefined
 					// Don't add an error like regular member access would
@@ -2407,7 +2497,9 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	// 6. Set the computed type on the OptionalChainingExpression node itself
 	resultType = c.checkOptionalContinuation(node.Continuation, resultType, node.Object)
 	node.SetComputedType(resultType)
-	debugPrintf("// [Checker OptionalChaining] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker OptionalChaining] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
+	}
 }
 
 // checkOptionalIndexExpression handles optional computed property access (e.g., obj?.[expr])
@@ -2466,7 +2558,9 @@ func (c *Checker) checkOptionalIndexExpression(node *parser.OptionalIndexExpress
 
 	resultType = c.checkOptionalContinuation(node.Continuation, resultType, nil)
 	node.SetComputedType(resultType)
-	debugPrintf("// [Checker OptionalIndex] ObjectType: %s, IndexType: %s, ResultType: %s\n", objectType.String(), indexType.String(), resultType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker OptionalIndex] ObjectType: %s, IndexType: %s, ResultType: %s\n", objectType.String(), indexType.String(), resultType.String())
+	}
 }
 
 // checkOptionalCallExpression handles optional function calls (e.g., func?.())
@@ -2526,11 +2620,15 @@ func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpressio
 
 	resultType = c.checkOptionalContinuation(node.Continuation, resultType, nil)
 	node.SetComputedType(resultType)
-	debugPrintf("// [Checker OptionalCall] FunctionType: %s, ResultType: %s\n", functionType.String(), resultType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker OptionalCall] FunctionType: %s, ResultType: %s\n", functionType.String(), resultType.String())
+	}
 }
 
 func (c *Checker) checkNewExpression(node *parser.NewExpression) {
-	debugPrintf("// [Checker NewExpression] Checking new expression with %d type arguments\n", len(node.TypeArguments))
+	if checkerDebug {
+		debugPrintf("// [Checker NewExpression] Checking new expression with %d type arguments\n", len(node.TypeArguments))
+	}
 
 	// Check the constructor expression
 	c.visit(node.Constructor)
@@ -2538,12 +2636,16 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	if constructorType == nil {
 		constructorType = types.Any
 	}
-	debugPrintf("// [Checker NewExpression] Constructor type: %T = %s\n", constructorType, constructorType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker NewExpression] Constructor type: %T = %s\n", constructorType, constructorType.String())
+	}
 
 	// Handle generic constructor calls (e.g., new Container<number>(42))
 	var explicitTypeArgs []types.Type
 	if len(node.TypeArguments) > 0 {
-		debugPrintf("// [Checker NewExpression] Processing %d type arguments\n", len(node.TypeArguments))
+		if checkerDebug {
+			debugPrintf("// [Checker NewExpression] Processing %d type arguments\n", len(node.TypeArguments))
+		}
 		// Check type arguments - these are type annotations, not expressions
 		typeArgs := make([]types.Type, len(node.TypeArguments))
 		explicitTypeArgs = typeArgs
@@ -2553,16 +2655,22 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			if typeArgs[i] == nil {
 				typeArgs[i] = types.Any
 			}
-			debugPrintf("// [Checker NewExpression] Type arg %d: %s\n", i, typeArgs[i].String())
+			if checkerDebug {
+				debugPrintf("// [Checker NewExpression] Type arg %d: %s\n", i, typeArgs[i].String())
+			}
 		}
 
 		// If constructor is a generic type, instantiate it
 		if genericType, ok := constructorType.(*types.GenericType); ok {
-			debugPrintf("// [Checker NewExpression] Instantiating generic constructor '%s' with %d type args\n",
-				genericType.Name, len(typeArgs))
+			if checkerDebug {
+				debugPrintf("// [Checker NewExpression] Instantiating generic constructor '%s' with %d type args\n",
+					genericType.Name, len(typeArgs))
+			}
 			instantiatedConstructorType := c.instantiateGenericType(genericType, typeArgs, node.TypeArguments)
-			debugPrintf("// [Checker NewExpression] Instantiated constructor type: %T = %s\n",
-				instantiatedConstructorType, instantiatedConstructorType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker NewExpression] Instantiated constructor type: %T = %s\n",
+					instantiatedConstructorType, instantiatedConstructorType.String())
+			}
 			constructorType = instantiatedConstructorType
 		}
 	}
@@ -2619,7 +2727,9 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 						// Instantiate the generic type with inferred arguments
 						instantiatedConstructorType := c.instantiateGenericType(genericType, typeArgs, nil)
 						constructorType = instantiatedConstructorType
-						debugPrintf("// [Checker NewExpression] Instantiated constructor with inferred types: %s\n", constructorType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker NewExpression] Instantiated constructor with inferred types: %s\n", constructorType.String())
+						}
 					}
 				} else {
 					debugPrintf("// [Checker NewExpression] Type inference failed\n")
@@ -2639,8 +2749,10 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		}
 
 		if constructorSig != nil {
-			debugPrintf("// [Checker NewExpression] Got constructor signature: IsVariadic=%v, RestParamType=%v, Params=%d\n",
-				constructorSig.IsVariadic, constructorSig.RestParameterType, len(constructorSig.ParameterTypes))
+			if checkerDebug {
+				debugPrintf("// [Checker NewExpression] Got constructor signature: IsVariadic=%v, RestParamType=%v, Params=%d\n",
+					constructorSig.IsVariadic, constructorSig.RestParameterType, len(constructorSig.ParameterTypes))
+			}
 
 			// Validate spread arguments first
 			hasSpreadErrors := false
@@ -2785,7 +2897,9 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		if bodyObjType, bodyOk := genericType.Body.(*types.ObjectType); bodyOk && len(bodyObjType.ConstructSignatures) > 0 {
 			// Use the first constructor signature's return type
 			resultType = bodyObjType.ConstructSignatures[0].ReturnType
-			debugPrintf("// [Checker NewExpression] GenericType constructor result: %s\n", resultType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker NewExpression] GenericType constructor result: %s\n", resultType.String())
+			}
 		} else {
 			// Generic type without constructor signatures - return any
 			resultType = types.Any
@@ -2796,7 +2910,9 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 
 		// Try to resolve the forward reference to get the actual constructor type
 		if actualType, _, found := c.env.Resolve(forwardRef.ClassName); found {
-			debugPrintf("// [Checker NewExpression] Resolved forward reference to: %T = %s\n", actualType, actualType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker NewExpression] Resolved forward reference to: %T = %s\n", actualType, actualType.String())
+			}
 			if objType, objOk := actualType.(*types.ObjectType); objOk && len(objType.ConstructSignatures) > 0 {
 				resultType = objType.ConstructSignatures[0].ReturnType
 			} else {
@@ -3227,7 +3343,9 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 
 			// Check if the value has Symbol.iterator method
 			// Check if the type has Symbol.iterator property
-			debugPrintf("// [Checker yield*] Checking if valueType %T (%s) is iterable\n", valueType, valueType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker yield*] Checking if valueType %T (%s) is iterable\n", valueType, valueType.String())
+			}
 
 			// Special case: if the value comes from a generator function call, assume it's iterable
 			// This handles cases where generator functions haven't been fully resolved yet in multi-pass checking
@@ -3245,14 +3363,16 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 
 			// Resolve Symbol.iterator via computed path; avoid stringizing here
 			iteratorMethodType := c.getPropertyTypeFromType(valueType, "__COMPUTED_PROPERTY__", false)
-			debugPrintf("// [Checker yield*] Symbol.iterator method type: %T (%s)\n", iteratorMethodType,
-				func() string {
-					if iteratorMethodType != nil {
-						return iteratorMethodType.String()
-					} else {
-						return "nil"
-					}
-				}())
+			if checkerDebug {
+				debugPrintf("// [Checker yield*] Symbol.iterator method type: %T (%s)\n", iteratorMethodType,
+					func() string {
+						if iteratorMethodType != nil {
+							return iteratorMethodType.String()
+						} else {
+							return "nil"
+						}
+					}())
+			}
 
 			if iteratorMethodType != nil && iteratorMethodType != types.Never {
 				// The value has Symbol.iterator - it's iterable
@@ -3355,8 +3475,10 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 					if len(instType.TypeArguments) > 0 {
 						innerType := instType.TypeArguments[0]
 						node.SetComputedType(innerType)
-						debugPrintf("// [Checker AwaitExpression] Unwrapped Promise<%s> to %s\n",
-							innerType.String(), innerType.String())
+						if checkerDebug {
+							debugPrintf("// [Checker AwaitExpression] Unwrapped Promise<%s> to %s\n",
+								innerType.String(), innerType.String())
+						}
 						return
 					}
 				}
@@ -3381,8 +3503,10 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 											// This is the resolved value type
 											resolvedType := callbackSig.ParameterTypes[0]
 											node.SetComputedType(resolvedType)
-											debugPrintf("// [Checker AwaitExpression] Unwrapped Promise-shaped object to %s\n",
-												resolvedType.String())
+											if checkerDebug {
+												debugPrintf("// [Checker AwaitExpression] Unwrapped Promise-shaped object to %s\n",
+													resolvedType.String())
+											}
 											return
 										}
 									}
@@ -3396,8 +3520,10 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 			// If not a Promise type, await still accepts the value and returns it
 			// This matches TypeScript behavior where await can be used on non-Promise values
 			node.SetComputedType(argType)
-			debugPrintf("// [Checker AwaitExpression] Non-Promise type %s, returning as-is\n",
-				argType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker AwaitExpression] Non-Promise type %s, returning as-is\n",
+					argType.String())
+			}
 		} else {
 			// No type information, default to any
 			node.SetComputedType(types.Any)

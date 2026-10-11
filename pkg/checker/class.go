@@ -368,8 +368,10 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	placeholderType.Pending = false
 	c.deferRelationCheck(func() { c.checkClassHeritageAccessibility(node, instanceType) })
 
-	debugPrintf("// [Checker Class] Finalized class type alias '%s': %s\n",
-		node.Name.Value, instanceType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Finalized class type alias '%s': %s\n",
+			node.Name.Value, instanceType.String())
+	}
 
 	// 4. Create constructor signatures from constructor overloads or implementation
 	constructorSigs := c.createConstructorSignatures(node.Body, instanceType, node.SuperClass != nil)
@@ -395,8 +397,10 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 		return
 	}
 
-	debugPrintf("// [Checker Class] Successfully defined class '%s' as constructor type: %s\n",
-		node.Name.Value, constructorType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Successfully defined class '%s' as constructor type: %s\n",
+			node.Name.Value, constructorType.String())
+	}
 
 	// TS2515: Non-abstract class must implement all abstract members from superclass.
 	if !node.IsAbstract && node.SuperClass != nil {
@@ -469,8 +473,10 @@ func (c *Checker) checkAbstractMembersImplemented(node *parser.ClassDeclaration,
 // checkGenericClassDeclaration handles generic class declarations
 func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	defer c.markGenericComplete(node.Name.Value)
-	debugPrintf("// [Checker Class] Processing generic class '%s' with %d type parameters\n",
-		node.Name.Value, len(node.TypeParameters))
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Processing generic class '%s' with %d type parameters\n",
+			node.Name.Value, len(node.TypeParameters))
+	}
 
 	// 1. Create and register type parameters before resolving constraints.
 	// TypeScript permits later parameters in earlier constraints, e.g. <T extends U, U>.
@@ -632,8 +638,10 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		debugPrintf("// [Checker Class] WARNING: DefineTypeAlias failed for generic class '%s'.\n", node.Name.Value)
 	}
 
-	debugPrintf("// [Checker Class] Successfully defined generic class '%s' with %d type parameters\n",
-		node.Name.Value, len(typeParams))
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Successfully defined generic class '%s' with %d type parameters\n",
+			node.Name.Value, len(typeParams))
+	}
 }
 
 // createInstanceType builds an object type representing instances of the class
@@ -719,8 +727,10 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				propType = objType.CallSignatures[0].ReturnType
 			}
 			accessLevel = c.getAccessLevel(getter.IsPublic, getter.IsPrivate, getter.IsProtected)
-			debugPrintf("// [Checker Class] Found getter for property '%s': %s (%s)\n",
-				propName, propType.String(), accessLevel.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Class] Found getter for property '%s': %s (%s)\n",
+					propName, propType.String(), accessLevel.String())
+			}
 		}
 
 		if setter != nil {
@@ -741,8 +751,10 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 					if accessLevel == types.AccessPublic {
 						accessLevel = setterAccessLevel
 					}
-					debugPrintf("// [Checker Class] Found setter for property '%s': %s (%s)\n",
-						propName, setterType.String(), setterAccessLevel.String())
+					if checkerDebug {
+						debugPrintf("// [Checker Class] Found setter for property '%s': %s (%s)\n",
+							propName, setterType.String(), setterAccessLevel.String())
+					}
 				}
 			}
 		}
@@ -766,8 +778,10 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				}
 			}
 
-			debugPrintf("// [Checker Class] Added getter/setter property '%s' to instance type: %s (%s)\n",
-				propName, propType.String(), accessLevel.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Class] Added getter/setter property '%s' to instance type: %s (%s)\n",
+					propName, propType.String(), accessLevel.String())
+			}
 		}
 	}
 
@@ -795,21 +809,27 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific method
 					instanceType.WithClassMember(constantName, methodType, accessLevel, false, false)
-					debugPrintf("// [Checker Class] Added constant computed method '%s' to instance type: %s (%s)\n",
-						constantName, methodType.String(), accessLevel.String())
+					if checkerDebug {
+						debugPrintf("// [Checker Class] Added constant computed method '%s' to instance type: %s (%s)\n",
+							constantName, methodType.String(), accessLevel.String())
+					}
 				} else {
 					// This is a dynamic computed property - add to index signature
 					hasComputedProperties = true
 					computedValueTypes = append(computedValueTypes, methodType)
-					debugPrintf("// [Checker Class] Found dynamic computed method, adding to index signature: %s\n", methodType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker Class] Found dynamic computed method, adding to index signature: %s\n", methodType.String())
+					}
 				}
 			} else {
 				// Add method with access control metadata
 				methodName := c.extractPropertyName(method.Key)
 				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
 
-				debugPrintf("// [Checker Class] Added method '%s' to instance type: %s (%s)\n",
-					methodName, methodType.String(), accessLevel.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Class] Added method '%s' to instance type: %s (%s)\n",
+						methodName, methodType.String(), accessLevel.String())
+				}
 			}
 		}
 	}
@@ -838,7 +858,9 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				accessLevel := c.getAccessLevel(methodSig.IsPublic, methodSig.IsPrivate, methodSig.IsProtected)
 
 				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
-				debugPrintf("// [Checker Class] Added method signature '%s' to instance type: %s\n", methodName, methodType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Class] Added method signature '%s' to instance type: %s\n", methodName, methodType.String())
+				}
 
 				// Track abstract method for subclass implementation checking
 				if methodSig.IsAbstract && c.abstractMethods[className] == nil {
@@ -874,13 +896,17 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific property
 					instanceType.WithClassMember(constantName, propType, accessLevel, false, false)
-					debugPrintf("// [Checker Class] Added constant computed property '%s' to instance type: %s (%s)\n",
-						constantName, propType.String(), accessLevel.String())
+					if checkerDebug {
+						debugPrintf("// [Checker Class] Added constant computed property '%s' to instance type: %s (%s)\n",
+							constantName, propType.String(), accessLevel.String())
+					}
 				} else {
 					// This is a dynamic computed property - add to index signature
 					hasComputedProperties = true
 					computedValueTypes = append(computedValueTypes, propType)
-					debugPrintf("// [Checker Class] Found dynamic computed property, adding to index signature: %s\n", propType.String())
+					if checkerDebug {
+						debugPrintf("// [Checker Class] Found dynamic computed property, adding to index signature: %s\n", propType.String())
+					}
 				}
 			} else {
 				// Add property with access control metadata
@@ -892,8 +918,10 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 					instanceType.OptionalProperties[propName] = true
 				}
 
-				debugPrintf("// [Checker Class] Added property '%s' to instance type: %s (%s, readonly: %v, optional: %v)\n",
-					propName, propType.String(), accessLevel.String(), prop.Readonly, prop.Optional)
+				if checkerDebug {
+					debugPrintf("// [Checker Class] Added property '%s' to instance type: %s (%s, readonly: %v, optional: %v)\n",
+						propName, propType.String(), accessLevel.String(), prop.Readonly, prop.Optional)
+				}
 			}
 		}
 	}
@@ -920,7 +948,9 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			},
 		}
 
-		debugPrintf("// [Checker Class] Added index signature for computed properties: [key: string]: %s\n", indexValueType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Class] Added index signature for computed properties: [key: string]: %s\n", indexValueType.String())
+		}
 	}
 
 	// FINAL PASS: Check method bodies now that all properties and methods are in the instance type
@@ -1553,8 +1583,10 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 			methodName := c.extractPropertyName(method.Key)
 			constructorType.WithClassMember(methodName, methodType, accessLevel, true, false)
 
-			debugPrintf("// [Checker Class] Added static method '%s' to constructor type: %s (%s)\n",
-				methodName, methodType.String(), accessLevel.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Class] Added static method '%s' to constructor type: %s (%s)\n",
+					methodName, methodType.String(), accessLevel.String())
+			}
 		}
 	}
 
@@ -1588,8 +1620,10 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 				constructorType.OptionalProperties[propName] = true
 			}
 
-			debugPrintf("// [Checker Class] Added static property '%s' to constructor type: %s (%s, readonly: %v)\n",
-				propName, propType.String(), accessLevel.String(), prop.Readonly)
+			if checkerDebug {
+				debugPrintf("// [Checker Class] Added static property '%s' to constructor type: %s (%s, readonly: %v)\n",
+					propName, propType.String(), accessLevel.String(), prop.Readonly)
+			}
 		}
 	}
 
@@ -1773,7 +1807,9 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 
 // handleClassInheritance processes class inheritance (extends clause)
 func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superClassExpr parser.Expression) {
-	debugPrintf("// [Checker Class] === STARTING handleClassInheritance: %s extends %s ===\n", instanceType.GetClassName(), superClassExpr.String())
+	if checkerDebug {
+		debugPrintf("// [Checker Class] === STARTING handleClassInheritance: %s extends %s ===\n", instanceType.GetClassName(), superClassExpr.String())
+	}
 
 	// Handle different superclass types
 	var constructorType types.Type
@@ -1830,7 +1866,9 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 
 		// Properly instantiate the generic constructor with type arguments
 		if len(genRef.TypeArguments) > 0 {
-			debugPrintf("// [Checker Class] Instantiating generic base constructor with %d type args\n", len(genRef.TypeArguments))
+			if checkerDebug {
+				debugPrintf("// [Checker Class] Instantiating generic base constructor with %d type args\n", len(genRef.TypeArguments))
+			}
 
 			// Resolve type arguments to types
 			resolvedTypeArgs := make([]types.Type, len(genRef.TypeArguments))
@@ -1839,7 +1877,9 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 				if resolvedTypeArgs[i] == nil {
 					resolvedTypeArgs[i] = types.Any // its error is already reported
 				}
-				debugPrintf("// [Checker Class] Resolved type arg %d: %s\n", i, resolvedTypeArgs[i].String())
+				if checkerDebug {
+					debugPrintf("// [Checker Class] Resolved type arg %d: %s\n", i, resolvedTypeArgs[i].String())
+				}
 			}
 
 			genericType, isGeneric := baseConstructor.(*types.GenericType)
@@ -2034,12 +2074,16 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	// Add superclass to BaseTypes for structural inheritance
 	instanceType.BaseTypes = append(instanceType.BaseTypes, superInstanceType)
 
-	debugPrintf("// [Checker Class] Successfully set up inheritance: %s extends %s\n", instanceType.GetClassName(), superClassExpr.String())
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Successfully set up inheritance: %s extends %s\n", instanceType.GetClassName(), superClassExpr.String())
+	}
 }
 
 // registerInterfaceImplementation registers that a class implements an interface (without validation)
 func (c *Checker) registerInterfaceImplementation(instanceType *types.ObjectType, interfaceName string) {
-	debugPrintf("// [Checker Class] Registering interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Registering interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	}
 
 	// Check if interface exists
 	interfaceType, exists := c.env.ResolveType(interfaceName)
@@ -2063,12 +2107,16 @@ func (c *Checker) registerInterfaceImplementation(instanceType *types.ObjectType
 	// Add interface to BaseTypes for structural inheritance
 	instanceType.BaseTypes = append(instanceType.BaseTypes, interfaceObjType)
 
-	debugPrintf("// [Checker Class] Successfully registered interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Successfully registered interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	}
 }
 
 // validateInterfaceImplementationDeferred validates interface implementation after class is fully built
 func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.ObjectType, interfaceName string, errNode parser.Node) {
-	debugPrintf("// [Checker Class] Validating deferred interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Validating deferred interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	}
 
 	// Check if interface exists (should exist since we registered it earlier)
 	interfaceType, exists := c.env.ResolveType(interfaceName)
@@ -2087,7 +2135,9 @@ func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.Ob
 	// Now validate that the class actually implements the interface
 	c.validateInterfaceImplementation(instanceType, interfaceObjType, interfaceName, errNode)
 
-	debugPrintf("// [Checker Class] Successfully validated interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	if checkerDebug {
+		debugPrintf("// [Checker Class] Successfully validated interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	}
 }
 
 // getClassInstanceType retrieves the instance type for a given class name
@@ -2192,7 +2242,9 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 	// Set the computed type to the superclass instance type
 	// This allows super.method() and super() calls to work correctly
 	node.SetComputedType(superInstanceType)
-	debugPrintf("// [Checker SuperExpr] Super expression type: %s\n", superInstanceType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker SuperExpr] Super expression type: %s\n", superInstanceType.String())
+	}
 }
 
 // validateInterfaceImplementation checks that a class properly implements an interface
@@ -2247,7 +2299,9 @@ func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, i
 	for _, interfaceSig := range interfaceType.CallSignatures {
 		// For method implementations, we need to check if the class has compatible methods
 		// This is a simplified check - a full implementation would need more sophisticated matching
-		debugPrintf("// [Checker Class] Interface %s requires call signature: %s\n", interfaceName, interfaceSig.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Class] Interface %s requires call signature: %s\n", interfaceName, interfaceSig.String())
+		}
 	}
 
 	debugPrintf("// [Checker Class] Interface implementation validation completed for %s implements %s\n", className, interfaceName)
@@ -2266,7 +2320,9 @@ func (c *Checker) isCompatibleWithInterfaceProperty(classProperty, interfaceProp
 	// and class has a method implementation (ObjectType with call signatures)
 	if genericType, ok := interfaceProperty.(*types.GenericType); ok {
 		// Interface property is a generic method like transform<T, U>(...)
-		debugPrintf("// [Checker Class] Interface property is GenericType: %s\n", genericType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Class] Interface property is GenericType: %s\n", genericType.String())
+		}
 
 		// Class property should be a callable ObjectType
 		classObjType, ok := classProperty.(*types.ObjectType)
@@ -2295,8 +2351,10 @@ func (c *Checker) isCompatibleWithInterfaceProperty(classProperty, interfaceProp
 
 		// Check parameter count matches
 		if len(classSig.ParameterTypes) != len(bodySig.ParameterTypes) {
-			debugPrintf("// [Checker Class] Parameter count mismatch: class has %d, interface has %d\n",
-				len(classSig.ParameterTypes), len(bodySig.ParameterTypes))
+			if checkerDebug {
+				debugPrintf("// [Checker Class] Parameter count mismatch: class has %d, interface has %d\n",
+					len(classSig.ParameterTypes), len(bodySig.ParameterTypes))
+			}
 			return false
 		}
 

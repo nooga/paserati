@@ -196,8 +196,10 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 			typeParam.Constraint = constraintType
 			typeParam.Default = defaultType
 
-			debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint %s\n",
-				typeParam.Name, constraintType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint %s\n",
+					typeParam.Name, constraintType.String())
+			}
 		}
 	}
 
@@ -363,7 +365,9 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 		// Use contextual type if available and no explicit annotation
 		if ctxIdx >= 0 && ctxIdx < len(ctx.ContextualParameterTypes) && param.TypeAnnotation == nil && !param.IsThis {
 			paramType = ctx.ContextualParameterTypes[ctxIdx]
-			debugPrintf("// [Checker FuncContextual] Using contextual type for param '%s': %s\n", param.Name.Value, paramType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker FuncContextual] Using contextual type for param '%s': %s\n", param.Name.Value, paramType.String())
+			}
 		} else if param.TypeAnnotation != nil {
 			// Use explicit annotation
 			originalEnv := c.env
@@ -459,7 +463,9 @@ func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes
 		if !funcEnv.Define(restParameterName.Value, restParameterType, false) {
 			c.redeclarationReportedByBinder()
 		}
-		debugPrintf("// [Checker Function Common] Defined rest parameter '%s' with type: %s\n", restParameterName.Value, restParameterType.String())
+		if checkerDebug {
+			debugPrintf("// [Checker Function Common] Defined rest parameter '%s' with type: %s\n", restParameterName.Value, restParameterType.String())
+		}
 	}
 
 	// Define function itself for recursion if allowed and named
@@ -554,7 +560,9 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 			// Use the resolved type from parameter resolution
 			if param.ComputedType != nil {
 				c.currentThisType = param.ComputedType
-				debugPrintf("// [Checker Function Body] Using explicit this parameter type: %s\n", param.ComputedType.String())
+				if checkerDebug {
+					debugPrintf("// [Checker Function Body] Using explicit this parameter type: %s\n", param.ComputedType.String())
+				}
 			} else {
 				c.currentThisType = types.Any
 			}
@@ -568,7 +576,9 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 			c.currentThisType = types.Any
 			debugPrintf("// [Checker Function Body] No explicit this parameter and no context, setting this to any for function literal\n")
 		} else {
-			debugPrintf("// [Checker Function Body] No explicit this parameter, but context already set this to: %s\n", c.currentThisType.String())
+			if checkerDebug {
+				debugPrintf("// [Checker Function Body] No explicit this parameter, but context already set this to: %s\n", c.currentThisType.String())
+			}
 		}
 	}
 
@@ -667,7 +677,9 @@ func (c *Checker) inferFinalReturnType(expectedReturnType types.Type, functionNa
 
 	// Use NewUnionType to combine inferred return types
 	finalType := types.NewUnionType(c.currentInferredReturnTypes...)
-	debugPrintf("// [Checker Function Common] Inferred return type for '%s': %s\n", functionName, finalType.String())
+	if checkerDebug {
+		debugPrintf("// [Checker Function Common] Inferred return type for '%s': %s\n", functionName, finalType.String())
+	}
 	return finalType
 }
 

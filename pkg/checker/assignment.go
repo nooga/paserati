@@ -185,8 +185,10 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 					}
 					c.env.UpdateInChain(identLHS.Value, widenedRhs)
 					c.dropMemberNarrowings(identLHS.Value)
-					debugPrintf("// [Checker Assignment] Updated '%s' type to '%s' after assignment\n",
-						identLHS.Value, widenedRhs.String())
+					if checkerDebug {
+						debugPrintf("// [Checker Assignment] Updated '%s' type to '%s' after assignment\n",
+							identLHS.Value, widenedRhs.String())
+					}
 				}
 			}
 		}
