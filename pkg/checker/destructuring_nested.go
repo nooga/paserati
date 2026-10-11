@@ -15,8 +15,8 @@ import (
 // A nested pattern is a raw ObjectLiteral, so its rest arrives as a
 // SpreadElement in ObjectProperty.Key rather than in a RestProperty field -
 // which is why it reaches the key check rather than the target walk.
-func nestedObjectPatternRestType(source types.Type, pattern *parser.ObjectLiteral) types.Type {
-	if types.GetWidenedType(source) == types.Any {
+func (c *Checker) nestedObjectPatternRestType(source types.Type, pattern *parser.ObjectLiteral) types.Type {
+	if c.rel.GetWidenedType(source) == types.Any {
 		return types.Any
 	}
 	objType, ok := source.(*types.ObjectType)
@@ -73,7 +73,7 @@ func (c *Checker) unwrapNestedPatternTarget(target parser.Expression, expectedTy
 				defaultType = types.Any
 			}
 			if expectedType == types.Undefined || expectedType == types.Unknown {
-				expectedType = types.GetWidenedType(defaultType)
+				expectedType = c.rel.GetWidenedType(defaultType)
 			}
 		}
 		return t.Left, expectedType
@@ -106,7 +106,7 @@ func (c *Checker) unwrapNestedPatternTarget(target parser.Expression, expectedTy
 				defaultType = types.Any
 			}
 			if expectedType == types.Undefined || expectedType == types.Unknown {
-				expectedType = types.GetWidenedType(defaultType)
+				expectedType = c.rel.GetWidenedType(defaultType)
 			}
 		}
 		return &parser.ObjectParameterPattern{
@@ -126,7 +126,7 @@ func (c *Checker) unwrapNestedPatternTarget(target parser.Expression, expectedTy
 				defaultType = types.Any
 			}
 			if expectedType == types.Undefined || expectedType == types.Unknown {
-				expectedType = types.GetWidenedType(defaultType)
+				expectedType = c.rel.GetWidenedType(defaultType)
 			}
 		}
 		return &parser.ArrayParameterPattern{
@@ -252,7 +252,7 @@ func (c *Checker) checkIdentifierTarget(target *parser.Identifier, expectedType 
 // checkNestedArrayTarget handles type checking for nested array destructuring targets
 func (c *Checker) checkNestedArrayTarget(arrayTarget *parser.ArrayLiteral, expectedType types.Type, context interface{}) {
 	// Validate that expectedType is array-like
-	widenedType := types.GetWidenedType(expectedType)
+	widenedType := c.rel.GetWidenedType(expectedType)
 	var elementType types.Type
 
 	if arrayType, ok := widenedType.(*types.ArrayType); ok {
@@ -306,7 +306,7 @@ func (c *Checker) checkNestedArrayTarget(arrayTarget *parser.ArrayLiteral, expec
 // checkNestedObjectTarget handles type checking for nested object destructuring targets
 func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, expectedType types.Type, context interface{}) {
 	// Validate that expectedType is object-like
-	widenedType := types.GetWidenedType(expectedType)
+	widenedType := c.rel.GetWidenedType(expectedType)
 
 	if widenedType != types.Any {
 		objType, ok := expectedType.(*types.ObjectType)
@@ -351,7 +351,7 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 				if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
 					// A rest element nested inside an object pattern
 					// (`{a: {b, ...rr}}`) - see nestedObjectPatternRestType.
-					c.checkDestructuringTargetForProperty(spread.Argument, nestedObjectPatternRestType(expectedType, objectTarget), "")
+					c.checkDestructuringTargetForProperty(spread.Argument, c.nestedObjectPatternRestType(expectedType, objectTarget), "")
 					continue
 				}
 				c.addError(prop.Key, "object destructuring key must be an identifier or number")
@@ -467,7 +467,7 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 // checkNestedArrayTargetForDeclaration handles type checking for nested array destructuring in declarations
 func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.ArrayLiteral, expectedType types.Type, isConst bool, isVar bool) {
 	// Validate that expectedType is array-like
-	widenedType := types.GetWidenedType(expectedType)
+	widenedType := c.rel.GetWidenedType(expectedType)
 	var elementType types.Type
 
 	if arrayType, ok := widenedType.(*types.ArrayType); ok {
@@ -529,7 +529,7 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 // checkNestedObjectTargetForDeclaration handles type checking for nested object destructuring in declarations
 func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.ObjectLiteral, expectedType types.Type, isConst bool, isVar bool) {
 	// Validate that expectedType is object-like
-	widenedType := types.GetWidenedType(expectedType)
+	widenedType := c.rel.GetWidenedType(expectedType)
 
 	if widenedType != types.Any {
 		objType, ok := expectedType.(*types.ObjectType)
@@ -575,7 +575,7 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 					// A rest element nested inside an object pattern
 					// (`{a: {b, ...rr}}`): it gets the source's remaining
 					// properties, like a top-level object rest.
-					c.checkDestructuringTargetForDeclaration(spread.Argument, nestedObjectPatternRestType(expectedType, objectTarget), isConst, isVar)
+					c.checkDestructuringTargetForDeclaration(spread.Argument, c.nestedObjectPatternRestType(expectedType, objectTarget), isConst, isVar)
 					continue
 				}
 				c.addError(prop.Key, "object destructuring key must be an identifier or number")
@@ -613,7 +613,7 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 func (c *Checker) checkNestedArrayParameterPattern(pattern *parser.ArrayParameterPattern, expectedType types.Type, context interface{}) {
 	// ArrayParameterPattern has Elements field with DestructuringElement items
 	// Process each element similar to array literals
-	widenedType := types.GetWidenedType(expectedType)
+	widenedType := c.rel.GetWidenedType(expectedType)
 	var elementType types.Type
 
 	if arrayType, ok := widenedType.(*types.ArrayType); ok {
@@ -638,7 +638,7 @@ func (c *Checker) checkNestedArrayParameterPattern(pattern *parser.ArrayParamete
 // checkNestedObjectParameterPattern handles type checking for nested object parameter patterns
 func (c *Checker) checkNestedObjectParameterPattern(pattern *parser.ObjectParameterPattern, expectedType types.Type, context interface{}) {
 	// ObjectParameterPattern has Properties field with DestructuringProperty items
-	widenedType := types.GetWidenedType(expectedType)
+	widenedType := c.rel.GetWidenedType(expectedType)
 
 	if widenedType != types.Any {
 		objType, ok := expectedType.(*types.ObjectType)
@@ -686,7 +686,7 @@ func (c *Checker) checkNestedObjectParameterPattern(pattern *parser.ObjectParame
 
 // checkNestedArrayParameterPatternForDeclaration handles type checking for nested array parameter patterns in declarations
 func (c *Checker) checkNestedArrayParameterPatternForDeclaration(pattern *parser.ArrayParameterPattern, expectedType types.Type, isConst bool, isVar bool) {
-	widenedType := types.GetWidenedType(expectedType)
+	widenedType := c.rel.GetWidenedType(expectedType)
 	var elementType types.Type
 
 	if arrayType, ok := widenedType.(*types.ArrayType); ok {
@@ -705,7 +705,7 @@ func (c *Checker) checkNestedArrayParameterPatternForDeclaration(pattern *parser
 
 // checkNestedObjectParameterPatternForDeclaration handles type checking for nested object parameter patterns in declarations
 func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parser.ObjectParameterPattern, expectedType types.Type, isConst bool, isVar bool) {
-	widenedType := types.GetWidenedType(expectedType)
+	widenedType := c.rel.GetWidenedType(expectedType)
 
 	if widenedType != types.Any {
 		objType, ok := expectedType.(*types.ObjectType)

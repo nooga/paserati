@@ -6117,3 +6117,12 @@ func (c *Compiler) sourceTextOf(node parser.Node) string {
 	}
 	return ""
 }
+
+// widenedType widens t under the type checker's options; without a checker,
+// under strictNullChecks.
+func (c *Compiler) widenedType(t types.Type) types.Type {
+	if c.typeChecker != nil {
+		return c.typeChecker.Relation().GetWidenedType(t)
+	}
+	return (&types.Relation{StrictNullChecks: true}).GetWidenedType(t)
+}

@@ -200,7 +200,7 @@ func (c *Checker) isSignatureCompatible(implementation, overload *types.Signatur
 
 	if overload.ReturnType != types.Void {
 		implReturn, overloadReturn := erase(implementation.ReturnType), erase(overload.ReturnType)
-		if !types.IsAssignable(overloadReturn, implReturn) && !types.IsAssignable(implReturn, overloadReturn) {
+		if !c.rel.IsAssignable(overloadReturn, implReturn) && !c.rel.IsAssignable(implReturn, overloadReturn) {
 			return false
 		}
 	}
@@ -215,7 +215,7 @@ func (c *Checker) isSignatureCompatible(implementation, overload *types.Signatur
 		}
 		implParam := implementation.ParameterTypes[i]
 		overloadParam, implParam = erase(overloadParam), erase(implParam)
-		if !types.IsAssignable(overloadParam, implParam) && !types.IsAssignable(implParam, overloadParam) {
+		if !c.rel.IsAssignable(overloadParam, implParam) && !c.rel.IsAssignable(implParam, overloadParam) {
 			return false
 		}
 	}
@@ -290,7 +290,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 				// Check fixed parameters first
 				fixedMatch := true
 				for j := 0; j < minRequiredArgs; j++ {
-					if !types.IsAssignable(argTypes[j], overload.ParameterTypes[j]) {
+					if !c.rel.IsAssignable(argTypes[j], overload.ParameterTypes[j]) {
 						fixedMatch = false
 						break
 					}
@@ -308,7 +308,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 						// Check all remaining arguments against element type
 						variadicMatch := true
 						for j := minRequiredArgs; j < len(argTypes); j++ {
-							if !types.IsAssignable(argTypes[j], elementType) {
+							if !c.rel.IsAssignable(argTypes[j], elementType) {
 								variadicMatch = false
 								break
 							}
@@ -329,7 +329,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 			allMatch := true
 			for j, argType := range argTypes {
 				paramType := overload.ParameterTypes[j]
-				if !types.IsAssignable(argType, paramType) {
+				if !c.rel.IsAssignable(argType, paramType) {
 					allMatch = false
 					break
 				}
@@ -369,7 +369,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 			if i < len(argTypes) {
 				argType := argTypes[i]
 				paramType := matchedOverload.ParameterTypes[i]
-				if !types.IsAssignable(argType, paramType) {
+				if !c.rel.IsAssignable(argType, paramType) {
 					argNode := node.Arguments[i]
 					c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.",
 						argType.String(), paramType.String()))
@@ -386,7 +386,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 
 			for i := fixedParamCount; i < len(argTypes); i++ {
 				argType := argTypes[i]
-				if !types.IsAssignable(argType, elementType) {
+				if !c.rel.IsAssignable(argType, elementType) {
 					argNode := node.Arguments[i]
 					c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.",
 						argType.String(), elementType.String()))
@@ -403,7 +403,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 
 		for i, argType := range argTypes {
 			paramType := matchedOverload.ParameterTypes[i]
-			if !types.IsAssignable(argType, paramType) {
+			if !c.rel.IsAssignable(argType, paramType) {
 				// This shouldn't happen if overload matching worked correctly
 				argNode := node.Arguments[i]
 				c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.",

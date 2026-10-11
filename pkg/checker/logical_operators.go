@@ -64,13 +64,13 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 		rightType = types.Any
 	}
 
-	widenedLeftType := types.GetWidenedType(leftType)
-	widenedRightType := types.GetWidenedType(rightType)
+	widenedLeftType := c.rel.GetWidenedType(leftType)
+	widenedRightType := c.rel.GetWidenedType(rightType)
 	switch node.Operator {
 	case "+", "-", "*", "/", "%", "**", "<", ">", "<=", ">=", "&", "|", "^", "<<", ">>", ">>>":
 		// A union of same-kind literals (`flag ? 1 : 0`) operates as its primitive.
-		widenedLeftType = widenLiteralUnion(widenedLeftType)
-		widenedRightType = widenLiteralUnion(widenedRightType)
+		widenedLeftType = c.widenLiteralUnion(widenedLeftType)
+		widenedRightType = c.widenLiteralUnion(widenedRightType)
 	}
 
 	debugPrintf("// [Checker Infix Pre-Check] Left : %T (%v)\n", leftType, leftType)
@@ -301,7 +301,7 @@ func (c *Checker) logicalOperatorResultType(operator string, left, right types.T
 	if left == nil || right == nil {
 		return types.Any
 	}
-	if types.GetWidenedType(left) == types.Any {
+	if c.rel.GetWidenedType(left) == types.Any {
 		return types.Any
 	}
 	retained := retainedOperandType(operator, left)
@@ -318,7 +318,7 @@ func (c *Checker) logicalOperatorResultType(operator string, left, right types.T
 	if operator == "&&" {
 		return types.NewUnionType(retained, right)
 	}
-	return types.UnionWithSubtypeReduction(retained, right)
+	return c.rel.UnionWithSubtypeReduction(retained, right)
 }
 
 // retainedOperandType returns the part of the left operand that survives
@@ -357,7 +357,7 @@ func isEmptyArrayLiteral(e parser.Expression) bool {
 
 // widenLiteralUnion widens a union whose members are all literals of one
 // primitive kind (`0 | 1`) to that primitive. Other types are unchanged.
-func widenLiteralUnion(t types.Type) types.Type {
+func (c *Checker) widenLiteralUnion(t types.Type) types.Type {
 	union, ok := t.(*types.UnionType)
 	if !ok || len(union.Types) == 0 {
 		return t
@@ -367,7 +367,7 @@ func widenLiteralUnion(t types.Type) types.Type {
 		if _, isLit := member.(*types.LiteralType); !isLit {
 			return t
 		}
-		w := types.GetWidenedType(member)
+		w := c.rel.GetWidenedType(member)
 		if kind == nil {
 			kind = w
 		} else if kind != w {

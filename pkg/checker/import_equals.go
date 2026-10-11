@@ -149,7 +149,7 @@ func (c *Checker) resolveQualifiedValueQuietly(e *parser.MemberExpression) types
 	if container == nil {
 		return nil
 	}
-	if t := types.GetPropertyType(container, prop.Value, false); t != nil && t != types.Any {
+	if t := c.rel.GetPropertyType(container, prop.Value, false); t != nil && t != types.Any {
 		return t
 	}
 	return nil

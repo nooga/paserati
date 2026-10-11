@@ -28,7 +28,7 @@ func (c *Checker) globalThisType() types.Type {
 		}
 	}
 	add(c.globalScope)
-	add(globalEnvironment.Load())
+	add(c.builtinEnv)
 	obj.SetProperty("globalThis", obj)
 	obj.DisplayName = "typeof globalThis"
 	return obj

@@ -130,7 +130,7 @@ func (c *Checker) reportNonIndexable(node *parser.IndexExpression, leftType type
 // isDefinitelyInvalidIndexType reports whether a type can certainly not be used
 // as an index: booleans, bigint, null/undefined/void and object types. String,
 // number, symbol, enums, their literals and anything we cannot judge are fine.
-func isDefinitelyInvalidIndexType(t types.Type) bool {
+func (c *Checker) isDefinitelyInvalidIndexType(t types.Type) bool {
 	switch tt := t.(type) {
 	case *types.Primitive:
 		switch tt {
@@ -139,12 +139,12 @@ func isDefinitelyInvalidIndexType(t types.Type) bool {
 		}
 		return false
 	case *types.LiteralType:
-		return types.IsAssignable(tt, types.Boolean)
+		return c.rel.IsAssignable(tt, types.Boolean)
 	case *types.ObjectType:
 		return true
 	case *types.UnionType:
 		for _, member := range tt.Types {
-			if isDefinitelyInvalidIndexType(member) {
+			if c.isDefinitelyInvalidIndexType(member) {
 				return true
 			}
 		}
@@ -155,7 +155,7 @@ func isDefinitelyInvalidIndexType(t types.Type) bool {
 // reportInvalidIndexType reports TS2538 for an index expression whose key type
 // cannot be used to index an object.
 func (c *Checker) reportInvalidIndexType(node *parser.IndexExpression, indexType types.Type) {
-	if !isDefinitelyInvalidIndexType(indexType) {
+	if !c.isDefinitelyInvalidIndexType(indexType) {
 		return
 	}
 	c.addErrorWithCode(node.Index, errors.TS2538, "Type '"+indexType.String()+"' cannot be used as an index type.")

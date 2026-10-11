@@ -33,20 +33,7 @@ func isFreshLiteralExpression(node parser.Node) bool {
 	return false
 }
 
-// Initialize the prototype method resolver
-func init() {
-	// Set the prototype method resolver to use our new environment-based approach
-	types.SetPrototypeMethodResolver(getPrototypeMethodTypeFromGlobalEnv)
-}
 
-// getPrototypeMethodTypeFromGlobalEnv is the new prototype method resolver
-// that uses the environment's primitive prototype registry
-func getPrototypeMethodTypeFromGlobalEnv(primitiveName, methodName string) types.Type {
-	if env := globalEnvironment.Load(); env != nil {
-		return env.GetPrimitivePrototypeMethodType(primitiveName, methodName)
-	}
-	return nil
-}
 
 // getBuiltinType looks up a builtin type by name in the global environment
 func (c *Checker) getBuiltinType(name string) types.Type {
@@ -60,7 +47,7 @@ func (c *Checker) getBuiltinType(name string) types.Type {
 // isOptionalChaining determines whether to be permissive about missing properties
 // This is now a wrapper around the implementation in the types package.
 func (c *Checker) getPropertyTypeFromType(objectType types.Type, propertyName string, isOptionalChaining bool) types.Type {
-	return types.GetPropertyType(objectType, propertyName, isOptionalChaining)
+	return c.rel.GetPropertyType(objectType, propertyName, isOptionalChaining)
 }
 
 // resolveObjectMemberForDestructuring resolves a property access on an object
@@ -183,7 +170,7 @@ func (c *Checker) validatePropertyAgainstIndexSignatures(propName string, propTy
 	for _, indexSig := range indexSignatures {
 		if c.propertyMatchesIndexSignature(propName, indexSig) {
 			// Property matches this index signature's key pattern, validate value type
-			if !types.IsAssignable(propType, indexSig.ValueType) {
+			if !c.rel.IsAssignable(propType, indexSig.ValueType) {
 				errors = append(errors, IndexSignatureError{
 					PropertyName: propName,
 					PropertyType: propType,

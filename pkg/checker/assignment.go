@@ -32,7 +32,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 	} // Handle nil from error
 
 	// Widen types for operator checks
-	widenedLhsType := types.GetWidenedType(lhsType) // Needed for operator checks AND assignability target
+	widenedLhsType := c.rel.GetWidenedType(lhsType) // Needed for operator checks AND assignability target
 
 	// Operator-Specific Pre-Checks
 	validOperands := true
@@ -124,11 +124,11 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		targetType = c.expandIfMappedType(targetType)
 
 		excessReported := false
-		if node.Operator == "=" && types.IsAssignable(assignedType, targetType) && c.findExcessProperty(node.Value, targetType) != nil {
+		if node.Operator == "=" && c.rel.IsAssignable(assignedType, targetType) && c.findExcessProperty(node.Value, targetType) != nil {
 			c.reportNotAssignable(node.Left, node.Value, assignedType, targetType, headAssign)
 			excessReported = true
 		}
-		if !excessReported && !types.IsAssignable(assignedType, targetType) { // <<< Use targetType (usually widened LHS)
+		if !excessReported && !c.rel.IsAssignable(assignedType, targetType) { // <<< Use targetType (usually widened LHS)
 			// If the resolved type rejected the RHS, check if we're in a narrowing scope
 			// where the declared type is wider and would accept the assignment.
 			// This handles: if (x === null) { x = "default"; } where x: string | null
@@ -137,7 +137,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			if identLHS, isIdent := node.Left.(*parser.Identifier); isIdent {
 				declaredType := c.env.ResolveDeclaredType(identLHS.Value)
 				if declaredType != nil && declaredType != targetType {
-					if types.IsAssignable(assignedType, declaredType) {
+					if c.rel.IsAssignable(assignedType, declaredType) {
 						allowAssignment = true
 					}
 				}
@@ -145,7 +145,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 
 			// Special case for ??=
 			if !allowAssignment && node.Operator == "??=" && (lhsType == types.Null || lhsType == types.Undefined) {
-				if types.IsAssignable(assignedType, widenedLhsType) {
+				if c.rel.IsAssignable(assignedType, widenedLhsType) {
 					allowAssignment = true
 				}
 			}
@@ -167,7 +167,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			if rhsType != nil && rhsType != types.Any {
 				_, isConst, found := c.env.Resolve(identLHS.Value)
 				// A rejected assignment leaves the declared type in place.
-				if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil && !types.IsAssignable(types.GetWidenedType(rhsType), declared) {
+				if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil && !c.rel.IsAssignable(c.rel.GetWidenedType(rhsType), declared) {
 					found = false
 				} else if declared == types.Any || declared == types.Unknown {
 					// A declared any (or unknown) is never narrowed by assignment.
@@ -175,11 +175,11 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 				}
 				if found && !isConst {
 					// Update the type in the nearest defining scope to the widened RHS type
-					widenedRhs := types.GetWidenedType(rhsType)
+					widenedRhs := c.rel.GetWidenedType(rhsType)
 					// The declared union reduced to what the value can be
 					// (`r.D = {}` leaves the object member, not `{}`).
 					if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil {
-						if reduced := assignmentReducedType(declared, widenedRhs); reduced != nil {
+						if reduced := c.assignmentReducedType(declared, widenedRhs); reduced != nil {
 							widenedRhs = reduced
 						}
 					}
@@ -199,15 +199,15 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			if rhsType != nil {
 				key := expressionToNarrowingKey(memberLHS)
 				if key != "" {
-					widenedRhs := types.GetWidenedType(rhsType)
+					widenedRhs := c.rel.GetWidenedType(rhsType)
 					if c.hasNarrowingInChain(key) {
 						if declared := c.resolveMemberExpressionOriginalType(key); declared != nil {
-							if reduced := assignmentReducedType(declared, widenedRhs); reduced != nil {
+							if reduced := c.assignmentReducedType(declared, widenedRhs); reduced != nil {
 								widenedRhs = reduced
 							}
 						}
 						c.updateNarrowingInChain(key, widenedRhs)
-					} else if narrowed := assignmentReducedType(memberLHS.GetComputedType(), widenedRhs); narrowed != nil {
+					} else if narrowed := c.assignmentReducedType(memberLHS.GetComputedType(), widenedRhs); narrowed != nil {
 						// `st.n = (st.n || 0) + 1` leaves st.n a number (#635).
 						c.env.narrowings[key] = narrowed
 					}
@@ -224,7 +224,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			kept = types.RemoveNullishTypes(kept)
 		}
 		if kept != nil && kept != types.Never && kept != types.Any && rhsType != types.Any {
-			joined := types.NewUnionType(kept, types.GetWidenedType(rhsType))
+			joined := types.NewUnionType(kept, c.rel.GetWidenedType(rhsType))
 			if ident, ok := node.Left.(*parser.Identifier); ok {
 				if _, isConst, found := c.env.Resolve(ident.Value); found && !isConst {
 					c.env.UpdateInChain(ident.Value, joined)
@@ -262,7 +262,7 @@ func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructur
 	}
 
 	// 2. Validate that RHS is array-like type
-	widenedRhsType := types.GetWidenedType(rhsType)
+	widenedRhsType := c.rel.GetWidenedType(rhsType)
 	var elementType types.Type
 
 	if arrayType, ok := widenedRhsType.(*types.ArrayType); ok {
@@ -353,7 +353,7 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 
 			// Check that default value is assignable to expected element type
 			if targetType != types.Undefined && targetType != types.Any {
-				if !types.IsAssignable(defaultType, targetType) {
+				if !c.rel.IsAssignable(defaultType, targetType) {
 					c.addErrorWithCode(element.Default, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", defaultType.String(), targetType.String()))
 				}
 			}
@@ -389,7 +389,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 	c.checkDestructuringExcess(node.Properties, node.RestProperty != nil, node.Value)
 
 	// 2. Widen the RHS type for compatibility checking
-	widenedRhsType := types.GetWidenedType(rhsType)
+	widenedRhsType := c.rel.GetWidenedType(rhsType)
 
 	// 3. Validate that RHS is object-like (has properties)
 	if widenedRhsType != types.Any {
@@ -446,7 +446,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 
 			// Check that default value is assignable to expected property type
 			if propType != types.Undefined && propType != types.Any {
-				if !types.IsAssignable(defaultType, propType) {
+				if !c.rel.IsAssignable(defaultType, propType) {
 					c.addErrorWithCode(prop.Default, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", defaultType.String(), propType.String()))
 				}
 			}
@@ -512,7 +512,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 
 // assignmentReducedType is the declared union narrowed by an assignment: the
 // members the assigned type can be. It returns nil when nothing narrows.
-func assignmentReducedType(declared, assigned types.Type) types.Type {
+func (c *Checker) assignmentReducedType(declared, assigned types.Type) types.Type {
 	union, ok := declared.(*types.UnionType)
 	if !ok || assigned == nil || assigned == types.Any {
 		return nil
@@ -524,7 +524,7 @@ func assignmentReducedType(declared, assigned types.Type) types.Type {
 	var kept []types.Type
 	for _, m := range union.Types {
 		for _, a := range assignedMembers {
-			if types.IsAssignable(a, m) {
+			if c.rel.IsAssignable(a, m) {
 				kept = append(kept, m)
 				break
 			}

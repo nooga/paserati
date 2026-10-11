@@ -103,7 +103,7 @@ func RemoveFalsyTypes(t Type) Type {
 // asymmetry is deliberate on its part: `a || 2` is usually a defaulting
 // idiom where the literal is incidental, whereas `a && b` is usually a guard
 // whose literal result the caller cares about.
-func UnionWithSubtypeReduction(ts ...Type) Type {
+func (r *Relation) UnionWithSubtypeReduction(ts ...Type) Type {
 	union := NewUnionType(ts...)
 	members, ok := union.(*UnionType)
 	if !ok {
@@ -116,10 +116,10 @@ func UnionWithSubtypeReduction(ts ...Type) Type {
 			if i == j || candidate.Equals(other) {
 				continue
 			}
-			if IsAssignable(candidate, other) {
+			if r.IsAssignable(candidate, other) {
 				// Mutually assignable members (`Record<string, T>` and a
 				// fresh `{}`) reduce to the earlier one.
-				if j < i || !IsAssignable(other, candidate) {
+				if j < i || !r.IsAssignable(other, candidate) {
 					covered = true
 					break
 				}

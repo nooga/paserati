@@ -36,7 +36,7 @@ func (c *Checker) isValidComputedPropertyNameType(t types.Type) bool {
 	}
 	if union, ok := t.(*types.UnionType); ok {
 		for _, member := range union.Types {
-			if !c.isValidComputedPropertyNameType(types.GetWidenedType(member)) {
+			if !c.isValidComputedPropertyNameType(c.rel.GetWidenedType(member)) {
 				return false
 			}
 		}
@@ -60,10 +60,10 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 			elemType = stripReadonlyArrays(elemType)
 			if arrayType, isArray := elemType.(*types.ArrayType); isArray {
 				// Use the element type of the spread array
-				generalizedType := types.DeeplyWidenType(arrayType.ElementType)
+				generalizedType := c.rel.DeeplyWidenType(arrayType.ElementType)
 				generalizedElementTypes = append(generalizedElementTypes, generalizedType)
 			} else if c.isSpreadableIterableType(elemType) {
-				generalizedElementTypes = append(generalizedElementTypes, types.DeeplyWidenType(c.getSpreadElementType(elemType)))
+				generalizedElementTypes = append(generalizedElementTypes, c.rel.DeeplyWidenType(c.getSpreadElementType(elemType)))
 			} else if elemType == types.Any {
 				// Spread of 'any' contributes 'any' element type
 				generalizedElementTypes = append(generalizedElementTypes, types.Any)
@@ -74,7 +74,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 			}
 		} else {
 			// Regular element
-			generalizedType := types.DeeplyWidenType(elemType)
+			generalizedType := c.rel.DeeplyWidenType(elemType)
 			generalizedElementTypes = append(generalizedElementTypes, generalizedType)
 		}
 	}
@@ -153,7 +153,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 					if et == nil {
 						et = types.Any
 					}
-					elemTypes[i] = types.GetWidenedType(et)
+					elemTypes[i] = c.rel.GetWidenedType(et)
 				}
 				node.SetComputedType(&types.TupleType{ElementTypes: elemTypes})
 				return
@@ -210,7 +210,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 			}
 
 			// Check if the element type is assignable to the expected tuple element type
-			if !types.IsAssignable(actualElemType, expectedElemType) {
+			if !c.rel.IsAssignable(actualElemType, expectedElemType) {
 				elementTypesMatch = false
 				if checkerDebug {
 					debugPrintf("// [Checker ArrayLitContext] Element %d type mismatch: expected %s, got %s\n", i, expectedElemType.String(), actualElemType.String())
@@ -254,13 +254,13 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 
 				// Validate that the spread array's element type is assignable to expected element type
 				if spreadArrayType, isArray := spreadType.(*types.ArrayType); isArray {
-					if !types.IsAssignable(spreadArrayType.ElementType, arrayType.ElementType) {
+					if !c.rel.IsAssignable(spreadArrayType.ElementType, arrayType.ElementType) {
 						c.addErrorAtStart(elemNode, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.",
 							spreadArrayType.ElementType.String(), arrayType.ElementType.String()))
 					}
 				} else if c.isSpreadableIterableType(spreadType) {
 					spreadElementType := c.getSpreadElementType(spreadType)
-					if !types.IsAssignable(spreadElementType, arrayType.ElementType) {
+					if !c.rel.IsAssignable(spreadElementType, arrayType.ElementType) {
 						c.addErrorAtStart(elemNode, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.",
 							spreadElementType.String(), arrayType.ElementType.String()))
 					}
@@ -357,7 +357,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 			if argType == nil {
 				argType = types.Any
 			}
-			widenedType := types.GetWidenedType(argType)
+			widenedType := c.rel.GetWidenedType(argType)
 			if spreadObjType, ok := widenedType.(*types.ObjectType); ok {
 				for propName, propType := range spreadObjType.Props() {
 					fields[propName] = propType
@@ -421,7 +421,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 
 		// Handle __proto__: value specially
 		if keyName == "__proto__" && !isShorthand {
-			widenedProtoType := types.GetWidenedType(valueType)
+			widenedProtoType := c.rel.GetWidenedType(valueType)
 			if protoObjType, ok := widenedProtoType.(*types.ObjectType); ok {
 				for propName, propType := range protoObjType.Props() {
 					if _, exists := fields[propName]; !exists {
@@ -478,7 +478,7 @@ func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type)
 		// (#616); the constraint's known properties carry over when it has
 		// object shape.
 		if p := spreadType.Parameter; p != nil && p.Constraint != nil {
-			c.mergeSpreadOperand(fields, types.GetWidenedType(p.Constraint))
+			c.mergeSpreadOperand(fields, c.rel.GetWidenedType(p.Constraint))
 		}
 		return true
 	case *types.LiteralType:
@@ -537,7 +537,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			}
 
 			// Check if the type can be spread (is an object type)
-			widenedType := c.apparentType(types.GetWidenedType(argType))
+			widenedType := c.apparentType(c.rel.GetWidenedType(argType))
 			if !c.mergeSpreadOperand(fields, widenedType) {
 				c.addErrorWithCode(key.Argument, errors.TS2698, "Spread types may only be created from object types.")
 			}
@@ -550,7 +550,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			// Keep object literal checks conservative because JavaScript object literal
 			// keys support runtime ToPropertyKey coercion and the smoke suite covers it.
 			if keyExprType := key.Expr.GetComputedType(); keyExprType != nil {
-				widenedKeyType := types.GetWidenedType(keyExprType)
+				widenedKeyType := c.rel.GetWidenedType(keyExprType)
 				switch widenedKeyType {
 				case types.Boolean, types.Null, types.Undefined, types.Void, types.Never:
 					c.addErrorWithCode(key, errors.TS2464, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
@@ -670,7 +670,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 						// (isShorthand was detected earlier in the loop)
 						if keyName == "__proto__" && !isShorthand {
 							// __proto__: value sets the prototype, so merge its properties into the object type
-							widenedProtoType := types.GetWidenedType(valueType)
+							widenedProtoType := c.rel.GetWidenedType(valueType)
 							if protoObjType, ok := widenedProtoType.(*types.ObjectType); ok {
 								// Merge prototype properties into our object
 								for propName, propType := range protoObjType.Props() {
@@ -1291,7 +1291,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			objectType := node.Object.GetComputedType()
 			if objectType != nil {
 				propertyName := c.extractPropertyName(node.Property)
-				if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
+				if objType, ok := c.rel.GetWidenedType(objectType).(*types.ObjectType); ok {
 					propType, found := objType.Props()[propertyName]
 					directProperty := found
 					if !found {
@@ -1348,7 +1348,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					objectType := node.Object.GetComputedType()
 					if objectType != nil {
 						propertyName := c.extractPropertyName(node.Property)
-						if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
+						if objType, ok := c.rel.GetWidenedType(objectType).(*types.ObjectType); ok {
 							propType, found := objType.Props()[propertyName]
 							directProperty := found
 							if !found {
@@ -1405,7 +1405,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	propertyName := c.extractPropertyName(node.Property)
 
 	// 3. Widen the object type for checks
-	widenedObjectType := types.GetWidenedType(objectType)
+	widenedObjectType := c.rel.GetWidenedType(objectType)
 	// Reading through `readonly T` is reading T. Unwrap it unless the inner
 	// type is one the ReadonlyType case below handles itself (objects, and
 	// arrays/tuples, whose mutators readonly hides): a type parameter or
@@ -1415,7 +1415,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			// A recursive generic alias (`DeepReadonly<T[K]>`) left as a
 			// forward reference: resolve it now that its arguments are known.
 			if resolved := c.instantiateAliasReference(ref); resolved != nil {
-				widenedObjectType = types.GetWidenedType(resolved)
+				widenedObjectType = c.rel.GetWidenedType(resolved)
 				continue
 			}
 			break
@@ -1436,7 +1436,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			widenedObjectType = ro.InnerType
 			continue
 		default:
-			widenedObjectType = types.GetWidenedType(ro.InnerType)
+			widenedObjectType = c.rel.GetWidenedType(ro.InnerType)
 			continue
 		}
 		break
@@ -2030,7 +2030,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 
 	// Widen literal types to their base types before checking indexability
 	// This allows "lol"[1] to be treated as string[number]
-	leftType = types.GetWidenedType(leftType)
+	leftType = c.rel.GetWidenedType(leftType)
 
 	// Expand MappedType (e.g., Record<string, string>) to ObjectType with index signatures
 	leftType = c.expandIfMappedType(leftType)
@@ -2052,14 +2052,14 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		case *types.ArrayType:
 			// Base is ArrayType
 			// 4. Check index type (number for array elements, string/symbol for properties)
-			if types.IsAssignable(indexType, types.Number) {
+			if c.rel.IsAssignable(indexType, types.Number) {
 				// Numeric index - accessing array elements
 				if base.ElementType != nil {
 					resultType = base.ElementType
 				} else {
 					resultType = types.Unknown
 				}
-			} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
+			} else if c.rel.IsAssignable(indexType, types.String) || c.rel.IsAssignable(indexType, types.Symbol) {
 				// String or Symbol index - accessing array properties (like Symbol.iterator)
 				resultType = types.Any // Arrays can have arbitrary properties
 			} else {
@@ -2069,7 +2069,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 
 		case *types.TupleType:
 			// Base is TupleType - can index with numeric literal or general number
-			if types.IsAssignable(indexType, types.Number) {
+			if c.rel.IsAssignable(indexType, types.Number) {
 				// Check if the index is a numeric literal - if so, we can get the exact element type
 				if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.IsNumber() {
 					indexValue := vm.AsNumber(litIndex.Value)
@@ -2102,7 +2102,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 						debugPrintf("// [Checker IndexExpr] Tuple general number index -> %s\n", resultType.String())
 					}
 				}
-			} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
+			} else if c.rel.IsAssignable(indexType, types.String) || c.rel.IsAssignable(indexType, types.Symbol) {
 				// String or Symbol index - accessing tuple properties (like length, Symbol.iterator)
 				resultType = types.Any
 			} else {
@@ -2113,7 +2113,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		case *types.ObjectType:
 			// Base is ObjectType
 			// Index must be string or number (or any)
-			widenedIndexType := types.GetWidenedType(indexType)
+			widenedIndexType := c.rel.GetWidenedType(indexType)
 
 			if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
 				if isIndexStringLiteral {
@@ -2144,7 +2144,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					// Index is a general string/number/any - check index signatures
 					found := false
 					for _, sig := range base.IndexSigs() {
-						w := types.GetWidenedType(indexType)
+						w := c.rel.GetWidenedType(indexType)
 						if sig.KeyType == w || sig.KeyType == types.Any {
 							resultType = sig.ValueType
 							found = true
@@ -2171,7 +2171,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				switch member := memberType.(type) {
 				case *types.ObjectType:
 					// Check if this member supports the index type
-					widenedIndexType := types.GetWidenedType(indexType)
+					widenedIndexType := c.rel.GetWidenedType(indexType)
 					if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
 						// For union types with object members, we can't determine the specific property
 						// Return 'any' for the property access (conservative approach)
@@ -2182,7 +2182,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					}
 				case *types.ArrayType:
 					// Check if index is number for array member
-					if types.IsAssignable(indexType, types.Number) {
+					if c.rel.IsAssignable(indexType, types.Number) {
 						if member.ElementType != nil {
 							possibleTypes = append(possibleTypes, member.ElementType)
 						} else {
@@ -2194,10 +2194,10 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					}
 				case *types.Primitive:
 					if member == types.String {
-						if types.IsAssignable(indexType, types.Number) {
+						if c.rel.IsAssignable(indexType, types.Number) {
 							// Numeric index - string character access
 							possibleTypes = append(possibleTypes, types.String)
-						} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
+						} else if c.rel.IsAssignable(indexType, types.String) || c.rel.IsAssignable(indexType, types.Symbol) {
 							// String/Symbol index - string property access
 							possibleTypes = append(possibleTypes, types.Any)
 						} else {
@@ -2226,7 +2226,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			// Allow indexing on strings?
 			if base == types.String {
 				// 4. Check index type (number for string characters, string/symbol for properties)
-				if types.IsAssignable(indexType, types.Number) {
+				if c.rel.IsAssignable(indexType, types.Number) {
 					// Numeric index - accessing string characters
 					resultType = types.String
 				} else if isIndexStringLiteral && isNumericPropertyName(indexStringValue) {
@@ -2237,7 +2237,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					if resultType == types.Never {
 						c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'string'.", indexStringValue))
 					}
-				} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
+				} else if c.rel.IsAssignable(indexType, types.String) || c.rel.IsAssignable(indexType, types.Symbol) {
 					// String or Symbol index - accessing string properties (like Symbol.iterator)
 					resultType = types.Any // String properties can have arbitrary types
 				} else {
@@ -2275,11 +2275,11 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		case *types.EnumType:
 			// Handle index access on enum types (reverse mapping for numeric enums)
 			// Check if this is a numeric index access
-			if types.IsAssignable(indexType, types.Number) {
+			if c.rel.IsAssignable(indexType, types.Number) {
 				// Allow reverse mapping for numeric indices (works for both numeric and heterogeneous enums)
 				resultType = types.String // Reverse mapping returns string member name
 				debugPrintf("// [Checker IndexExpr] Enum reverse mapping: %s[number] -> string\n", base.Name)
-			} else if types.IsAssignable(indexType, types.String) {
+			} else if c.rel.IsAssignable(indexType, types.String) {
 				// String index access - this is allowed but typically returns undefined for reverse mapping
 				// For type checking purposes, we'll allow it as it could return string | undefined
 				resultType = types.Any // In practice, this would be string | undefined
@@ -2296,9 +2296,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					// Check if this is a Generator type by looking for the next() method
 					if _, hasNext := baseObjectType.Props()["next"]; hasNext {
 						// This is likely a Generator or Iterator - allow Symbol indexing for Symbol.iterator
-						if types.IsAssignable(indexType, types.Symbol) {
+						if c.rel.IsAssignable(indexType, types.Symbol) {
 							resultType = types.Any // Symbol.iterator returns the iterator itself
-						} else if types.IsAssignable(indexType, types.String) {
+						} else if c.rel.IsAssignable(indexType, types.String) {
 							resultType = types.Any // String properties allowed
 						} else {
 							c.addError(node.Index, fmt.Sprintf("generator/iterator index must be of type string or symbol, got %s", indexType.String()))
@@ -2306,7 +2306,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 						}
 					} else {
 						// Generic object type - use general object indexing rules
-						widenedIndexType := types.GetWidenedType(indexType)
+						widenedIndexType := c.rel.GetWidenedType(indexType)
 						if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
 							resultType = types.Any
 						} else {
@@ -2380,9 +2380,9 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	propertyName := c.extractPropertyName(node.Property)
 
 	// 3. Widen the object type for checks
-	widenedObjectType := c.apparentType(types.GetWidenedType(objectType))
+	widenedObjectType := c.apparentType(c.rel.GetWidenedType(objectType))
 	if ro, ok := widenedObjectType.(*types.ReadonlyType); ok {
-		widenedObjectType = types.GetWidenedType(ro.InnerType)
+		widenedObjectType = c.rel.GetWidenedType(ro.InnerType)
 	}
 
 	var baseResultType types.Type = types.Never // Default to Never if property not found/invalid access
@@ -2553,13 +2553,13 @@ func (c *Checker) checkOptionalIndexExpression(node *parser.OptionalIndexExpress
 	}
 
 	// 3. Check that index type is valid (string, number, or symbol)
-	widenedIndexType := types.GetWidenedType(indexType)
+	widenedIndexType := c.rel.GetWidenedType(indexType)
 	if widenedIndexType != types.Any && widenedIndexType != types.String && widenedIndexType != types.Number && widenedIndexType != types.Symbol {
 		c.addError(node.Index, "Index signature parameter type must be 'string', 'number', 'symbol' or a template literal pattern")
 	}
 
 	// 4. Determine result type (similar to IndexExpression but with optional chaining)
-	widenedObjectType := types.GetWidenedType(objectType)
+	widenedObjectType := c.rel.GetWidenedType(objectType)
 	var baseResultType types.Type
 
 	if widenedObjectType == types.Any {
@@ -2618,7 +2618,7 @@ func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpressio
 	}
 
 	// 3. Determine result type
-	widenedFunctionType := types.GetWidenedType(functionType)
+	widenedFunctionType := c.rel.GetWidenedType(functionType)
 	var baseResultType types.Type
 
 	if widenedFunctionType == types.Any {
@@ -2852,12 +2852,12 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 
 										if c.isSpreadableIterableType(argType) {
 											spreadElementType := c.getSpreadElementType(argType)
-											if !types.IsAssignable(spreadElementType, variadicElementType) {
+											if !c.rel.IsAssignable(spreadElementType, variadicElementType) {
 												c.addError(spreadElement, fmt.Sprintf("spread element: cannot assign type '%s' to parameter element type '%s'", spreadElementType.String(), variadicElementType.String()))
 											}
 											continue
 										}
-										if !types.IsAssignable(argType, constructorSig.RestParameterType) {
+										if !c.rel.IsAssignable(argType, constructorSig.RestParameterType) {
 											c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), constructorSig.RestParameterType.String()))
 										}
 									} else {
@@ -2871,7 +2871,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 											continue
 										}
 
-										if !types.IsAssignable(argType, variadicElementType) {
+										if !c.rel.IsAssignable(argType, variadicElementType) {
 											c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
 										}
 									}
@@ -3006,7 +3006,7 @@ func (c *Checker) checkTypeofExpression(node *parser.TypeofExpression) {
 	// if the operand type is known
 	if operandType != types.Unknown && operandType != types.Any {
 		// Get a more precise result using the helper from types package
-		resultType := types.GetTypeofResult(operandType)
+		resultType := c.rel.GetTypeofResult(operandType)
 		if resultType != nil {
 			node.SetComputedType(resultType)
 			return
@@ -3145,9 +3145,9 @@ func (c *Checker) checkObjectLiteralSatisfies(objectLit *parser.ObjectLiteral, t
 	}
 
 	// First check if the source type is assignable to the target type
-	if !types.IsAssignable(sourceType, targetType) {
+	if !c.rel.IsAssignable(sourceType, targetType) {
 		c.addErrorWithCode(satisfiesNode.Expression, errors.TS1360, fmt.Sprintf("Type '%s' does not satisfy the expected type '%s'.",
-			types.GetWidenedType(sourceType).String(), targetType.String()))
+			c.rel.GetWidenedType(sourceType).String(), targetType.String()))
 		return
 	}
 
@@ -3179,10 +3179,10 @@ func (c *Checker) isValidTypeAssertion(sourceType, targetType types.Type) bool {
 	// checkAssertionDeferred: with the source's literal types replaced by
 	// their base types, the assertion is fine when the target is comparable
 	// to the source or the source is comparable to the target.
-	sourceBase := baseTypeOfLiterals(sourceType)
+	sourceBase := c.baseTypeOfLiterals(sourceType)
 	sourceBase = c.resolveStructural(sourceBase)
 	targetType = c.resolveStructural(targetType)
-	if types.IsComparable(targetType, sourceBase) || types.IsComparable(sourceBase, targetType) {
+	if c.rel.IsComparable(targetType, sourceBase) || c.rel.IsComparable(sourceBase, targetType) {
 		return true
 	}
 	return false
@@ -3190,15 +3190,15 @@ func (c *Checker) isValidTypeAssertion(sourceType, targetType types.Type) bool {
 
 // baseTypeOfLiterals replaces literal types (including those inside unions)
 // by their primitive base types.
-func baseTypeOfLiterals(t types.Type) types.Type {
+func (c *Checker) baseTypeOfLiterals(t types.Type) types.Type {
 	if u, ok := t.(*types.UnionType); ok {
 		members := make([]types.Type, len(u.Types))
 		for i, m := range u.Types {
-			members[i] = baseTypeOfLiterals(m)
+			members[i] = c.baseTypeOfLiterals(m)
 		}
 		return types.NewUnionType(members...)
 	}
-	return types.GetWidenedType(t)
+	return c.rel.GetWidenedType(t)
 }
 
 // isPrimitiveType checks if a type is a primitive type
@@ -3266,7 +3266,7 @@ func (c *Checker) isObjectType(t types.Type) bool {
 func (c *Checker) checkInstanceofOperator(leftType, rightType types.Type, node *parser.InfixExpression) {
 	// TS2358: the left operand must be `any`, an object type or a type
 	// parameter - a primitive can never be an instance of anything.
-	if leftType != nil && isPrimitiveOperandType(leftType) {
+	if leftType != nil && c.isPrimitiveOperandType(leftType) {
 		c.addErrorWithCode(node.Left, errors.TS2358, "The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter.")
 	}
 
@@ -3814,7 +3814,7 @@ func (c *Checker) builtinGenericCtorResult(ctor types.Type, typeArgs []types.Typ
 	args := make([]types.Type, len(instance.TypeParameters))
 	var inferred []types.Type
 	if len(typeArgs) == 0 && (instance.Name == "Map" || instance.Name == "Set") {
-		inferred = inferCollectionTypeArgs(len(args), callArgs)
+		inferred = c.inferCollectionTypeArgs(len(args), callArgs)
 	}
 	for i := range args {
 		switch {
@@ -3847,7 +3847,7 @@ func stringIndexValueType(obj *types.ObjectType) types.Type {
 // `new Set(items)` from the iterable written as the argument: the union of the
 // (widened) key and value types of the entries, or of the items. It returns nil
 // when the argument says nothing (`new Map()`, a non-literal iterable).
-func inferCollectionTypeArgs(paramCount int, callArgs []parser.Expression) []types.Type {
+func (c *Checker) inferCollectionTypeArgs(paramCount int, callArgs []parser.Expression) []types.Type {
 	if len(callArgs) == 0 {
 		return nil
 	}
@@ -3856,7 +3856,7 @@ func inferCollectionTypeArgs(paramCount int, callArgs []parser.Expression) []typ
 		if t == nil {
 			return nil
 		}
-		return types.DeeplyWidenType(t)
+		return c.rel.DeeplyWidenType(t)
 	}
 	union := func(ts []types.Type) types.Type {
 		if len(ts) == 0 {

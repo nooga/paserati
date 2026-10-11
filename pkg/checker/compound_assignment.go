@@ -12,8 +12,8 @@ import (
 // trust a verdict about it: primitives, literals and plain object types.
 // Unions, type parameters and the like are left alone rather than risk a
 // diagnostic TypeScript would not give.
-func isJudgeableOperandType(t types.Type) bool {
-	switch types.GetWidenedType(t).(type) {
+func (c *Checker) isJudgeableOperandType(t types.Type) bool {
+	switch c.rel.GetWidenedType(t).(type) {
 	case *types.Primitive, *types.LiteralType, *types.ObjectType:
 		return true
 	}
@@ -26,16 +26,16 @@ func isJudgeableOperandType(t types.Type) bool {
 // produces (which is what must be assignable to the target) and whether the
 // operands were acceptable.
 func (c *Checker) compoundAssignmentResult(node *parser.AssignmentExpression, lhs, rhs types.Type) (types.Type, bool) {
-	wl, wr := types.GetWidenedType(lhs), types.GetWidenedType(rhs)
+	wl, wr := c.rel.GetWidenedType(lhs), c.rel.GetWidenedType(rhs)
 	if wl == types.Any || wr == types.Any {
 		return types.Any, true
 	}
-	if !isJudgeableOperandType(lhs) || !isJudgeableOperandType(rhs) {
+	if !c.isJudgeableOperandType(lhs) || !c.isJudgeableOperandType(rhs) {
 		// Cannot judge; assume the operation is fine and yields the target type.
 		return lhs, true
 	}
-	leftNumeric := isArithmeticOperandType(lhs) && wl != types.BigInt
-	rightNumeric := isArithmeticOperandType(rhs) && wr != types.BigInt
+	leftNumeric := c.isArithmeticOperandType(lhs) && wl != types.BigInt
+	rightNumeric := c.isArithmeticOperandType(rhs) && wr != types.BigInt
 	bothNumeric := leftNumeric && rightNumeric
 	bothBigInt := wl == types.BigInt && wr == types.BigInt
 	notApplicable := func() (types.Type, bool) {
@@ -55,8 +55,8 @@ func (c *Checker) compoundAssignmentResult(node *parser.AssignmentExpression, lh
 		return notApplicable()
 	}
 	// -=, *=, /=, %=, **=, &=, |=, ^=, <<=, >>=, >>>= need numeric operands.
-	leftOk := isArithmeticOperandType(lhs)
-	rightOk := isArithmeticOperandType(rhs)
+	leftOk := c.isArithmeticOperandType(lhs)
+	rightOk := c.isArithmeticOperandType(rhs)
 	if leftOk && rightOk {
 		if bothBigInt {
 			return types.BigInt, true

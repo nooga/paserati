@@ -101,7 +101,7 @@ func (c *Checker) varTypesClearlyDiffer(a, b types.Type, bothAnnotated bool) boo
 		!containsAny(a, 0) && !containsAny(b, 0) {
 		// Both sides are built from kinds the relation models (including
 		// function and object literal types): use the real identity relation.
-		return !types.IsIdenticalType(a, b)
+		return !c.rel.IsIdenticalType(a, b)
 	}
 	ka, kb := identityKind(a), identityKind(b)
 	if ka == "" || kb == "" {
@@ -187,9 +187,9 @@ func (c *Checker) checkSecondaryTopLevelVar(name *parser.Identifier, typeAnnotat
 		case initType == nil:
 			declType = types.Any
 		case isFreshLiteralExpression(initializer):
-			declType = types.GetWidenedType(initType)
+			declType = c.rel.GetWidenedType(initType)
 		default:
-			declType = types.DeeplyWidenType(initType)
+			declType = c.rel.DeeplyWidenType(initType)
 		}
 	} else if initType != nil && !c.assignableToFresh(initializer, initType, declType) {
 		c.reportNotAssignable(name, initializer, initType, declType, headAssign)

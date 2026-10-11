@@ -20,21 +20,11 @@ func propsDebugPrintf(format string, args ...interface{}) {
 // This type is used to decouple the types package from builtins
 type GetMethodType func(objectType string, methodName string) Type
 
-// prototypeMethodResolver is used to resolve prototype methods
-// This will be set by the checker package to avoid circular imports
-var prototypeMethodResolver GetMethodType
-
-// SetPrototypeMethodResolver sets the resolver for prototype methods
-// This should be called by the checker package during initialization
-func SetPrototypeMethodResolver(resolver GetMethodType) {
-	prototypeMethodResolver = resolver
-}
-
 // GetPropertyType returns the type of a property access on the given type
 // isOptionalChaining determines whether to be permissive about missing properties
-func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bool) Type {
+func (r *Relation) GetPropertyType(objectType Type, propertyName string, isOptionalChaining bool) Type {
 	// Widen the object type for checks
-	widenedObjectType := GetWidenedType(objectType)
+	widenedObjectType := r.GetWidenedType(objectType)
 	propsDebugPrintf("GetPropertyType: objectType=%T (%s), propertyName=%s, widened=%T (%s)\n",
 		objectType, objectType.String(), propertyName, widenedObjectType, widenedObjectType.String())
 
@@ -47,8 +37,8 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 			return Number // string.length is number
 		} else {
 			// Check prototype registry for String methods
-			if prototypeMethodResolver != nil {
-				if methodType := prototypeMethodResolver("string", propertyName); methodType != nil {
+			if r.PrototypeMethods != nil {
+				if methodType := r.PrototypeMethods("string", propertyName); methodType != nil {
 					return methodType
 				}
 			}
@@ -60,29 +50,29 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 			return Never
 		}
 	} else if widenedObjectType == Number {
-		if prototypeMethodResolver != nil {
-			if methodType := prototypeMethodResolver("number", propertyName); methodType != nil {
+		if r.PrototypeMethods != nil {
+			if methodType := r.PrototypeMethods("number", propertyName); methodType != nil {
 				return methodType
 			}
 		}
 		return Never
 	} else if widenedObjectType == Boolean {
-		if prototypeMethodResolver != nil {
-			if methodType := prototypeMethodResolver("boolean", propertyName); methodType != nil {
+		if r.PrototypeMethods != nil {
+			if methodType := r.PrototypeMethods("boolean", propertyName); methodType != nil {
 				return methodType
 			}
 		}
 		return Never
 	} else if widenedObjectType == Symbol {
-		if prototypeMethodResolver != nil {
-			if methodType := prototypeMethodResolver("symbol", propertyName); methodType != nil {
+		if r.PrototypeMethods != nil {
+			if methodType := r.PrototypeMethods("symbol", propertyName); methodType != nil {
 				return methodType
 			}
 		}
 		return Never
 	} else if widenedObjectType == BigInt {
-		if prototypeMethodResolver != nil {
-			if methodType := prototypeMethodResolver("bigint", propertyName); methodType != nil {
+		if r.PrototypeMethods != nil {
+			if methodType := r.PrototypeMethods("bigint", propertyName); methodType != nil {
 				return methodType
 			}
 		}
@@ -95,8 +85,8 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 				return Number // Array.length is number
 			} else {
 				// Check prototype registry for Array methods
-				if prototypeMethodResolver != nil {
-					if methodType := prototypeMethodResolver("array", propertyName); methodType != nil {
+				if r.PrototypeMethods != nil {
+					if methodType := r.PrototypeMethods("array", propertyName); methodType != nil {
 						return methodType
 					}
 				}
@@ -114,8 +104,8 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 				}
 			} else {
 				// Property not found in object's own properties, check Object.prototype
-				if prototypeMethodResolver != nil {
-					if prototypeMethodType := prototypeMethodResolver("object", propertyName); prototypeMethodType != nil {
+				if r.PrototypeMethods != nil {
+					if prototypeMethodType := r.PrototypeMethods("object", propertyName); prototypeMethodType != nil {
 						return prototypeMethodType
 					}
 				}
@@ -139,12 +129,12 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 		// Legacy FunctionType and CallableType cases removed - use ObjectType with CallSignatures instead
 		case *IntersectionType:
 			// Handle property access on intersection types
-			return GetPropertyTypeFromIntersection(obj, propertyName)
+			return r.GetPropertyTypeFromIntersection(obj, propertyName)
 		case *InstantiatedType:
 			// Handle property access on instantiated generic types (e.g., Iterator<number>)
 			// Substitute the type parameters and recursively get the property
 			substituted := obj.Substitute()
-			return GetPropertyType(substituted, propertyName, isOptionalChaining)
+			return r.GetPropertyType(substituted, propertyName, isOptionalChaining)
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			return Never
@@ -155,11 +145,11 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 // GetPropertyTypeFromIntersection returns the type of a property accessed on an intersection type.
 // The property exists if it exists on ANY of the constituent types.
 // The resulting type is the intersection of the property types from all types that have it.
-func GetPropertyTypeFromIntersection(intersection *IntersectionType, propertyName string) Type {
+func (r *Relation) GetPropertyTypeFromIntersection(intersection *IntersectionType, propertyName string) Type {
 	var resultTypes []Type
 
 	for _, member := range intersection.Types {
-		propType := GetPropertyType(member, propertyName, false)
+		propType := r.GetPropertyType(member, propertyName, false)
 		if propType != Never {
 			// Property exists on this member - collect its type
 			resultTypes = append(resultTypes, propType)

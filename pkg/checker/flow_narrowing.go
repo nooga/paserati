@@ -187,7 +187,7 @@ func (f *flowNarrowState) observeExpressionStatement(c *Checker, node *parser.Ex
 	if rhsType != nil {
 		// `x = f()` narrows a declared union to the members f() can be.
 		declared := c.env.ResolveDeclaredType(ident.Value)
-		if reduced := assignmentReducedType(declared, types.GetWidenedType(rhsType)); reduced != nil {
+		if reduced := c.assignmentReducedType(declared, c.rel.GetWidenedType(rhsType)); reduced != nil {
 			f.track(ident.Value, reduced)
 		}
 	}
@@ -205,11 +205,11 @@ func (f *flowNarrowState) observeLogicalAssignment(c *Checker, name string, assi
 	if kept == types.Never {
 		kept = nil
 	}
-	joined := types.GetWidenedType(rhsType)
+	joined := c.rel.GetWidenedType(rhsType)
 	if kept != nil {
 		joined = types.NewUnionType(kept, joined)
 	}
-	if declared := c.env.ResolveDeclaredType(name); declared != nil && types.IsAssignable(joined, declared) && !c.typesEqual(joined, declared) {
+	if declared := c.env.ResolveDeclaredType(name); declared != nil && c.rel.IsAssignable(joined, declared) && !c.typesEqual(joined, declared) {
 		f.track(name, joined)
 	}
 }

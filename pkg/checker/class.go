@@ -519,7 +519,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 			if defaultType := c.resolveTypeAnnotation(param.DefaultType); defaultType != nil {
 				typeParam.Default = defaultType
 
-				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
+				if typeParam.Constraint != nil && !c.rel.IsAssignable(defaultType, typeParam.Constraint) {
 					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
 				}
 			}
@@ -1441,7 +1441,7 @@ func (c *Checker) inferSimpleMethodReturnType(fn *parser.FunctionLiteral) types.
 	if returnType == nil {
 		return types.Any
 	}
-	return types.DeeplyWidenType(returnType)
+	return c.rel.DeeplyWidenType(returnType)
 }
 
 // inferPropertyType determines the type of a class property
@@ -1488,7 +1488,7 @@ func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type 
 			// A mutable property takes the widened type of its initializer
 			// (`foo = 1` is a number); readonly properties keep the literal.
 			if !prop.Readonly && isWideningInitializer(prop.Value) {
-				propType = types.DeeplyWidenType(initType)
+				propType = c.rel.DeeplyWidenType(initType)
 			}
 		} else {
 			propType = types.Any
@@ -2316,7 +2316,7 @@ func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, i
 // and the class has a concrete method implementation (ObjectType with call signatures)
 func (c *Checker) isCompatibleWithInterfaceProperty(classProperty, interfaceProperty types.Type) bool {
 	// First try the standard assignability check
-	if types.IsAssignable(classProperty, interfaceProperty) {
+	if c.rel.IsAssignable(classProperty, interfaceProperty) {
 		return true
 	}
 

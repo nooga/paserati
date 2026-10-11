@@ -2,17 +2,11 @@ package checker
 
 import (
 	"fmt"
-	"sync/atomic"
 
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
-
-// Global environment for prototype method resolution
-// This is shared with type_utils.go. Atomic because independent checkers
-// on other goroutines replace it (#606).
-var globalEnvironment atomic.Pointer[Environment]
 
 // --- NEW: Symbol Information ---
 type SymbolInfo struct {
@@ -159,16 +153,6 @@ func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environme
 		if err := init.InitTypes(typeCtx); err != nil {
 			fmt.Printf("Warning: failed to initialize %s types: %v\n", init.Name(), err)
 		}
-	}
-
-	// Set this as the global environment for prototype method resolution
-	// Note: This is used by the types package for property resolution
-	globalEnvironment.Store(env)
-	types.PrimitivePrototypeMembers = func(kind string) map[string]types.Type {
-		if proto, ok := env.primitivePrototypes[kind]; ok {
-			return proto.Props()
-		}
-		return nil
 	}
 
 	return env

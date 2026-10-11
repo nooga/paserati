@@ -1485,7 +1485,7 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 			defaultValueType := paramNode.DefaultValue.GetComputedType()
 			if defaultValueType != nil {
 				// Widen literal types for parameter inference (like let/const inference)
-				resolvedParamType = types.GetWidenedType(defaultValueType)
+				resolvedParamType = c.rel.GetWidenedType(defaultValueType)
 				paramName := "<destructuring>"
 				if paramNode.Name != nil {
 					paramName = paramNode.Name.Value
@@ -1717,7 +1717,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 				}
 				arg, constraint := argType, constraintType
 				c.deferRelationCheck(func() {
-					if types.IsAssignable(arg, constraint) {
+					if c.rel.IsAssignable(arg, constraint) {
 						return
 					}
 					msg := fmt.Sprintf("Type '%s' does not satisfy the constraint '%s'.", arg.String(), constraint.String())
@@ -1731,7 +1731,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			}
 
 			// Check if the type argument satisfies the constraint
-			if !types.IsAssignable(argType, constraintType) {
+			if !c.rel.IsAssignable(argType, constraintType) {
 				// Create a more detailed error message with proper node position
 				errorMsg := fmt.Sprintf("Type '%s' does not satisfy the constraint '%s'.",
 					argType.String(), constraintType.String())
@@ -2748,7 +2748,7 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 	}
 
 	// Fallback to basic assignability check without inference
-	if types.IsAssignable(checkType, extendsType) {
+	if c.rel.IsAssignable(checkType, extendsType) {
 		if checkerDebug {
 			debugPrintf("// [ConditionalType] YES: %s extends %s -> %s\n", checkType.String(), extendsType.String(), trueType.String())
 		}
@@ -3334,7 +3334,7 @@ func (c *Checker) isAssignableWithExpansion(source, target types.Type) bool {
 	expandedSource := c.expandIfMappedType(source)
 
 	// Use the standard assignability check with expanded types
-	result := types.IsAssignable(expandedSource, expandedTarget)
+	result := c.rel.IsAssignable(expandedSource, expandedTarget)
 	debugPrintf("// [Checker] isAssignableWithExpansion result: %v\n", result)
 	return result
 }
@@ -3343,7 +3343,7 @@ func (c *Checker) isAssignableWithExpansion(source, target types.Type) bool {
 // used specifically for checking a value passed as a call argument against
 // its parameter type. It additionally tolerates a `void`-returning function
 // argument wherever the parameter's declared type is itself a function type
-// (see types.IsAssignableForCallArgument for why this is scoped to call
+// (see types.Relation.IsAssignableForCallArgument for why this is scoped to call
 // arguments rather than general assignability).
 func (c *Checker) isArgumentAssignableWithExpansion(source, target types.Type) bool {
 	source = c.resolveTypeofTypeIfNeeded(source)
@@ -3352,7 +3352,7 @@ func (c *Checker) isArgumentAssignableWithExpansion(source, target types.Type) b
 	expandedTarget := c.expandIfMappedType(target)
 	expandedSource := c.expandIfMappedType(source)
 
-	return types.IsAssignableForCallArgument(expandedSource, expandedTarget)
+	return c.rel.IsAssignableForCallArgument(expandedSource, expandedTarget)
 }
 
 // expandIfMappedType expands a type if it's a mapped type or contains a mapped type
@@ -3578,7 +3578,7 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 
 	default:
 		// For other types, check if they're structurally compatible
-		return types.IsAssignable(checkType, extendsType)
+		return c.rel.IsAssignable(checkType, extendsType)
 	}
 }
 

@@ -121,9 +121,9 @@ func IsLiteral(t Type) bool {
 
 // GetTypeofResult returns the TypeScript-compatible string literal representing
 // the result of the typeof operator when applied to a value of the given type
-func GetTypeofResult(t Type) Type {
+func (r *Relation) GetTypeofResult(t Type) Type {
 	// Widen the type first
-	widened := GetWidenedType(t)
+	widened := r.GetWidenedType(t)
 
 	switch widened {
 	case String:

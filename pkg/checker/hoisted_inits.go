@@ -105,7 +105,7 @@ func (c *Checker) widenedDeclarationType(initializer parser.Expression, computed
 	if _, isBareLiteral := computed.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) {
 		return computed
 	}
-	widened := types.DeeplyWidenType(computed)
+	widened := c.rel.DeeplyWidenType(computed)
 	if !isConstVarLikeName(name, env) {
 		widened = types.WidenEnumMember(widened)
 	}

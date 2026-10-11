@@ -171,7 +171,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				objType := memberFunc.Object.GetComputedType()
 				if objType != nil {
 					propName := c.extractPropertyName(memberFunc.Property)
-					if widened, ok := types.GetWidenedType(objType).(*types.ObjectType); ok {
+					if widened, ok := c.rel.GetWidenedType(objType).(*types.ObjectType); ok {
 						if propType, exists := widened.Props()[propName]; exists {
 							functionType = propType
 						}
@@ -741,7 +741,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		// type - "x has property p" doesn't by itself refine what x IS
 		// when x isn't already a union of candidates to narrow among.
 		//
-		// Falling through to the generic types.IsAssignable(guard.
+		// Falling through to the generic c.rel.IsAssignable(guard.
 		// NarrowedType, originalType) branch below used to let this marker
 		// get assigned as x's actual narrowed type whenever originalType
 		// was Any or Unknown - IsAssignable trivially succeeds for
@@ -780,7 +780,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		// Unknown can be narrowed to any specific type
 		canNarrow = true
 		narrowedType = guard.NarrowedType
-	} else if _, isTypeParam := originalType.(*types.TypeParameterType); isTypeParam && guard.NarrowedType != nil && !isNarrowingMarker(guard.NarrowedType) && !types.IsAssignable(guard.NarrowedType, originalType) {
+	} else if _, isTypeParam := originalType.(*types.TypeParameterType); isTypeParam && guard.NarrowedType != nil && !isNarrowingMarker(guard.NarrowedType) && !c.rel.IsAssignable(guard.NarrowedType, originalType) {
 		// A type parameter narrowed by a guard (`x instanceof C`,
 		// `typeof x === "string"`) becomes the intersection `T & C`.
 		canNarrow = true
@@ -897,7 +897,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				// Regular type narrowing - union contains the exact target type
 				canNarrow = true
 				narrowedType = guard.NarrowedType
-			} else if types.IsAssignable(guard.NarrowedType, originalType) {
+			} else if c.rel.IsAssignable(guard.NarrowedType, originalType) {
 				// Type predicate narrowing - the predicate type is assignable to the original
 				// This handles cases like narrowing DriverNode|ChildMap to ValueNode<unknown>
 				canNarrow = true
@@ -940,7 +940,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				}
 			}
 		}
-	} else if guard.NarrowedType != nil && types.IsAssignable(guard.NarrowedType, originalType) {
+	} else if guard.NarrowedType != nil && c.rel.IsAssignable(guard.NarrowedType, originalType) {
 		// Allow narrowing if the narrowed type is assignable to the original type
 		// This handles cases like narrowing 'string' to '"foo"' (literal type)
 		canNarrow = true
@@ -1340,7 +1340,7 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 
 	// A unit type compared unequal to itself leaves nothing: after
 	// `k !== "a" && k !== "b"` over "a" | "b" the second step sees k: "b".
-	if guard.NarrowedType != nil && isUnitType(originalType) && types.IsIdenticalType(originalType, guard.NarrowedType) {
+	if guard.NarrowedType != nil && isUnitType(originalType) && c.rel.IsIdenticalType(originalType, guard.NarrowedType) {
 		narrowedEnv := NewEnclosedEnvironment(c.env)
 		if narrowedEnv.Define(guard.VariableName, types.Never, isConst) {
 			return narrowedEnv
@@ -1496,12 +1496,12 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 
 	if isLiteral1 {
 		// Check if literal type1 is assignable to type2
-		return types.IsAssignable(type1, type2)
+		return c.rel.IsAssignable(type1, type2)
 	}
 
 	if isLiteral2 {
 		// Check if literal type2 is assignable to type1
-		return types.IsAssignable(type2, type1)
+		return c.rel.IsAssignable(type2, type1)
 	}
 
 	// Handle basic types - for strict equality, different primitive types don't overlap
@@ -1527,8 +1527,8 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 		return true // Allow object to be compared with boolean (for typeof checks)
 	}
 
-	widenedType1 := types.GetWidenedType(type1)
-	widenedType2 := types.GetWidenedType(type2)
+	widenedType1 := c.rel.GetWidenedType(type1)
+	widenedType2 := c.rel.GetWidenedType(type2)
 	return widenedType1 == widenedType2
 }
 
@@ -2082,7 +2082,7 @@ func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Typ
 	}
 
 	// Check if memberType is assignable to targetType or vice versa
-	if types.IsAssignable(memberType, targetType) || types.IsAssignable(targetType, memberType) {
+	if c.rel.IsAssignable(memberType, targetType) || c.rel.IsAssignable(targetType, memberType) {
 		return true
 	}
 
@@ -2135,7 +2135,7 @@ func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName stri
 	}
 
 	// For general type comparison
-	return types.IsAssignable(expectedValue, propType)
+	return c.rel.IsAssignable(expectedValue, propType)
 }
 
 func (c *Checker) resolveObjectTypeForNarrowing(t types.Type) (*types.ObjectType, bool) {
@@ -2439,7 +2439,7 @@ func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
 	// Walk through property chain
 	currentType := rootType
 	for i := 1; i < len(parts); i++ {
-		currentType = types.GetWidenedType(currentType)
+		currentType = c.rel.GetWidenedType(currentType)
 		if objType, ok := currentType.(*types.ObjectType); ok {
 			propType, exists := objType.Props()[parts[i]]
 			if !exists {
@@ -2509,10 +2509,10 @@ func (c *Checker) computeMergedType(t1, t2 types.Type) types.Type {
 		return t1
 	}
 	// If one is assignable to the other, use the wider type
-	if types.IsAssignable(t1, t2) {
+	if c.rel.IsAssignable(t1, t2) {
 		return t2
 	}
-	if types.IsAssignable(t2, t1) {
+	if c.rel.IsAssignable(t2, t1) {
 		return t1
 	}
 	// Create a union

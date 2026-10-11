@@ -31,8 +31,8 @@ func (c *Checker) reportOperatorNotApplicable(node *parser.InfixExpression, left
 // needs each operand to be numeric on its own. TypeScript checks the two
 // operands independently, so both diagnostics appear when both are wrong.
 func (c *Checker) reportArithmeticOperandType(node *parser.InfixExpression, left, right types.Type) {
-	leftBad := !isArithmeticOperandType(left)
-	rightBad := !isArithmeticOperandType(right)
+	leftBad := !c.isArithmeticOperandType(left)
+	rightBad := !c.isArithmeticOperandType(right)
 	if leftBad {
 		c.addErrorWithCode(node.Left, errors.TS2362,
 			"The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.")
@@ -45,11 +45,11 @@ func (c *Checker) reportArithmeticOperandType(node *parser.InfixExpression, left
 
 // isArithmeticOperandType reports whether a type is one an arithmetic operator
 // accepts on its own: any, number, bigint, or a numeric enum.
-func isArithmeticOperandType(t types.Type) bool {
+func (c *Checker) isArithmeticOperandType(t types.Type) bool {
 	if t == nil {
 		return false
 	}
-	widened := types.GetWidenedType(t)
+	widened := c.rel.GetWidenedType(t)
 	return widened == types.Any || widened == types.Number || widened == types.BigInt ||
 		types.IsNumericEnumLikeType(t)
 }
@@ -66,8 +66,8 @@ func (c *Checker) reportSymbolUnaryOperand(node *parser.PrefixExpression, operan
 // isPrimitiveOperandType reports whether every constituent of t is a primitive
 // (string, number, boolean, bigint, symbol, null, undefined, void or a literal
 // of one of them), i.e. a value that can never be an object instance.
-func isPrimitiveOperandType(t types.Type) bool {
-	t = types.GetWidenedType(t)
+func (c *Checker) isPrimitiveOperandType(t types.Type) bool {
+	t = c.rel.GetWidenedType(t)
 	switch tt := t.(type) {
 	case *types.Primitive:
 		switch tt {
@@ -79,7 +79,7 @@ func isPrimitiveOperandType(t types.Type) bool {
 		return true
 	case *types.UnionType:
 		for _, member := range tt.Types {
-			if !isPrimitiveOperandType(member) {
+			if !c.isPrimitiveOperandType(member) {
 				return false
 			}
 		}
