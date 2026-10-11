@@ -227,7 +227,18 @@ func collectScopeNamesFor(env *Environment, values, typeNames bool) []string {
 // shared "Cannot find name" reporting path — use it instead of hand-rolling
 // TS2304 at new call sites so spelling suggestions stay consistent.
 func (c *Checker) addCannotFindNameError(node parser.Node, env *Environment, name string) {
+	if !c.wantsSpellingSuggestion() {
+		c.reportCannotFindName(node, name, nil)
+		return
+	}
 	c.reportCannotFindName(node, name, collectScopeNames(env))
+}
+
+// wantsSpellingSuggestion reports whether collecting the names in scope for
+// a "Did you mean" is worth it: tsc stops suggesting after 10 unresolved
+// names, and a skipped library file's errors are not reported.
+func (c *Checker) wantsSpellingSuggestion() bool {
+	return c.nameNotFoundCount < 10 && !c.skipValidation()
 }
 
 func (c *Checker) reportCannotFindName(node parser.Node, name string, candidates []string) {
@@ -255,7 +266,11 @@ func (c *Checker) addCannotFindTypeNameError(node parser.Node, env *Environment,
 	}
 	// Primitive type keywords are not symbols in tsc, so they are never suggested.
 	var candidates []string
-	for _, cand := range collectScopeNamesFor(env, false, true) {
+	var inScope []string
+	if c.wantsSpellingSuggestion() {
+		inScope = collectScopeNamesFor(env, false, true)
+	}
+	for _, cand := range inScope {
 		switch cand {
 		case "string", "number", "boolean", "null", "undefined", "void", "never",
 			"unknown", "any", "object", "symbol", "bigint":

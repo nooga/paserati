@@ -1,7 +1,6 @@
 package types
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/nooga/paserati/pkg/vm"
@@ -112,12 +111,16 @@ func IsAssignableForCallArgument(source, target Type) bool {
 	return false
 }
 
+// assignPair keys assignabilityVisited.
+type assignPair struct{ source, target Type }
+
 func isAssignable(source, target Type) bool {
 	if source == nil || target == nil {
 		return false
 	}
 
-	pairKey := fmt.Sprintf("%T:%p->%T:%p", source, source, target, target)
+	// Every Type is a pointer, so the pair itself is the key.
+	pairKey := assignPair{source, target}
 	if _, visited := assignabilityVisited.LoadOrStore(pairKey, true); visited {
 		return true
 	}

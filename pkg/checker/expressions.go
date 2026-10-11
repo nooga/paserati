@@ -1162,7 +1162,16 @@ type aliasInstKey struct {
 func typeListKey(ts []types.Type) string {
 	var b strings.Builder
 	for _, t := range ts {
-		fmt.Fprintf(&b, "%p|%T;", t, t)
+		switch tt := t.(type) {
+		case *types.TypeParameterType:
+			// Each reference to T is a new wrapper of the same parameter.
+			fmt.Fprintf(&b, "%p|tp;", tt.Parameter)
+		case *types.LiteralType:
+			// Each `"a"` written is a new literal type.
+			fmt.Fprintf(&b, "%s|lit;", tt.String())
+		default:
+			fmt.Fprintf(&b, "%p|%T;", t, t)
+		}
 	}
 	return b.String()
 }
