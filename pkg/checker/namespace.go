@@ -304,7 +304,8 @@ func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Envi
 	}
 
 	if body.HoistedDeclarations != nil {
-		for _, hoistedNode := range body.HoistedDeclarations {
+		for _, hoisted := range hoistedInSourceOrder(body.HoistedDeclarations) {
+			hoistedNode := hoisted.node
 			if funcLit, ok := hoistedNode.(*parser.FunctionLiteral); ok {
 				hoistFunc(funcLit, false)
 			}

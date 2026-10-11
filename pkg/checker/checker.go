@@ -1357,7 +1357,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 	// First, handle hoisted functions explicitly
 	if program.HoistedDeclarations != nil {
-		for name, hoistedNode := range program.HoistedDeclarations {
+		for _, hoisted := range hoistedInSourceOrder(program.HoistedDeclarations) {
+			name, hoistedNode := hoisted.name, hoisted.node
 			funcLit, _ := hoistedNode.(*parser.FunctionLiteral) // Parser guarantees type
 
 			debugPrintf("// [Checker Pass 2] Processing Hoisted Function Signature: %s\n", name)
@@ -2806,7 +2807,8 @@ func (c *Checker) visit(node parser.Node) {
 
 		// --- NEW: Process Hoisted Declarations for this block FIRST ---
 		if node.HoistedDeclarations != nil {
-			for name, hoistedNode := range node.HoistedDeclarations {
+			for _, hoisted := range hoistedInSourceOrder(node.HoistedDeclarations) {
+				name, hoistedNode := hoisted.name, hoisted.node
 				funcLit, ok := hoistedNode.(*parser.FunctionLiteral)
 				if !ok {
 					debugPrintf("// [Checker Block Hoisting] ERROR: Hoisted node for '%s' is not a FunctionLiteral (%T)\n", name, hoistedNode)
