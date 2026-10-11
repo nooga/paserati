@@ -126,6 +126,8 @@ func isAssignable(source, target Type) bool {
 	// Simplify mapped types (e.g., Record<string, T>) to ObjectType with index signatures
 	source = simplifyMappedType(source)
 	target = simplifyMappedType(target)
+	source = simplifyKeyof(source)
+	target = simplifyKeyof(target)
 
 	// Handle forward references - they should be treated as equivalent to each other
 	// This is a simple approach for now - in a full implementation, we'd resolve them properly
@@ -1310,4 +1312,27 @@ func allAnyOrUnknown(ts []Type) bool {
 		}
 	}
 	return true
+}
+
+// simplifyKeyof expands `keyof O` for a concrete object type O (a
+// `keyof typeof C` written before C was declared, resolved since) to the
+// union of O's property names.
+func simplifyKeyof(t Type) Type {
+	kt, ok := t.(*KeyofType)
+	if !ok {
+		return t
+	}
+	obj, ok := kt.OperandType.(*ObjectType)
+	if !ok || len(obj.IndexSignatures) > 0 {
+		return t
+	}
+	names := obj.PropertyNames()
+	if len(names) == 0 {
+		return Never
+	}
+	keys := make([]Type, len(names))
+	for i, name := range names {
+		keys[i] = &LiteralType{Value: vm.String(name)}
+	}
+	return NewUnionType(keys...)
 }

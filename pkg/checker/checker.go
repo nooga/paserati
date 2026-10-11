@@ -1993,6 +1993,19 @@ func (c *Checker) resolveTypeofInType(t types.Type) types.Type {
 			return &types.ConditionalType{CheckType: resolvedCheckType, ExtendsType: resolvedExtendsType, TrueType: resolvedTrueType, FalseType: resolvedFalseType}
 		}
 
+	case *types.KeyofType:
+		if _, deferred := typ.OperandType.(*types.TypeofType); deferred {
+			if resolved := c.resolveTypeofInType(typ.OperandType); resolved != typ.OperandType {
+				if _, still := resolved.(*types.TypeofType); !still && resolved != types.Any {
+					// In place too: signatures resolved before C was
+					// declared hold this KeyofType. (any is C read before
+					// its initializer was checked: not final yet.)
+					typ.OperandType = resolved
+					return c.computeKeyofType(resolved)
+				}
+			}
+		}
+
 	case *types.ArrayType:
 		resolvedElementType := c.resolveTypeofInType(typ.ElementType)
 		if resolvedElementType != typ.ElementType {
