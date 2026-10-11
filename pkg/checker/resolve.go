@@ -1862,7 +1862,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		if replacement, exists := visited[typ]; exists {
 			return replacement
 		}
-		if !mayMentionTypeParamNames(typ, substitution, map[types.Type]bool{}) {
+		if !c.objectMayMention(typ, substitution) {
 			// Nothing to substitute: keep the object rather than deep-copy
 			// it (instantiating zod's aliases copied whole class types).
 			visited[typ] = typ
@@ -3176,7 +3176,7 @@ func (c *Checker) substituteTypeParameterInTypeMemo(targetType types.Type, param
 		if typ.Pending {
 			return typ // filled in later, in place (see substituteTypes)
 		}
-		if !mayMentionTypeParamNames(typ, map[string]types.Type{paramName: replacement}, map[types.Type]bool{}) {
+		if !c.objectMayMention(typ, map[string]types.Type{paramName: replacement}) {
 			// A mapped type's key substituted into `Shape[k]` must not copy
 			// the class types inside Shape.
 			memo[typ] = typ
@@ -4245,6 +4245,17 @@ func (c *Checker) markGenericComplete(name string) {
 			c.completeGenerics[g] = true
 		}
 	}
+}
+
+// objectMayMention is mayMentionTypeParamNames with a visited set reused
+// across calls (substitution asks once per object it meets).
+func (c *Checker) objectMayMention(t types.Type, names map[string]types.Type) bool {
+	if c.mentionScratch == nil {
+		c.mentionScratch = make(map[types.Type]bool)
+	} else {
+		clear(c.mentionScratch)
+	}
+	return mayMentionTypeParamNames(t, names, c.mentionScratch)
 }
 
 // mayMentionTypeParamNames reports whether t can refer to a type parameter

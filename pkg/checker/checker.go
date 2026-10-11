@@ -453,7 +453,8 @@ type Checker struct {
 	// so that const/let declarations earlier in the file are already in scope.
 	deferredComputedKeyChecks []deferredComputedKeyCheck
 	deferredHeritageChecks    []deferredHeritageCheck
-	typeRefNode               parser.Node // type reference being instantiated, for arity diagnostics
+	typeRefNode               parser.Node         // type reference being instantiated, for arity diagnostics
+	mentionScratch            map[types.Type]bool // objectMayMention's visited set
 }
 
 type deferredComputedKeyCheck struct {

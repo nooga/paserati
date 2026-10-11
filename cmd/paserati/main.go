@@ -80,7 +80,7 @@ func main() {
 			_ = f.Close()
 		}()
 	}
-	defer func() {
+	writeHeapProfile := func() {
 		// Optional: heap profile at exit (after a GC for a cleaner snapshot).
 		if *memProfileFlag == "" {
 			return
@@ -93,7 +93,8 @@ func main() {
 		}
 		_ = pprof.WriteHeapProfile(f)
 		_ = f.Close()
-	}()
+	}
+	defer writeHeapProfile()
 
 	// Set global AST dump flag
 	parser.DumpASTEnabled = *astDumpFlag
@@ -103,6 +104,7 @@ func main() {
 		if *cpuProfileFlag != "" {
 			pprof.StopCPUProfile() // os.Exit skips the deferred stop
 		}
+		writeHeapProfile()
 		os.Exit(code)
 	}
 
@@ -115,6 +117,7 @@ func main() {
 		if *cpuProfileFlag != "" {
 			pprof.StopCPUProfile() // os.Exit skips the deferred stop
 		}
+		writeHeapProfile()
 		os.Exit(code)
 	}
 

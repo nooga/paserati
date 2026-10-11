@@ -1523,17 +1523,19 @@ func (p *Parser) isEmptyDeclareNamespace() bool {
 	// Don't skip if body has: declare (TS1038), export (TS2304), interface (TS1036), class —
 	// those tests need errors preserved via random-error LOOSE MODE.
 	depth := 1
-	scan := pos + 1
-	for depth > 0 {
-		tok := p.lookAhead(scan)
-		if tok.Type == lexer.EOF {
-			return false
-		}
+	empty := false
+	p.scanAhead(pos+1, func(tok lexer.Token) bool {
 		switch tok.Type {
+		case lexer.EOF:
+			return false
 		case lexer.LBRACE:
 			depth++
 		case lexer.RBRACE:
 			depth--
+			if depth == 0 {
+				empty = true
+				return false
+			}
 		default:
 			if depth == 1 {
 				if tok.Type == lexer.EXPORT || tok.Type == lexer.CLASS || tok.Type == lexer.INTERFACE {
@@ -1544,9 +1546,9 @@ func (p *Parser) isEmptyDeclareNamespace() bool {
 				}
 			}
 		}
-		scan++
-	}
-	return true
+		return true
+	})
+	return empty
 }
 
 // isEmptyNamespaceDeclaration checks via lookahead whether the current 'namespace' token
@@ -1585,17 +1587,19 @@ func (p *Parser) isEmptyNamespaceDeclaration() bool {
 	// 2. At depth ≥ 2: if we find 'declare' IDENT, it signals a nested ambient context that
 	//    TypeScript will flag TS1038 (declare inside ambient). Those tests need their errors.
 	depth := 1
-	scan := pos + 1
-	for depth > 0 {
-		tok := p.lookAhead(scan)
-		if tok.Type == lexer.EOF {
-			return false
-		}
+	empty := false
+	p.scanAhead(pos+1, func(tok lexer.Token) bool {
 		switch tok.Type {
+		case lexer.EOF:
+			return false
 		case lexer.LBRACE:
 			depth++
 		case lexer.RBRACE:
 			depth--
+			if depth == 0 {
+				empty = true
+				return false
+			}
 		default:
 			if depth == 1 && tok.Type != lexer.IDENT && tok.Type != lexer.DOT {
 				return false // real code at depth 1
@@ -1604,9 +1608,9 @@ func (p *Parser) isEmptyNamespaceDeclaration() bool {
 				return false // nested declare (TS1038 territory) — preserve random errors
 			}
 		}
-		scan++
-	}
-	return true
+		return true
+	})
+	return empty
 }
 
 // skipDeclareBody skips the body of a declare statement using balanced bracket tracking.
@@ -4579,6 +4583,29 @@ func (p *Parser) peekTokenIs2(t lexer.TokenType) bool {
 // lookAhead returns the token at position 'pos' ahead of peekToken
 // pos=0 returns peekToken, pos=1 returns the token after peekToken, etc.
 // Uses lexer state save/restore to avoid corrupting parser state
+// scanAhead calls fn with the tokens from lookAhead(from) on, in one pass
+// over the lexer (lookAhead(i) in a loop re-lexes from the start each time),
+// until fn returns false or EOF has been passed. from must be at least 1.
+func (p *Parser) scanAhead(from int, fn func(tok lexer.Token) bool) {
+	savedState := p.l.SaveState()
+	savedCur := p.curToken
+	savedPeek := p.peekToken
+	defer func() {
+		p.l.RestoreState(savedState)
+		p.curToken = savedCur
+		p.peekToken = savedPeek
+	}()
+	for i := 1; ; i++ {
+		tok := p.l.NextToken()
+		if i < from {
+			continue
+		}
+		if !fn(tok) || tok.Type == lexer.EOF {
+			return
+		}
+	}
+}
+
 func (p *Parser) lookAhead(pos int) lexer.Token {
 	if pos == 0 {
 		return *p.peekToken
