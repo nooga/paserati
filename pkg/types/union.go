@@ -21,6 +21,10 @@ func (ut *UnionType) String() string {
 }
 func (ut *UnionType) typeNode() {}
 func (ut *UnionType) Equals(other Type) bool {
+	return ut.equalsIn(other, nil)
+}
+
+func (ut *UnionType) equalsIn(other Type, s *equalsState) bool {
 	otherUt, ok := other.(*UnionType)
 	if !ok {
 		return false // Not a UnionType
@@ -41,7 +45,7 @@ func (ut *UnionType) Equals(other Type) bool {
 	for i, t1 := range ut.Types {
 		foundMatch := false
 		for j, t2 := range otherUt.Types {
-			if !matched2[j] && t1.Equals(t2) {
+			if !matched2[j] && equalsIn(t1, t2, s) {
 				matched1[i] = true
 				matched2[j] = true
 				foundMatch = true

@@ -98,12 +98,16 @@ func (i *InstantiatedType) String() string {
 }
 
 func (i *InstantiatedType) Equals(other Type) bool {
+	return i.equalsIn(other, nil)
+}
+
+func (i *InstantiatedType) equalsIn(other Type, s *equalsState) bool {
 	if o, ok := other.(*InstantiatedType); ok {
 		if !i.Generic.Equals(o.Generic) || len(i.TypeArguments) != len(o.TypeArguments) {
 			return false
 		}
 		for idx, arg := range i.TypeArguments {
-			if !arg.Equals(o.TypeArguments[idx]) {
+			if !equalsIn(arg, o.TypeArguments[idx], s) {
 				return false
 			}
 		}
