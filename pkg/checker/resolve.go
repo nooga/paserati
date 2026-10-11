@@ -1893,6 +1893,10 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		if replacement, exists := visited[typ]; exists {
 			return replacement
 		}
+		if c.instantiationUnchanged(typ, substitution, visited) {
+			visited[typ] = typ
+			return typ
+		}
 		if !c.objectMayMention(typ, substitution) {
 			// Nothing to substitute: keep the object rather than deep-copy
 			// it (instantiating zod's aliases copied whole class types).
@@ -2016,11 +2020,8 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		// Inherited members and the interface flag survive instantiation; the
 		// base types are instantiated with the same substitution.
 		result.IsInterface = typ.IsInterface
-		if len(typ.BaseTypes) > 0 {
-			result.BaseTypes = make([]types.Type, len(typ.BaseTypes))
-			for i, base := range typ.BaseTypes {
-				result.BaseTypes[i] = c.substituteTypesWithVisited(base, substitution, visited)
-			}
+		if c.closedInstantiation(typ, substitution) {
+			result.Instantiates = typ.Instantiates
 		}
 
 		return result
@@ -4335,12 +4336,14 @@ type genericInstKey struct {
 type instantiationCache struct {
 	complete map[*types.GenericType]bool
 	inst     map[genericInstKey]types.Type
+	closed   map[*types.GenericType]bool // see genericClosed
 }
 
 func newInstantiationCache() *instantiationCache {
 	return &instantiationCache{
 		complete: map[*types.GenericType]bool{},
 		inst:     map[genericInstKey]types.Type{},
+		closed:   map[*types.GenericType]bool{},
 	}
 }
 
@@ -4351,6 +4354,7 @@ func (ic *instantiationCache) reopen(g *types.GenericType) {
 		return
 	}
 	delete(ic.complete, g)
+	delete(ic.closed, g)
 	for key := range ic.inst {
 		if key.generic == g {
 			delete(ic.inst, key)

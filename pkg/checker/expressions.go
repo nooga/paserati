@@ -1198,18 +1198,51 @@ type aliasInstKey struct {
 func typeListKey(ts []types.Type) string {
 	var b strings.Builder
 	for _, t := range ts {
-		switch tt := t.(type) {
-		case *types.TypeParameterType:
-			// Each reference to T is a new wrapper of the same parameter.
-			fmt.Fprintf(&b, "%p|tp;", tt.Parameter)
-		case *types.LiteralType:
-			// Each `"a"` written is a new literal type.
-			fmt.Fprintf(&b, "%s|lit;", tt.String())
-		default:
-			fmt.Fprintf(&b, "%p|%T;", t, t)
-		}
+		writeTypeKey(&b, t, 0)
+		b.WriteByte(';')
 	}
 	return b.String()
+}
+
+// writeTypeKey writes a key equal for types known to be the same: each
+// reference to T, each `"a"` written and each Set<string> resolved or
+// substituted is a new object, keyed by what it is rather than where.
+// Anything else is keyed by identity.
+func writeTypeKey(b *strings.Builder, t types.Type, depth int) {
+	if depth > 4 {
+		fmt.Fprintf(b, "%p", t)
+		return
+	}
+	switch tt := t.(type) {
+	case *types.TypeParameterType:
+		fmt.Fprintf(b, "%p|tp", tt.Parameter)
+	case *types.LiteralType:
+		b.WriteString(tt.String())
+		b.WriteString("|lit")
+	case *types.ArrayType:
+		writeTypeKey(b, tt.ElementType, depth+1)
+		b.WriteString("[]")
+	case *types.UnionType:
+		b.WriteString("(|")
+		for _, m := range tt.Types {
+			writeTypeKey(b, m, depth+1)
+			b.WriteByte('|')
+		}
+		b.WriteByte(')')
+	case *types.ObjectType:
+		if g := tt.Instantiates; g != nil && !tt.Pending && len(tt.GenericArgs) == len(g.TypeParameters) {
+			fmt.Fprintf(b, "%p<", g)
+			for _, a := range tt.GenericArgs {
+				writeTypeKey(b, a, depth+1)
+				b.WriteByte(',')
+			}
+			b.WriteByte('>')
+			return
+		}
+		fmt.Fprintf(b, "%p", t)
+	default:
+		fmt.Fprintf(b, "%p|%T", t, t)
+	}
 }
 
 func (c *Checker) instantiateAliasReferenceUncached(ref *types.GenericTypeAliasForwardReference, resolved types.Type, found bool) types.Type {
