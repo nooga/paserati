@@ -26,7 +26,7 @@ func (e *ErrorInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Allow arbitrary properties on Error instances (common JS pattern: err.code, etc.)
 	errorProtoType.Materialize()
-errorProtoType.IndexSignatures = append(errorProtoType.IndexSigs(), &types.IndexSignature{
+	errorProtoType.IndexSignatures = append(errorProtoType.IndexSigs(), &types.IndexSignature{
 		KeyType:   types.String,
 		ValueType: types.Any,
 	})

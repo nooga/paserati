@@ -83,7 +83,7 @@ func DeeplyWidenType(t Type) Type {
 			CallSignatures:      objType.CallSigs(),
 			ConstructSignatures: objType.ConstructSigs(),
 			BaseTypes:           objType.Bases(),
-			ClassMeta:           objType.ClassMeta,       // Preserve class metadata
+			ClassMeta:           objType.ClassMeta,   // Preserve class metadata
 			IndexSignatures:     objType.IndexSigs(), // Preserve index signatures
 		}
 	}
@@ -142,6 +142,6 @@ func widenNested(t Type, depth int) Type {
 	}
 	cp := *obj
 	cp.Materialize()
-cp.Properties = props
+	cp.Properties = props
 	return &cp
 }

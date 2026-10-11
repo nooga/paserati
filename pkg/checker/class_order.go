@@ -38,7 +38,7 @@ func (c *Checker) orderInstanceMembersBySource(instanceType *types.ObjectType, b
 		return pi < pj
 	})
 	instanceType.Materialize()
-instanceType.PropertyOrder = names
+	instanceType.PropertyOrder = names
 }
 
 // attachClassMemberDocs records member JSDoc on the instance type and, for

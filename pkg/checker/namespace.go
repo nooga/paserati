@@ -60,9 +60,9 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		if prev, ok := c.env.symbols[name]; ok && !node.AmbientModule {
 			if fn, ok := prev.Type.(*types.ObjectType); ok && (len(fn.CallSigs()) > 0 || len(fn.ConstructSigs()) > 0) {
 				nsType.ValueShape.Materialize()
-nsType.ValueShape.CallSignatures = append(nsType.ValueShape.CallSigs(), fn.CallSigs()...)
+				nsType.ValueShape.CallSignatures = append(nsType.ValueShape.CallSigs(), fn.CallSigs()...)
 				nsType.ValueShape.Materialize()
-nsType.ValueShape.ConstructSignatures = append(nsType.ValueShape.ConstructSigs(), fn.ConstructSigs()...)
+				nsType.ValueShape.ConstructSignatures = append(nsType.ValueShape.ConstructSigs(), fn.ConstructSigs()...)
 				for _, prop := range fn.PropertyNames() {
 					nsType.ValueShape.SetProperty(prop, fn.Props()[prop])
 				}

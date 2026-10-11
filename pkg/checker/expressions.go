@@ -1035,7 +1035,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 		// Add string index signature
 		objType.Materialize()
-objType.IndexSignatures = []*types.IndexSignature{
+		objType.IndexSignatures = []*types.IndexSignature{
 			{
 				KeyType:   types.String,
 				ValueType: indexValueType,

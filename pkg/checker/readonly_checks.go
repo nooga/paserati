@@ -16,7 +16,7 @@ func setReadonlyProperty(obj *types.ObjectType, name string, readonly bool) {
 			return
 		}
 		obj.Materialize()
-obj.ReadOnlyProperties = map[string]bool{}
+		obj.ReadOnlyProperties = map[string]bool{}
 	}
 	if readonly {
 		obj.ReadOnlyProps()[name] = true

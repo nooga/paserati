@@ -311,7 +311,7 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("raw", &types.ArrayType{ElementType: types.String}).
 		WithProperty("length", types.Number)
 	templateStringsArrayType.Materialize()
-templateStringsArrayType.IndexSignatures = append(templateStringsArrayType.IndexSigs(), &types.IndexSignature{
+	templateStringsArrayType.IndexSignatures = append(templateStringsArrayType.IndexSigs(), &types.IndexSignature{
 		KeyType:   types.Number,
 		ValueType: types.String,
 	})

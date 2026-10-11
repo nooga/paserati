@@ -436,7 +436,7 @@ func (c *Checker) mergeAmbientOverload(name string, sig *types.Signature) {
 			// `declare namespace e { ... }` merged with `declare function
 			// e()`: the namespace value is callable.
 			existingObj.Materialize()
-existingObj.CallSignatures = append(existingObj.CallSigs(), sig)
+			existingObj.CallSignatures = append(existingObj.CallSigs(), sig)
 			ns.Instantiated = true
 			return
 		}
@@ -451,6 +451,6 @@ existingObj.CallSignatures = append(existingObj.CallSigs(), sig)
 	}
 	merged := &types.ObjectType{}
 	merged.Materialize()
-merged.CallSignatures = append(append([]*types.Signature(nil), existingObj.CallSigs()...), sig)
+	merged.CallSignatures = append(append([]*types.Signature(nil), existingObj.CallSigs()...), sig)
 	c.env.Update(name, merged)
 }

@@ -19,11 +19,11 @@ func SortedPropertyNames(props map[string]Type) []string {
 func (ot *ObjectType) SetProperty(name string, t Type) {
 	if ot.Props() == nil {
 		ot.Materialize()
-ot.Properties = make(map[string]Type)
+		ot.Properties = make(map[string]Type)
 	}
 	if _, exists := ot.Props()[name]; !exists {
 		ot.Materialize()
-ot.PropertyOrder = append(ot.PropOrder(), name)
+		ot.PropertyOrder = append(ot.PropOrder(), name)
 	}
 	ot.Props()[name] = t
 }
