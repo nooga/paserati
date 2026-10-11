@@ -15,20 +15,35 @@ var objectEqualsVisited sync.Map
 // string: Equals is hot in union de-duplication).
 type objectPair struct{ a, b *ObjectType }
 
-// Pairs ObjectType.Equals has proved equal during the current outermost
-// comparison, in proof order. Without them, comparing two large mutually
+// equalsState is one outermost comparison's memo: the object pairs proved
+// equal so far, in proof order. Without it, comparing two large mutually
 // recursive graphs (playwright's BrowserContext against a `this`-rebound copy
 // of it) re-proves every pair once per path that reaches it: exponential.
 // A pair proved while an enclosing pair was still assumed equal holds only
 // if that one does, so a failing pair drops what was proved under it (like
-// TypeScript's maybe-keys); the rest is cleared when the outermost call
-// returns, since object types are still filled in between comparisons.
-// Checking runs on one goroutine, like objectEqualsVisited's other users.
-var (
-	objectEqualsDepth  int
-	objectEqualsProved = map[objectPair]bool{}
-	objectEqualsLog    []objectPair
-)
+// TypeScript's maybe-keys); the memo is dropped when the outermost call
+// returns, since object types are still filled in between comparisons. It is
+// passed down rather than kept in a package variable, since independent
+// checkers may run on separate goroutines.
+type equalsState struct {
+	proved map[objectPair]bool
+	log    []objectPair
+}
+
+// stateEqualer is a type whose Equals passes an equalsState on to the types
+// it contains. A type without it starts a fresh memo below itself, which
+// costs only memoization: cycles are still caught by objectEqualsVisited.
+type stateEqualer interface {
+	equalsIn(other Type, s *equalsState) bool
+}
+
+// equalsIn compares a and b within the comparison s (nil: a new one).
+func equalsIn(a, b Type, s *equalsState) bool {
+	if se, ok := a.(stateEqualer); ok {
+		return se.equalsIn(b, s)
+	}
+	return a.Equals(b)
+}
 
 // --- Function/Object Signatures ---
 
@@ -98,6 +113,10 @@ func (sig *Signature) String() string {
 }
 
 func (sig *Signature) Equals(other *Signature) bool {
+	return sig.equalsIn(other, nil)
+}
+
+func (sig *Signature) equalsIn(other *Signature, s *equalsState) bool {
 	if sig == nil || other == nil {
 		return sig == other
 	}
@@ -121,7 +140,7 @@ func (sig *Signature) Equals(other *Signature) bool {
 		if (p1 == nil) != (p2 == nil) {
 			return false
 		}
-		if p1 != nil && !p1.Equals(p2) {
+		if p1 != nil && !equalsIn(p1, p2, s) {
 			return false
 		}
 	}
@@ -137,7 +156,7 @@ func (sig *Signature) Equals(other *Signature) bool {
 	if (sig.RestParameterType == nil) != (other.RestParameterType == nil) {
 		return false
 	}
-	if sig.RestParameterType != nil && !sig.RestParameterType.Equals(other.RestParameterType) {
+	if sig.RestParameterType != nil && !equalsIn(sig.RestParameterType, other.RestParameterType, s) {
 		return false
 	}
 
@@ -145,7 +164,7 @@ func (sig *Signature) Equals(other *Signature) bool {
 	if (sig.ReturnType == nil) != (other.ReturnType == nil) {
 		return false
 	}
-	if sig.ReturnType != nil && !sig.ReturnType.Equals(other.ReturnType) {
+	if sig.ReturnType != nil && !equalsIn(sig.ReturnType, other.ReturnType, s) {
 		return false
 	}
 	return true
@@ -197,6 +216,10 @@ func (is *IndexSignature) String() string {
 }
 
 func (is *IndexSignature) Equals(other *IndexSignature) bool {
+	return is.equalsIn(other, nil)
+}
+
+func (is *IndexSignature) equalsIn(other *IndexSignature, s *equalsState) bool {
 	if is == nil || other == nil {
 		return is == other
 	}
@@ -211,12 +234,12 @@ func (is *IndexSignature) Equals(other *IndexSignature) bool {
 		if is.TypeParameter != other.TypeParameter {
 			return false
 		}
-		if !is.ConstraintType.Equals(other.ConstraintType) {
+		if !equalsIn(is.ConstraintType, other.ConstraintType, s) {
 			return false
 		}
 	} else {
 		// For regular index signatures, compare key type
-		if !is.KeyType.Equals(other.KeyType) {
+		if !equalsIn(is.KeyType, other.KeyType, s) {
 			return false
 		}
 	}
@@ -372,6 +395,10 @@ func (ot *ObjectType) String() string {
 }
 func (ot *ObjectType) typeNode() {}
 func (ot *ObjectType) Equals(other Type) bool {
+	return ot.equalsIn(other, nil)
+}
+
+func (ot *ObjectType) equalsIn(other Type, s *equalsState) bool {
 	otherOt, ok := other.(*ObjectType)
 	if !ok {
 		return false // Not an ObjectType
@@ -390,7 +417,7 @@ func (ot *ObjectType) Equals(other Type) bool {
 		// Their members are one generic's with these arguments: comparing
 		// them member by member follows `next(): Grow<Wrap<T>>` forever.
 		for i, a := range ot.GenericArgs {
-			if a != otherOt.GenericArgs[i] && !a.Equals(otherOt.GenericArgs[i]) {
+			if a != otherOt.GenericArgs[i] && !equalsIn(a, otherOt.GenericArgs[i], s) {
 				return false
 			}
 		}
@@ -398,7 +425,7 @@ func (ot *ObjectType) Equals(other Type) bool {
 	}
 
 	pairKey := objectPair{ot, otherOt}
-	if objectEqualsProved[pairKey] {
+	if s != nil && s.proved[pairKey] {
 		return true
 	}
 	if _, visited := objectEqualsVisited.LoadOrStore(pairKey, true); visited {
@@ -406,29 +433,30 @@ func (ot *ObjectType) Equals(other Type) bool {
 	}
 	defer objectEqualsVisited.Delete(pairKey)
 
-	logLen := len(objectEqualsLog)
-	objectEqualsDepth++
-	equal := ot.structurallyEquals(otherOt)
-	objectEqualsDepth--
-	switch {
-	case objectEqualsDepth == 0:
-		clear(objectEqualsProved)
-		objectEqualsLog = objectEqualsLog[:0]
-	case equal:
-		objectEqualsProved[pairKey] = true
-		objectEqualsLog = append(objectEqualsLog, pairKey)
-	default:
-		for _, proved := range objectEqualsLog[logLen:] {
-			delete(objectEqualsProved, proved)
+	if s == nil {
+		// The outermost comparison: its memo dies with it.
+		return ot.structurallyEquals(otherOt, &equalsState{})
+	}
+	logLen := len(s.log)
+	equal := ot.structurallyEquals(otherOt, s)
+	if equal {
+		if s.proved == nil {
+			s.proved = make(map[objectPair]bool)
 		}
-		objectEqualsLog = objectEqualsLog[:logLen]
+		s.proved[pairKey] = true
+		s.log = append(s.log, pairKey)
+	} else {
+		for _, proved := range s.log[logLen:] {
+			delete(s.proved, proved)
+		}
+		s.log = s.log[:logLen]
 	}
 	return equal
 }
 
 // structurallyEquals compares members, signatures, bases, class metadata and
 // index signatures; Equals handles identity, cycles and memoization.
-func (ot *ObjectType) structurallyEquals(otherOt *ObjectType) bool {
+func (ot *ObjectType) structurallyEquals(otherOt *ObjectType, s *equalsState) bool {
 	// Check properties
 	if len(ot.Props()) != len(otherOt.Props()) {
 		return false // Different number of properties
@@ -441,7 +469,7 @@ func (ot *ObjectType) structurallyEquals(otherOt *ObjectType) bool {
 		if (t1 == nil) != (t2 == nil) {
 			return false
 		} // One type is nil, the other isn't
-		if t1 != nil && !t1.Equals(t2) {
+		if t1 != nil && !equalsIn(t1, t2, s) {
 			return false // Property types are not equal
 		}
 
@@ -459,7 +487,7 @@ func (ot *ObjectType) structurallyEquals(otherOt *ObjectType) bool {
 	}
 	for i, sig1 := range ot.CallSigs() {
 		sig2 := otherOt.CallSigs()[i]
-		if !sig1.Equals(sig2) {
+		if !sig1.equalsIn(sig2, s) {
 			return false
 		}
 	}
@@ -470,7 +498,7 @@ func (ot *ObjectType) structurallyEquals(otherOt *ObjectType) bool {
 	}
 	for i, sig1 := range ot.ConstructSigs() {
 		sig2 := otherOt.ConstructSigs()[i]
-		if !sig1.Equals(sig2) {
+		if !sig1.equalsIn(sig2, s) {
 			return false
 		}
 	}
@@ -484,7 +512,7 @@ func (ot *ObjectType) structurallyEquals(otherOt *ObjectType) bool {
 		if (base1 == nil) != (base2 == nil) {
 			return false
 		}
-		if base1 != nil && !base1.Equals(base2) {
+		if base1 != nil && !equalsIn(base1, base2, s) {
 			return false
 		}
 	}
@@ -510,7 +538,7 @@ func (ot *ObjectType) structurallyEquals(otherOt *ObjectType) bool {
 	}
 	for i, sig1 := range ot.IndexSigs() {
 		sig2 := otherOt.IndexSigs()[i]
-		if !sig1.Equals(sig2) {
+		if !sig1.equalsIn(sig2, s) {
 			return false
 		}
 	}

@@ -26,6 +26,10 @@ func (it *IntersectionType) String() string {
 }
 func (it *IntersectionType) typeNode() {}
 func (it *IntersectionType) Equals(other Type) bool {
+	return it.equalsIn(other, nil)
+}
+
+func (it *IntersectionType) equalsIn(other Type, s *equalsState) bool {
 	otherIt, ok := other.(*IntersectionType)
 	if !ok {
 		return false // Not an IntersectionType
@@ -46,7 +50,7 @@ func (it *IntersectionType) Equals(other Type) bool {
 	for i, t1 := range it.Types {
 		foundMatch := false
 		for j, t2 := range otherIt.Types {
-			if !matched2[j] && t1.Equals(t2) {
+			if !matched2[j] && equalsIn(t1, t2, s) {
 				matched1[i] = true
 				matched2[j] = true
 				foundMatch = true

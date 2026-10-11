@@ -16,6 +16,10 @@ func (r *ReadonlyType) String() string {
 }
 
 func (r *ReadonlyType) Equals(other Type) bool {
+	return r.equalsIn(other, nil)
+}
+
+func (r *ReadonlyType) equalsIn(other Type, s *equalsState) bool {
 	// readonly T equals readonly U if T equals U
 	if otherReadonly, ok := other.(*ReadonlyType); ok {
 		if r.InnerType == nil && otherReadonly.InnerType == nil {
@@ -24,7 +28,7 @@ func (r *ReadonlyType) Equals(other Type) bool {
 		if r.InnerType == nil || otherReadonly.InnerType == nil {
 			return false
 		}
-		return r.InnerType.Equals(otherReadonly.InnerType)
+		return equalsIn(r.InnerType, otherReadonly.InnerType, s)
 	}
 	return false
 }

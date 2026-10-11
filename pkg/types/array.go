@@ -29,6 +29,10 @@ func (at *ArrayType) String() string {
 }
 func (at *ArrayType) typeNode() {}
 func (at *ArrayType) Equals(other Type) bool {
+	return at.equalsIn(other, nil)
+}
+
+func (at *ArrayType) equalsIn(other Type, s *equalsState) bool {
 	otherAt, ok := other.(*ArrayType)
 	if !ok {
 		return false // Not an ArrayType
@@ -40,7 +44,7 @@ func (at *ArrayType) Equals(other Type) bool {
 	if (at.ElementType == nil) != (otherAt.ElementType == nil) {
 		return false
 	} // One nil, one not
-	if at.ElementType != nil && !at.ElementType.Equals(otherAt.ElementType) {
+	if at.ElementType != nil && !equalsIn(at.ElementType, otherAt.ElementType, s) {
 		return false // Element types differ
 	}
 	return true
@@ -94,6 +98,10 @@ func (tt *TupleType) String() string {
 func (tt *TupleType) typeNode() {}
 
 func (tt *TupleType) Equals(other Type) bool {
+	return tt.equalsIn(other, nil)
+}
+
+func (tt *TupleType) equalsIn(other Type, s *equalsState) bool {
 	otherTt, ok := other.(*TupleType)
 	if !ok {
 		return false // Not a TupleType
@@ -116,7 +124,7 @@ func (tt *TupleType) Equals(other Type) bool {
 		if (elem1 == nil) != (elem2 == nil) {
 			return false // One nil, one not
 		}
-		if elem1 != nil && !elem1.Equals(elem2) {
+		if elem1 != nil && !equalsIn(elem1, elem2, s) {
 			return false // Element types differ
 		}
 	}
@@ -132,7 +140,7 @@ func (tt *TupleType) Equals(other Type) bool {
 	if (tt.RestElementType == nil) != (otherTt.RestElementType == nil) {
 		return false // One has rest element, other doesn't
 	}
-	if tt.RestElementType != nil && !tt.RestElementType.Equals(otherTt.RestElementType) {
+	if tt.RestElementType != nil && !equalsIn(tt.RestElementType, otherTt.RestElementType, s) {
 		return false // Rest element types differ
 	}
 
