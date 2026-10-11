@@ -16,19 +16,14 @@ type fsCache struct {
 	mu      sync.Mutex
 	dirs    map[string]map[string]fs.FileMode
 	follows map[string]os.FileInfo
-	canon   map[string]canonResult
-}
-
-type canonResult struct {
-	path string
-	err  error
+	canon   map[string]string
 }
 
 func newFSCache() *fsCache {
 	return &fsCache{
 		dirs:    make(map[string]map[string]fs.FileMode),
 		follows: make(map[string]os.FileInfo),
-		canon:   make(map[string]canonResult),
+		canon:   make(map[string]string),
 	}
 }
 
@@ -84,19 +79,45 @@ func (c *fsCache) isFile(path string) bool {
 
 // canonicalPath makes path absolute with symlinks followed, so one file
 // reached through two node_modules paths (pnpm, self-links) is one module.
+// Each directory's canonical form is worked out once, so a path costs one
+// listing lookup instead of an lstat per component.
 func (c *fsCache) canonicalPath(path string) (string, error) {
 	if c == nil {
 		return canonicalPath(path)
 	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return canonicalPath(path)
+	}
+	return c.canonical(abs), nil
+}
+
+func (c *fsCache) canonical(abs string) string {
 	c.mu.Lock()
-	res, ok := c.canon[path]
+	out, ok := c.canon[abs]
 	c.mu.Unlock()
 	if ok {
-		return res.path, res.err
+		return out
 	}
-	p, err := canonicalPath(path)
+	parent, name := filepath.Split(abs)
+	if name == "" {
+		out = abs
+	} else {
+		parent = filepath.Clean(parent)
+		c.stat(abs) // fills the parent's listing
+		c.mu.Lock()
+		mode, listed := c.dirs[parent][name]
+		c.mu.Unlock()
+		if listed && mode&fs.ModeSymlink == 0 {
+			out = filepath.Join(c.canonical(parent), name)
+		} else {
+			// A symlink, or a name the listing does not hold: let the OS
+			// work it out.
+			out, _ = canonicalPath(abs)
+		}
+	}
 	c.mu.Lock()
-	c.canon[path] = canonResult{p, err}
+	c.canon[abs] = out
 	c.mu.Unlock()
-	return p, err
+	return out
 }
