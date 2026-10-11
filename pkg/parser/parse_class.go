@@ -1530,6 +1530,18 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 		return nil // Missing closing ']'
 	}
 
+	// An optional computed method: [expr]?(): T or [expr]?<K>(): T
+	if p.peekTokenIs(lexer.QUESTION) {
+		if next := p.lookAhead(1); next.Type == lexer.LPAREN || next.Type == lexer.LT {
+			p.nextToken() // '?'
+			member := p.parseComputedMethod(bracketToken, keyExpr, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, false)
+			if sig, ok := member.(*MethodSignature); ok && sig != nil {
+				sig.Optional = true
+			}
+			return member
+		}
+	}
+
 	// Now determine if this is a method or property based on what follows
 	if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
 		// It's a computed method: [expr]() {} or [expr]<T>() {}

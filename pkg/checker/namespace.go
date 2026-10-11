@@ -80,6 +80,10 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	outerEnv := c.env
 	// A namespace body is a var scope of its own, like a function body.
 	bodyEnv := NewFunctionEnvironment(outerEnv)
+	if node.AmbientModule && name == "global" && c.globalScope != nil {
+		// `declare global { ... }` declares in the global scope.
+		bodyEnv = c.globalScope
+	}
 	c.env = bodyEnv
 
 	// Members of an ambient namespace are exported with or without the

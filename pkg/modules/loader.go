@@ -185,6 +185,17 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		return record, nil // Return record with error, don't fail completely
 	}
 
+	// Files and type packages named by triple-slash directives load (and
+	// are checked) first: their declarations are often global (@types/node's
+	// index is nothing but `/// <reference path="..." />` lines).
+	if record.Source != nil {
+		for _, ref := range TripleSlashReferences(record.Source.Content) {
+			if _, err := ml.loadModuleSequential(ref, record.ResolvedPath); err != nil {
+				debugPrintf("// [ModuleLoader] reference %q from %s: %v\n", ref, record.ResolvedPath, err)
+			}
+		}
+	}
+
 	// Extract and load dependencies before type checking
 	debugPrintf("// [ModuleLoader] About to extract imports for: %s (AST=%v)\n", specifier, record.AST != nil)
 	importSpecs := extractImportSpecs(record.AST)

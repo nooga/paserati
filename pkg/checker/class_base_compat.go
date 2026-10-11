@@ -79,6 +79,9 @@ type deferredRelationCheck struct {
 
 // deferRelationCheck registers a check to run once the main passes are done.
 func (c *Checker) deferRelationCheck(run func()) {
+	if c.skipValidation() {
+		return
+	}
 	c.deferredRelationChecks = append(c.deferredRelationChecks, deferredRelationCheck{env: c.env, run: run})
 }
 

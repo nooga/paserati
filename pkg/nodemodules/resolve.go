@@ -38,6 +38,51 @@ type Options struct {
 	// Conditions are extra export conditions that apply (Node's
 	// --conditions, or tsc's customConditions).
 	Conditions []string
+	// Paths maps specifiers to files before packages are looked up, as
+	// tsc's "paths" option does.
+	Paths []PathMapping
+}
+
+// PathMapping is one "paths" entry: a pattern with at most one "*" and the
+// absolute targets it maps to, the "*" substituted.
+type PathMapping struct {
+	Pattern string
+	Targets []string
+}
+
+// ResolvePaths resolves specifier through the "paths" mappings: the pattern
+// with the longest prefix matches (an exact pattern before any wildcard), and
+// its targets are tried in order. ok is false when no pattern matches.
+func ResolvePaths(specifier string, paths []PathMapping, mode Mode) (path string, ok bool, err error) {
+	best := -1
+	bestPrefix := -1
+	star := ""
+	for i, m := range paths {
+		prefix, suffix, wild := strings.Cut(m.Pattern, "*")
+		if !wild {
+			if m.Pattern == specifier {
+				best, star = i, ""
+				break
+			}
+			continue
+		}
+		if len(specifier) >= len(prefix)+len(suffix) && strings.HasPrefix(specifier, prefix) &&
+			strings.HasSuffix(specifier, suffix) && len(prefix) > bestPrefix {
+			best, bestPrefix = i, len(prefix)
+			star = specifier[len(prefix) : len(specifier)-len(suffix)]
+		}
+	}
+	if best < 0 {
+		return "", false, nil
+	}
+	for _, target := range paths[best].Targets {
+		candidate := strings.Replace(target, "*", star, 1)
+		if p, found := tryFile("", candidate, mode); found {
+			p, err := canonicalPath(p)
+			return p, true, err
+		}
+	}
+	return "", true, fmt.Errorf("cannot find %q through paths mapping %q", specifier, paths[best].Pattern)
 }
 
 // IsBareSpecifier reports whether specifier names a package rather than a
@@ -58,6 +103,11 @@ func IsBareSpecifier(specifier string) bool {
 // Resolve resolves a bare specifier imported from a file in fromDir to an
 // absolute path, with symlinks followed.
 func Resolve(specifier, fromDir string, opts Options) (string, error) {
+	if len(opts.Paths) > 0 {
+		if path, ok, err := ResolvePaths(specifier, opts.Paths, opts.Mode); ok && err == nil {
+			return path, nil
+		}
+	}
 	pkgName, subpath := SplitSpecifier(specifier)
 	if pkgName == "" {
 		return "", fmt.Errorf("invalid package specifier %q", specifier)

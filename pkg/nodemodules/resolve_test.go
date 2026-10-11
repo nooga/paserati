@@ -118,3 +118,38 @@ func TestSplitSpecifier(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvePaths(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"packages/client/src/index.ts", "packages/client/src/links/http.ts", "types/exact.d.ts"} {
+		full := filepath.Join(root, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := []PathMapping{
+		{Pattern: "@trpc/client", Targets: []string{filepath.Join(root, "packages/client/src")}},
+		{Pattern: "@trpc/client/*", Targets: []string{filepath.Join(root, "packages/client/src/*")}},
+		{Pattern: "exact", Targets: []string{filepath.Join(root, "missing"), filepath.Join(root, "types/exact")}},
+	}
+	cases := map[string]string{
+		"@trpc/client":            "packages/client/src/index.ts",
+		"@trpc/client/links/http": "packages/client/src/links/http.ts",
+		"exact":                   "types/exact.d.ts",
+	}
+	for spec, want := range cases {
+		got, ok, err := ResolvePaths(spec, paths, Types)
+		if !ok || err != nil || got != filepath.Join(root, filepath.FromSlash(want)) {
+			t.Errorf("%s: got %q ok=%v err=%v, want %s", spec, got, ok, err, want)
+		}
+	}
+	if _, ok, _ := ResolvePaths("zod", paths, Types); ok {
+		t.Errorf("zod matched a paths pattern")
+	}
+}

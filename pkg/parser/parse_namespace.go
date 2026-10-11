@@ -104,8 +104,14 @@ func (p *Parser) parseNamespaceDeclaration(declare bool) *NamespaceDeclaration {
 // or `declare global { ... }` (curToken is 'module' or 'global'). The body is
 // an ambient context: it is type checked but never emitted.
 func (p *Parser) parseAmbientModuleDeclaration() *NamespaceDeclaration {
+	return p.parseAmbientModule(false)
+}
+
+// parseAmbientModule parses an ambient module body; nested marks a `global`
+// block inside `declare module "m" { ... }`, written without `declare`.
+func (p *Parser) parseAmbientModule(nested bool) *NamespaceDeclaration {
 	kwToken := p.curToken
-	if p.inAmbientContext > 0 {
+	if p.inAmbientContext > 0 && !nested {
 		p.addError(kwToken, "A 'declare' modifier cannot be used in an already ambient context.")
 	}
 	name := &Identifier{Token: kwToken, Value: "global"}
@@ -113,7 +119,8 @@ func (p *Parser) parseAmbientModuleDeclaration() *NamespaceDeclaration {
 		p.nextToken() // module name string
 		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
-	if kwToken.Literal == "module" && !p.peekTokenIs(lexer.LBRACE) && p.peekTokenIs(lexer.SEMICOLON) {
+	if kwToken.Literal == "module" && !p.peekTokenIs(lexer.LBRACE) &&
+		(p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) || p.peekToken.Line > p.curToken.Line) {
 		// Shorthand ambient module: `declare module "foo";`
 		return &NamespaceDeclaration{Token: kwToken, Name: name, Body: &BlockStatement{Token: kwToken, Statements: []Statement{}, HoistedDeclarations: make(map[string]Expression)}, Declare: true, AmbientModule: true}
 	}
