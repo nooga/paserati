@@ -842,6 +842,13 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 	if sameGenericWithLooserArgs(sourceObj, targetObj, 0) {
 		return true
 	}
+	// Copies of one non-generic class's instance type (made by substitution
+	// or rebinding, sharing its metadata) are the same nominal type, however
+	// differently their members have been settled since.
+	if sm := sourceObj.ClassMeta; sm != nil && sm == targetObj.ClassMeta && sm.IsClassInstance &&
+		len(sourceObj.GenericArgs) == 0 && len(targetObj.GenericArgs) == 0 {
+		return true
+	}
 	// Relating Grow<A> to Grow<B> relates their next(): Grow<Wrap<A>> to
 	// Grow<Wrap<B>>, and so on without end. Like tsc's isDeeplyNestedType,
 	// once instantiations of one generic are being related several levels

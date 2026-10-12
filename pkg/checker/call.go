@@ -1399,6 +1399,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 			debugPrintf("// [Checker Inference] Phase 2: Final solution with %d type parameter bindings\n", len(finalSolution))
 		}
 
+		c.applyTypeParameterDefaults(genericSig, finalSolution)
 		if len(finalSolution) > 0 {
 			c.fallBackToConstraints(finalSolution)
 			inferredSig := c.substituteTypeParameters(genericSig, finalSolution)
@@ -1449,6 +1450,10 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		}
 	}
 
+	if solution == nil {
+		solution = map[*types.TypeParameter]types.Type{}
+	}
+	c.applyTypeParameterDefaults(genericSig, solution)
 	if len(solution) == 0 {
 		debugPrintf("// [Checker Inference] No type parameters could be inferred\n")
 		return nil // Inference failed
@@ -1461,6 +1466,18 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 	}
 
 	return inferredSig
+}
+
+// applyTypeParameterDefaults gives the type parameters of sig that nothing
+// inferred their defaults (`konn<C = NoContext>()`), as tsc does.
+func (c *Checker) applyTypeParameterDefaults(sig *types.Signature, solution map[*types.TypeParameter]types.Type) {
+	// Only the declared parameters: walking the signature for others would
+	// expand self-growing generics (Grow<T>'s next(): Grow<Wrap<T>>) forever.
+	for _, tp := range sig.TypeParameters {
+		if _, inferred := solution[tp]; !inferred && tp.Default != nil && !c.typeContainsTypeParameter(tp.Default) {
+			solution[tp] = tp.Default
+		}
+	}
 }
 
 // TypeParameterConstraint represents a constraint on a type parameter

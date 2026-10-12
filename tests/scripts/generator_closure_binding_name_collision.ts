@@ -15,7 +15,7 @@ function host2(): number {
     let get = () => 10;
     yield get;
   }
-  return get + g().next().value();
+  return get + (g().next().value as () => number)();
 }
 function host3() {
   function* g() {
@@ -29,4 +29,4 @@ class K {
   *m() { const get = () => 1; yield get; }
   n() { const get = 2; return get; }
 }
-[host(), host2(), host3(), new K().n(), new K().m().next().value()].join(",");
+[host(), host2(), host3(), new K().n(), (new K().m().next().value as () => number)()].join(",");

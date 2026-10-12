@@ -307,6 +307,9 @@ type Checker struct {
 	currentInferredReturnTypes []types.Type
 	// List of types found in yield expressions within the current generator function (used for inference).
 	currentInferredYieldTypes []types.Type
+	// bodyYieldTypes are the yield types the last function body checked
+	// collected (checkFunctionBody restores the enclosing function's).
+	bodyYieldTypes []types.Type
 
 	// --- NEW: Context for 'this' type checking ---
 	// Type of 'this' in the current context (set when checking methods)

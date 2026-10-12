@@ -1950,6 +1950,12 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		if replacement, exists := visited[typ]; exists {
 			return replacement
 		}
+		if typ.ClassMeta != nil && typ.ClassMeta.IsClassInstance && len(typ.GenericArgs) == 0 && typ.Instantiates == nil {
+			// A non-generic class's instances are one nominal type
+			// (QueryClient has #private members): never copied.
+			visited[typ] = typ
+			return typ
+		}
 		if c.instantiationUnchanged(typ, substitution, visited) {
 			visited[typ] = typ
 			return typ
