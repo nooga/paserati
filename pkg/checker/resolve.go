@@ -4337,6 +4337,9 @@ type instantiationCache struct {
 	inst     map[genericInstKey]types.Type
 	closed   map[*types.GenericType]bool // see genericClosed
 	early    map[*types.GenericType][]earlyInstance
+	// refilled holds the instances each generic had before it was complete,
+	// which the cache does not hold, for refillInstances.
+	refilled map[*types.GenericType][]*types.ObjectType
 }
 
 // earlyInstance is an instantiation made before its generic's declaration
@@ -4354,6 +4357,7 @@ func newInstantiationCache() *instantiationCache {
 		inst:     map[genericInstKey]types.Type{},
 		closed:   map[*types.GenericType]bool{},
 		early:    map[*types.GenericType][]earlyInstance{},
+		refilled: map[*types.GenericType][]*types.ObjectType{},
 	}
 }
 
@@ -4393,6 +4397,9 @@ func (c *Checker) completeGeneric(g *types.GenericType) {
 	if !ok {
 		return
 	}
+	for _, e := range early {
+		c.instCache.refilled[g] = append(c.instCache.refilled[g], e.obj)
+	}
 	if !c.genericClosed(g) {
 		// Only a closed generic's instances stop the walks for type
 		// parameters at their arguments; refilled, an open one's
@@ -4406,6 +4413,36 @@ func (c *Checker) completeGeneric(g *types.GenericType) {
 		e.obj.ResetMembers()
 		c.substituteMembersLazily(body, e.obj, e.substitution, map[types.Type]types.Type{body: e.obj})
 		e.obj.ClosedInstance = true
+	}
+}
+
+// refillInstances gives the instances of the complete generic g already made
+// the members of g's body again, after a module augmentation merged members
+// into the body in place (an instance's members are a substituted copy).
+func (c *Checker) refillInstances(g *types.GenericType) {
+	body, ok := g.Body.(*types.ObjectType)
+	if !ok || !c.instCache.complete[g] {
+		return
+	}
+	refill := func(obj *types.ObjectType) {
+		if obj == nil || obj == body || obj.Instantiates != g || len(obj.GenericArgs) != len(g.TypeParameters) {
+			return
+		}
+		substitution := make(map[string]types.Type, len(g.TypeParameters))
+		for i, p := range g.TypeParameters {
+			substitution[p.Name] = obj.GenericArgs[i]
+		}
+		obj.ResetMembers()
+		c.substituteMembersLazily(body, obj, substitution, map[types.Type]types.Type{body: obj})
+	}
+	for key, inst := range c.instCache.inst {
+		if key.generic == g {
+			obj, _ := inst.(*types.ObjectType)
+			refill(obj)
+		}
+	}
+	for _, obj := range c.instCache.refilled[g] {
+		refill(obj)
 	}
 }
 

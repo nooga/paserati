@@ -285,6 +285,9 @@ type Checker struct {
 	// the conditional true branches being resolved whose check type it is
 	// (see withTrueBranchConstraint).
 	trueBranchConstraints map[*types.TypeParameter][]types.Type
+	// augmentations are the file's module augmentations, merged into their
+	// targets once the file is checked (see augment.go).
+	augmentations []moduleAugmentation
 	// skipLibCheck mirrors tsc's skipLibCheck: declarations in library files
 	// (declaration files and modules under node_modules) are not validated.
 	skipLibCheck bool
@@ -2017,6 +2020,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 	c.reportImplicitAnyParameters()
 
+	c.applyModuleAugmentations()
 	return c.errors
 }
 
@@ -5080,6 +5084,9 @@ func (c *Checker) GetModuleExports() map[string]types.Type {
 	debugPrintf("// [Checker GetModuleExports] Called. moduleEnv=%v\n", c.moduleEnv != nil)
 	if c.moduleEnv != nil {
 		exports := c.moduleEnv.GetAllExports()
+		for _, ns := range c.takeAugmentations(c.moduleEnv.ModulePath) {
+			c.mergeAugmentation(exports, ns)
+		}
 		if checkerDebug {
 			debugPrintf("// [Checker GetModuleExports] Returning %d exports\n", len(exports))
 		}

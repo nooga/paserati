@@ -36,6 +36,9 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		// `declare module "m"` / `declare global`: check the body, bind no name.
 		nsType = types.NewNamespaceType(name)
 		nsType.Declare = true
+		if c.isModuleAugmentation(node) {
+			c.augmentations = append(c.augmentations, moduleAugmentation{specifier: name, ns: nsType})
+		}
 	} else if existing, found := c.env.ResolveTypeLocal(name); found {
 		if c.env.seededNamespaces[name] && !exportedDecl {
 			// A non-exported namespace does not merge with the exported
