@@ -14,17 +14,47 @@ import (
 // import from the same directory. A nil *fsCache asks the file system directly.
 type fsCache struct {
 	mu      sync.Mutex
-	dirs    map[string]map[string]fs.FileMode
+	dirs    map[string]*dirListing
 	follows map[string]os.FileInfo
 	canon   map[string]string
 }
 
+// dirListing is one directory's entries; entries is set before ready closes.
+// The directory is read outside the cache's lock, once.
+type dirListing struct {
+	ready   chan struct{}
+	entries map[string]fs.FileMode
+}
+
 func newFSCache() *fsCache {
 	return &fsCache{
-		dirs:    make(map[string]map[string]fs.FileMode),
+		dirs:    make(map[string]*dirListing),
 		follows: make(map[string]os.FileInfo),
 		canon:   make(map[string]string),
 	}
+}
+
+// listing returns the entries of the directory dir (a clean path), reading it
+// on first use.
+func (c *fsCache) listing(dir string) map[string]fs.FileMode {
+	c.mu.Lock()
+	l, ok := c.dirs[dir]
+	if !ok {
+		l = &dirListing{ready: make(chan struct{})}
+		c.dirs[dir] = l
+	}
+	c.mu.Unlock()
+	if ok {
+		<-l.ready
+		return l.entries
+	}
+	list, _ := os.ReadDir(dir)
+	l.entries = make(map[string]fs.FileMode, len(list))
+	for _, e := range list {
+		l.entries[e.Name()] = e.Type()
+	}
+	close(l.ready)
+	return l.entries
 }
 
 // stat reports whether path exists and is a directory, following symlinks.
@@ -33,8 +63,6 @@ func (c *fsCache) stat(path string) (exists, dir bool) {
 		info, err := os.Stat(path)
 		return err == nil, err == nil && info.IsDir()
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	path = filepath.Clean(path)
 	parent, name := filepath.Split(path)
 	if name == "" {
@@ -42,27 +70,21 @@ func (c *fsCache) stat(path string) (exists, dir bool) {
 		info, err := os.Stat(path)
 		return err == nil, err == nil && info.IsDir()
 	}
-	parent = filepath.Clean(parent)
-	entries, ok := c.dirs[parent]
-	if !ok {
-		list, _ := os.ReadDir(parent)
-		entries = make(map[string]fs.FileMode, len(list))
-		for _, e := range list {
-			entries[e.Name()] = e.Type()
-		}
-		c.dirs[parent] = entries
-	}
-	mode, ok := entries[name]
+	mode, ok := c.listing(filepath.Clean(parent))[name]
 	if !ok {
 		return false, false
 	}
 	if mode&fs.ModeSymlink == 0 {
 		return true, mode.IsDir()
 	}
+	c.mu.Lock()
 	info, seen := c.follows[path]
+	c.mu.Unlock()
 	if !seen {
 		info, _ = os.Stat(path)
+		c.mu.Lock()
 		c.follows[path] = info
+		c.mu.Unlock()
 	}
 	return info != nil, info != nil && info.IsDir()
 }
@@ -104,10 +126,7 @@ func (c *fsCache) canonical(abs string) string {
 		out = abs
 	} else {
 		parent = filepath.Clean(parent)
-		c.stat(abs) // fills the parent's listing
-		c.mu.Lock()
-		mode, listed := c.dirs[parent][name]
-		c.mu.Unlock()
+		mode, listed := c.listing(parent)[name]
 		if listed && mode&fs.ModeSymlink == 0 {
 			out = filepath.Join(c.canonical(parent), name)
 		} else {

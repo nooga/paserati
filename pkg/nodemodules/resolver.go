@@ -18,15 +18,18 @@ type Resolver struct {
 
 	// In Types mode the file system is taken to hold still for the whole
 	// check, as tsc's module resolution cache does: a specifier resolves once
-	// per directory, and an importer's directory is found once.
+	// per directory, and an importer's directory is found once. Resolutions
+	// run outside mu; a caller asking for one in flight waits for it.
 	mu       sync.Mutex
-	resolved map[resolveKey]resolveResult
+	resolved map[resolveKey]*resolveCall
 	dirs     map[string]string
 }
 
 type resolveKey struct{ specifier, dir string }
 
-type resolveResult struct {
+// resolveCall is one resolution; path and err are set before done closes.
+type resolveCall struct {
+	done chan struct{}
 	path string
 	err  error
 }
@@ -44,6 +47,9 @@ func NewResolver(opts Options) *Resolver {
 func (r *Resolver) Name() string { return "NodeModules" }
 
 func (r *Resolver) Priority() int { return r.priority }
+
+// ConcurrentSafe reports that Resolve may run on several goroutines at once.
+func (r *Resolver) ConcurrentSafe() bool { return true }
 
 // CanResolve claims bare specifiers, and in Types mode relative ones too, so
 // "./x.js" finds x.ts or x.d.ts before the file-system resolver finds x.js.
@@ -74,23 +80,31 @@ func (r *Resolver) resolvePath(specifier, fromPath string) (string, error) {
 		return resolvePath(specifier, startDir(nil, fromPath), r.Options)
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	dir, ok := r.dirs[fromPath]
+	r.mu.Unlock()
 	if !ok {
 		dir = startDir(r.fs, fromPath)
-		if r.dirs == nil {
-			r.dirs = make(map[string]string)
-			r.resolved = make(map[resolveKey]resolveResult)
-		}
-		r.dirs[fromPath] = dir
 	}
 	key := resolveKey{specifier, dir}
-	if res, ok := r.resolved[key]; ok {
-		return res.path, res.err
+	r.mu.Lock()
+	if r.dirs == nil {
+		r.dirs = make(map[string]string)
+		r.resolved = make(map[resolveKey]*resolveCall)
 	}
-	path, err := resolvePath(specifier, dir, r.Options)
-	r.resolved[key] = resolveResult{path, err}
-	return path, err
+	r.dirs[fromPath] = dir
+	call, ok := r.resolved[key]
+	if !ok {
+		call = &resolveCall{done: make(chan struct{})}
+		r.resolved[key] = call
+	}
+	r.mu.Unlock()
+	if ok {
+		<-call.done
+		return call.path, call.err
+	}
+	call.path, call.err = resolvePath(specifier, dir, r.Options)
+	close(call.done)
+	return call.path, call.err
 }
 
 func resolvePath(specifier, dir string, opts Options) (string, error) {
