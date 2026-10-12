@@ -21,6 +21,10 @@ type GlobalDeclarations struct {
 	derived   map[*types.ObjectType][]*types.ObjectType
 
 	instCache *instantiationCache
+
+	// augmentations are the module augmentations waiting for their target
+	// module's exports, by the target's resolved path (see augment.go).
+	augmentations map[string][]*types.NamespaceType
 }
 
 // NewGlobalDeclarations returns an empty registry.

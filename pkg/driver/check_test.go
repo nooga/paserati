@@ -150,3 +150,60 @@ func TestCheckFilesGlobalDeclarations(t *testing.T) {
 		t.Errorf("diagnostics = %q, want only %q", got, want)
 	}
 }
+
+// A module augmentation merges into the module it names, as vitest adds its
+// snapshot matchers to Assertion: from a chunk the augmented module itself
+// imports (so the target is still being checked), through a re-export, and
+// into instances made while the interface was declared (`rejects`).
+func TestCheckFilesModuleAugmentation(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"node_modules/testlib/package.json": `{"types":"index.d.ts"}`,
+		"node_modules/testlib/index.d.ts": "export { Assertion, expect } from './core.js';\n" +
+			"import './snapshot.js';\n",
+		"node_modules/testlib/core.d.ts": "type PromisifyAssertion<T> = Assertion<Promise<void>, Awaited<T>>;\n" +
+			"interface Assertion<R = void, T = unknown> { toBe(x: T): R; rejects: PromisifyAssertion<unknown>; }\n" +
+			"declare function expect<T>(x: T): Assertion<void, T>;\n" +
+			"export { Assertion, expect };\n",
+		"node_modules/testlib/snapshot.d.ts": "export {};\n" +
+			"declare module 'testlib' {\n" +
+			"  interface Assertion<R, T> { toMatchInlineSnapshot(snapshot?: string): R; }\n" +
+			"  interface Extra { z: boolean }\n" +
+			"}\n",
+		"main.ts": "import { expect, type Extra } from 'testlib';\n" +
+			"expect(1).toMatchInlineSnapshot();\n" +
+			"expect(Promise.resolve(1)).rejects.toMatchInlineSnapshot();\n" +
+			"const e: Extra = { z: true };\n" +
+			"const bad: number = expect(1).toMatchInlineSnapshot();\n",
+	}
+	for p, content := range files {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPaserati()
+	p.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types}))
+	var got []string
+	for _, r := range p.CheckFiles([]string{"main.ts"}) {
+		for _, d := range r.Diagnostics {
+			got = append(got, d.Code()+" "+d.Message())
+		}
+	}
+	want := "TS2322 Type 'void' is not assignable to type 'number'."
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("diagnostics = %q, want only %q", got, want)
+	}
+}
