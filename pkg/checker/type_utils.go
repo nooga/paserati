@@ -33,8 +33,6 @@ func isFreshLiteralExpression(node parser.Node) bool {
 	return false
 }
 
-
-
 // getBuiltinType looks up a builtin type by name in the global environment
 func (c *Checker) getBuiltinType(name string) types.Type {
 	if typ, _, found := c.env.Resolve(name); found {
