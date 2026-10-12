@@ -39,6 +39,14 @@ type ModuleResolver interface {
 	Priority() int
 }
 
+// ConcurrentResolver is a ModuleResolver whose Resolve may be called from
+// several goroutines at once. The loader serializes calls to any other
+// resolver.
+type ConcurrentResolver interface {
+	ModuleResolver
+	ConcurrentSafe() bool
+}
+
 // ModuleLoader is the main interface for loading modules
 type ModuleLoader interface {
 	// LoadModule loads a module and all its dependencies

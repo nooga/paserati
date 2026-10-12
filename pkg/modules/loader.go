@@ -69,7 +69,8 @@ type moduleLoader struct {
 	vmInstance *vm.VM
 
 	// ahead parses modules in the background (EnableParseAhead); resolveMu
-	// keeps the resolvers to one call at a time.
+	// keeps the resolvers that are not ConcurrentResolvers to one call at a
+	// time.
 	ahead     *parseAhead
 	resolveMu sync.Mutex
 
@@ -620,13 +621,11 @@ func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string
 
 // resolveModule resolves a module specifier using the resolver chain
 func (ml *moduleLoader) resolveModule(specifier string, fromPath string) (*ResolvedModule, error) {
-	ml.resolveMu.Lock()
-	defer ml.resolveMu.Unlock()
 	debugPrintf("// [ModuleLoader] resolveModule: %s from %s\n", specifier, fromPath)
 	for _, resolver := range ml.resolvers {
 		if resolver.CanResolve(specifier) {
 			debugPrintf("// [ModuleLoader] Trying resolver: %T\n", resolver)
-			resolved, err := resolver.Resolve(specifier, fromPath)
+			resolved, err := ml.callResolver(resolver, specifier, fromPath)
 			if err == nil {
 				debugPrintf("// [ModuleLoader] Resolved to: %s\n", resolved.ResolvedPath)
 				return resolved, nil
@@ -637,6 +636,17 @@ func (ml *moduleLoader) resolveModule(specifier string, fromPath string) (*Resol
 	}
 
 	return nil, fmt.Errorf("no resolver could handle specifier: %s", specifier)
+}
+
+// callResolver calls resolver.Resolve, one call at a time unless the
+// resolver is a ConcurrentResolver (parse-ahead resolves from many
+// goroutines while the loader resolves too).
+func (ml *moduleLoader) callResolver(resolver ModuleResolver, specifier, fromPath string) (*ResolvedModule, error) {
+	if cr, ok := resolver.(ConcurrentResolver); !ok || !cr.ConcurrentSafe() {
+		ml.resolveMu.Lock()
+		defer ml.resolveMu.Unlock()
+	}
+	return resolver.Resolve(specifier, fromPath)
 }
 
 // createParseJob creates a parse job for a module
