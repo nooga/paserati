@@ -1701,6 +1701,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 				// nothing to check yet.
 				continue
 			}
+			origArg := argType
 			// A type parameter argument satisfies the constraint through its
 			// own: PassthroughType<UnknownKeys> inside a generic whose
 			// UnknownKeys extends UnknownKeysParam.
@@ -1731,8 +1732,9 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 					argNode = c.typeRefNode
 				}
 				arg, constraint := argType, constraintType
+				satisfied := c.satisfiesTypeArgConstraint(origArg, constraintType)
 				c.deferRelationCheck(func() {
-					if c.rel.IsAssignable(arg, constraint) {
+					if satisfied() {
 						return
 					}
 					msg := fmt.Sprintf("Type '%s' does not satisfy the constraint '%s'.", arg.String(), constraint.String())
@@ -1746,7 +1748,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			}
 
 			// Check if the type argument satisfies the constraint
-			if !c.rel.IsAssignable(argType, constraintType) {
+			if !c.satisfiesTypeArgConstraint(origArg, constraintType)() {
 				// Create a more detailed error message with proper node position
 				errorMsg := fmt.Sprintf("Type '%s' does not satisfy the constraint '%s'.",
 					argType.String(), constraintType.String())
@@ -2596,7 +2598,9 @@ func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeE
 
 	var trueType types.Type
 	c.withInferScope(node.ExtendsType, func() {
-		trueType = c.resolveTypeAnnotation(node.TrueType)
+		c.withTrueBranchConstraint(checkType, extendsType, func() {
+			trueType = c.resolveTypeAnnotation(node.TrueType)
+		})
 	})
 	if trueType == nil {
 		// Error already reported by resolveTypeAnnotation
