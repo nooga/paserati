@@ -296,19 +296,19 @@ func (pi *PrivateIdentifier) String() string       { return pi.Value }
 // <Name> : <TypeAnnotation>
 // Also supports destructuring patterns: ([a, b]: [number, number]) or ({x, y}: Point)
 type Parameter struct {
-	Token           *lexer.Token // The token of the parameter name
-	Name            *Identifier  // For simple parameters
-	Pattern         Expression   // For destructuring patterns (ArrayParameterPattern/ObjectParameterPattern)
-	TypeAnnotation  Expression   // Parsed type node (e.g., *Identifier)
-	ComputedType    types.Type   // Stores the resolved type from TypeAnnotation
-	Optional        bool         // Whether this parameter is optional (param?)
+	Token          *lexer.Token // The token of the parameter name
+	Name           *Identifier  // For simple parameters
+	Pattern        Expression   // For destructuring patterns (ArrayParameterPattern/ObjectParameterPattern)
+	TypeAnnotation Expression   // Parsed type node (e.g., *Identifier)
+	ComputedType   types.Type   // Stores the resolved type from TypeAnnotation
+	Optional       bool         // Whether this parameter is optional (param?)
 	// OptionalPattern marks the parameter a destructuring parameter written
 	// optional (`({ a }?: T) {}`) was rewritten to: TS2463 in an
 	// implementation.
 	OptionalPattern bool
-	DefaultValue    Expression   // Default value expression (param = defaultValue)
-	IsThis          bool         // Whether this is an explicit 'this' parameter
-	IsDestructuring bool         // Whether this parameter uses destructuring pattern
+	DefaultValue    Expression // Default value expression (param = defaultValue)
+	IsThis          bool       // Whether this is an explicit 'this' parameter
+	IsDestructuring bool       // Whether this parameter uses destructuring pattern
 
 	// Parameter property modifiers (only valid in constructor context)
 	IsPublic    bool // true if marked with 'public' (constructor parameter property)
@@ -646,7 +646,7 @@ func (die *DeferredImportExpression) String() string {
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 type FunctionLiteral struct {
-	Doc string // JSDoc comment directly before this node, delimiters stripped; "" if none
+	Doc            string       // JSDoc comment directly before this node, delimiters stripped; "" if none
 	BaseExpression              // Embed base for ComputedType (Function type)
 	Token          *lexer.Token // The 'function' token
 	// SourceStart / SourceEnd delimit the node's source text for
@@ -1599,7 +1599,7 @@ func (te *TernaryExpression) String() string {
 
 // TypeAliasStatement represents a `type Name = Type;` declaration.
 type TypeAliasStatement struct {
-	Doc string // JSDoc comment directly before this node, delimiters stripped; "" if none
+	Doc            string           // JSDoc comment directly before this node, delimiters stripped; "" if none
 	Token          *lexer.Token     // The 'type' token
 	Name           *Identifier      // The name of the alias
 	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
@@ -2921,7 +2921,7 @@ func (ote *ObjectTypeExpression) String() string {
 
 // ObjectTypeProperty represents a property in an object type literal.
 type ObjectTypeProperty struct {
-	Doc string // JSDoc comment directly before this node, delimiters stripped; "" if none
+	Doc                  string       // JSDoc comment directly before this node, delimiters stripped; "" if none
 	Name                 *Identifier  // Property name (nil for call signatures and index signatures)
 	Type                 Expression   // Property type annotation or function type for call signatures
 	Optional             bool         // Whether the property is optional (for future use)
@@ -2995,7 +2995,7 @@ func (otp *ObjectTypeProperty) String() string {
 // InterfaceDeclaration represents an interface declaration.
 // interface Name { property: Type; method(): ReturnType; }
 type InterfaceDeclaration struct {
-	Doc string // JSDoc comment directly before this node, delimiters stripped; "" if none
+	Doc            string               // JSDoc comment directly before this node, delimiters stripped; "" if none
 	Token          *lexer.Token         // The 'interface' token
 	Name           *Identifier          // Interface name
 	TypeParameters []*TypeParameter     // Generic type parameters (e.g., <T, U>)
@@ -3045,7 +3045,7 @@ func (id *InterfaceDeclaration) String() string {
 
 // InterfaceProperty represents a property or method signature in an interface.
 type InterfaceProperty struct {
-	Doc string // JSDoc comment directly before this node, delimiters stripped; "" if none
+	Doc                    string      // JSDoc comment directly before this node, delimiters stripped; "" if none
 	Name                   *Identifier // Property/method name
 	ComputedName           Expression  // Computed property name for [expression]: syntax
 	Type                   Expression  // Type annotation (for properties) or function type (for methods)
@@ -3524,7 +3524,7 @@ func (d *Decorator) String() string {
 
 // ClassDeclaration represents a class declaration statement
 type ClassDeclaration struct {
-	Doc string // JSDoc comment directly before this node, delimiters stripped; "" if none
+	Doc   string       // JSDoc comment directly before this node, delimiters stripped; "" if none
 	Token *lexer.Token // The 'class' token
 	// SourceStart / SourceEnd delimit the node's source text for
 	// Function.prototype.toString (paserati#524), as byte offsets + 1 so the
@@ -3533,11 +3533,14 @@ type ClassDeclaration struct {
 	Name                   *Identifier      // Class name
 	TypeParameters         []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	SuperClass             Expression       // nil for basic classes (supports generic extends)
-	Implements             []*Identifier    // Interfaces this class implements
-	Body                   *ClassBody       // Class body containing methods and properties
-	IsAbstract             bool             // true if this is an abstract class
-	Declare                bool             // true for `declare class` (ambient, type-only)
-	Decorators             []*Decorator     // Decorators applied to the class
+	// SuperTypeArgs are the type arguments of a qualified superclass
+	// (`extends React.Component<P>`), which SuperClass leaves out.
+	SuperTypeArgs []Expression
+	Implements    []*Identifier // Interfaces this class implements
+	Body          *ClassBody    // Class body containing methods and properties
+	IsAbstract    bool          // true if this is an abstract class
+	Declare       bool          // true for `declare class` (ambient, type-only)
+	Decorators    []*Decorator  // Decorators applied to the class
 }
 
 func (cd *ClassDeclaration) statementNode()       {}
@@ -3594,10 +3597,13 @@ type ClassExpression struct {
 	Name                   *Identifier      // nil for anonymous classes
 	TypeParameters         []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	SuperClass             Expression       // nil for basic classes (supports generic extends)
-	Implements             []*Identifier    // Interfaces this class implements
-	Body                   *ClassBody       // Class body containing methods and properties
-	IsAbstract             bool             // true if this is an abstract class
-	Decorators             []*Decorator     // Decorators applied to the class
+	// SuperTypeArgs are the type arguments of a qualified superclass
+	// (`extends React.Component<P>`), which SuperClass leaves out.
+	SuperTypeArgs []Expression
+	Implements    []*Identifier // Interfaces this class implements
+	Body          *ClassBody    // Class body containing methods and properties
+	IsAbstract    bool          // true if this is an abstract class
+	Decorators    []*Decorator  // Decorators applied to the class
 }
 
 func (ce *ClassExpression) TokenLiteral() string { return ce.Token.Literal }
@@ -3800,7 +3806,7 @@ func (cs *ConstructorSignature) String() string {
 
 // MethodSignature represents a method overload signature in a class
 type MethodSignature struct {
-	Doc string // JSDoc comment directly before this node, delimiters stripped; "" if none
+	Doc                  string           // JSDoc comment directly before this node, delimiters stripped; "" if none
 	Token                *lexer.Token     // The method name token
 	Key                  Expression       // Method name (Identifier or ComputedPropertyName)
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
@@ -4029,7 +4035,7 @@ func (ed *EnumDeclaration) String() string {
 
 // EnumMember represents a member of an enum
 type EnumMember struct {
-	Doc string // JSDoc comment directly before this node, delimiters stripped; "" if none
+	Doc   string       // JSDoc comment directly before this node, delimiters stripped; "" if none
 	Token *lexer.Token // The member name token
 	Name  *Identifier  // Member name
 	Value Expression   // Optional initializer (nil for auto-increment)

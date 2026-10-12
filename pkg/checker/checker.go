@@ -288,6 +288,12 @@ type Checker struct {
 	// augmentations are the file's module augmentations, merged into their
 	// targets once the file is checked (see augment.go).
 	augmentations []moduleAugmentation
+	// jsx is the JSX namespace's declarations, looked up on the first JSX
+	// element (see jsx.go).
+	jsx *jsxNamespace
+	// jsxAttributes maps the attributes object of each JSX element checked to
+	// the element's tag name, where a mismatch is reported.
+	jsxAttributes map[parser.Expression]parser.Node
 	// skipLibCheck mirrors tsc's skipLibCheck: declarations in library files
 	// (declaration files and modules under node_modules) are not validated.
 	skipLibCheck bool
@@ -2987,6 +2993,10 @@ func (c *Checker) visit(node parser.Node) {
 	// --- NEW: Handle TemplateLiteral ---
 	case *parser.TemplateLiteral:
 		c.checkTemplateLiteral(node)
+	case *parser.JSXElement:
+		c.checkJSXElement(node)
+	case *parser.JSXTagType:
+		// A JSX element's callee: its type is set when it is made.
 	case *parser.TaggedTemplateExpression:
 		if c.noImplicitAny && node.Template != nil {
 			for _, part := range node.Template.Parts {

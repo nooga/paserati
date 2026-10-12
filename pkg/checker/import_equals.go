@@ -196,7 +196,11 @@ func (c *Checker) checkExportAssignment(node *parser.ExportAssignment) {
 	}
 	for name, t := range ns.TypeMembers {
 		if v, ok := ns.ValueShape.Props()[name]; ok {
-			t = v
+			// A nested namespace stays one (React.JSX.Element) unless its
+			// value is something more, such as a merged function.
+			if inner, isNs := t.(*types.NamespaceType); !isNs || inner.ValueShape != v {
+				t = v
+			}
 		}
 		c.moduleEnv.DefineExport(name, name, t, nil)
 	}

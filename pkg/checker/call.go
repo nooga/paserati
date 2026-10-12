@@ -255,7 +255,13 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 					// Like TypeScript, only the first argument that does not
 					// fit is reported (getSignatureApplicabilityError).
 					if allOk {
-						c.reportNotAssignable(argNode, argNode, argType, paramType, headArgument)
+						if tag, isJSX := c.jsxAttributes[argNode]; isJSX {
+							// A JSX element's attributes are reported as an
+							// assignment, at the tag name.
+							c.reportNotAssignable(tag, argNode, argType, paramType, headAssign)
+						} else {
+							c.reportNotAssignable(argNode, argNode, argType, paramType, headArgument)
+						}
 					}
 					allOk = false
 				}
@@ -1793,6 +1799,13 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 				valueConstraints := c.collectConstraintsFromTypeSeen(pType.ValueType, propType, seen)
 				constraints = append(constraints, valueConstraints...)
 			}
+		}
+
+	case *types.IntersectionType:
+		// Infer to every member of an intersection, as tsc does
+		// (`IntrinsicAttributes & { items: T[] }`).
+		for _, memberType := range pType.Types {
+			constraints = append(constraints, c.collectConstraintsFromTypeSeen(memberType, argType, seen)...)
 		}
 
 	case *types.UnionType:

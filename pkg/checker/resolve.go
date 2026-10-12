@@ -2015,16 +2015,26 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		} else {
 			newConstraintType = c.substituteTypesWithVisited(typ.ConstraintType, substitution, visited)
 		}
-		// The value means the mapped type's own key, not an outer one.
-		newValueType := typ.ValueType
-		if unshadowed, shadows := unshadowedNames(substitution, []*types.TypeParameter{{Name: typ.TypeParameter}}); !shadows {
-			newValueType = c.substituteTypesWithVisited(typ.ValueType, substitution, visited)
+		// The value means the mapped type's own key, not an outer one. A
+		// substituted type that mentions a parameter of the key's name would
+		// be captured by it (Readonly<P> in React's Component<P>: T := P
+		// makes `T[P]` read `P[P]`), so the key is renamed first.
+		keyName, valueType := typ.TypeParameter, typ.ValueType
+		if mappedKeyCaptures(substitution, keyName, valueType) {
+			fresh := fmt.Sprintf("%s_%d", keyName, len(substitution))
+			renamed := &types.TypeParameterType{Parameter: &types.TypeParameter{Name: fresh, Constraint: types.Any}}
+			valueType = c.substituteTypesWithVisited(valueType, map[string]types.Type{keyName: renamed}, make(map[types.Type]types.Type))
+			keyName = fresh
+		}
+		newValueType := valueType
+		if unshadowed, shadows := unshadowedNames(substitution, []*types.TypeParameter{{Name: keyName}}); !shadows {
+			newValueType = c.substituteTypesWithVisited(valueType, substitution, visited)
 		} else if len(unshadowed) > 0 {
-			newValueType = c.substituteTypesWithVisited(typ.ValueType, unshadowed, make(map[types.Type]types.Type))
+			newValueType = c.substituteTypesWithVisited(valueType, unshadowed, make(map[types.Type]types.Type))
 		}
 
 		return &types.MappedType{
-			TypeParameter:    typ.TypeParameter, // Keep parameter name as-is
+			TypeParameter:    keyName,
 			ConstraintType:   newConstraintType,
 			ValueType:        newValueType,
 			OptionalModifier: typ.OptionalModifier,
@@ -4712,6 +4722,25 @@ func shadowedVisited(shadowed map[string]map[types.Type]bool, names map[string]t
 
 // unshadowedNames drops from names the type parameters a generic signature
 // declares itself, reporting whether it declared any of them.
+// mappedKeyCaptures reports whether substituting into the value of a mapped
+// type with key name would put a type that mentions a parameter called name
+// where the value mentions another substituted parameter.
+func mappedKeyCaptures(substitution map[string]types.Type, name string, value types.Type) bool {
+	key := map[string]types.Type{name: nil}
+	for param, t := range substitution {
+		if param == name || t == nil {
+			continue
+		}
+		if !mayMentionTypeParamNames(t, key, map[types.Type]bool{}, map[string]map[types.Type]bool{}) {
+			continue
+		}
+		if mayMentionTypeParamNames(value, map[string]types.Type{param: t}, map[types.Type]bool{}, map[string]map[types.Type]bool{}) {
+			return true
+		}
+	}
+	return false
+}
+
 func unshadowedNames[V any](names map[string]V, own []*types.TypeParameter) (map[string]V, bool) {
 	var out map[string]V
 	for _, tp := range own {

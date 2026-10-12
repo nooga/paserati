@@ -364,7 +364,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// 3. Handle inheritance relationships and create instance type from methods and properties
 	// Note: createInstanceType will populate the same ObjectType reference
 	c.classNameNode = node.Name
-	instanceType := c.createInstanceTypeInPlace(node.Name.Value, node.Body, node.SuperClass, node.Implements, placeholderType)
+	instanceType := c.createInstanceTypeInPlace(node.Name.Value, node.Body, heritageRef(node.SuperClass, node.SuperTypeArgs), node.Implements, placeholderType)
 	placeholderType.Pending = false
 	c.deferRelationCheck(func() { c.checkClassHeritageAccessibility(node, instanceType) })
 
@@ -478,14 +478,27 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 			node.Name.Value, len(node.TypeParameters))
 	}
 
+	// A class merging into an interface declared before it (React's
+	// `interface Component<P = {}, S = {}> extends ComponentLifecycle<P, S>`
+	// then `class Component<P, S>`) shares the interface's type parameters,
+	// with their defaults, and fills its body: both name one type.
+	mergeInto := c.mergeableInterface(node)
+	if mergeInto != nil {
+		defer c.refillInstances(mergeInto)
+	}
+
 	// 1. Create and register type parameters before resolving constraints.
 	// TypeScript permits later parameters in earlier constraints, e.g. <T extends U, U>.
 	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
 	for i, param := range node.TypeParameters {
-		typeParams[i] = &types.TypeParameter{
-			Name:       param.Name.Value,
-			Constraint: types.Any,
-			Index:      i,
+		if mergeInto != nil {
+			typeParams[i] = mergeInto.TypeParameters[i]
+		} else {
+			typeParams[i] = &types.TypeParameter{
+				Name:       param.Name.Value,
+				Constraint: types.Any,
+				Index:      i,
+			}
 		}
 		param.SetComputedType(&types.TypeParameterType{Parameter: typeParams[i]})
 	}
@@ -576,7 +589,13 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 5. Create the instance type body with TypeParameterType references
 	c.classNameNode = node.Name
-	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
+	var instanceType *types.ObjectType
+	if mergeInto != nil {
+		body := mergeInto.Body.(*types.ObjectType).AsClassInstance(node.Name.Value)
+		instanceType = c.createInstanceTypeInPlace(node.Name.Value, node.Body, heritageRef(node.SuperClass, node.SuperTypeArgs), node.Implements, body)
+	} else {
+		instanceType = c.createInstanceType(node.Name.Value, node.Body, heritageRef(node.SuperClass, node.SuperTypeArgs), node.Implements)
+	}
 
 	// 6. Create constructor signatures from constructor overloads or implementation
 	constructorSigs := c.createConstructorSignatures(node.Body, instanceType, node.SuperClass != nil)
@@ -590,8 +609,10 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
 	instanceType.GenericName = node.Name.Value
-	for _, tp := range typeParams {
-		instanceType.GenericArgs = append(instanceType.GenericArgs, &types.TypeParameterType{Parameter: tp})
+	if mergeInto == nil {
+		for _, tp := range typeParams {
+			instanceType.GenericArgs = append(instanceType.GenericArgs, &types.TypeParameterType{Parameter: tp})
+		}
 	}
 	constructorType.DisplayName = "typeof " + node.Name.Value
 	c.inheritStaticMembers(constructorType, instanceType)
@@ -601,6 +622,9 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		Name:           node.Name.Value,
 		TypeParameters: typeParams,
 		Body:           instanceType,
+	}
+	if mergeInto != nil {
+		genericClassType = mergeInto
 	}
 
 	// 9. Create the final GenericType for the constructor
@@ -642,6 +666,51 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		debugPrintf("// [Checker Class] Successfully defined generic class '%s' with %d type parameters\n",
 			node.Name.Value, len(typeParams))
 	}
+}
+
+// heritageRef is the superclass of `extends a.B<T>` as the generic reference
+// it names, or superClass itself when it has no type arguments.
+func heritageRef(superClass parser.Expression, typeArgs []parser.Expression) parser.Expression {
+	member, ok := superClass.(*parser.MemberExpression)
+	if !ok || len(typeArgs) == 0 {
+		return superClass
+	}
+	name, ok := member.Property.(*parser.Identifier)
+	if !ok {
+		return superClass
+	}
+	return &parser.GenericTypeRef{Token: name.Token, Name: name, TypeArguments: typeArgs, Qualifier: member.Object}
+}
+
+// mergeableInterface is the generic interface declared before a generic
+// class of the same name in the same scope, with the same type parameter
+// names, which the class merges into; nil if there is none.
+func (c *Checker) mergeableInterface(node *parser.ClassDeclaration) *types.GenericType {
+	existing, ok := c.env.ResolveTypeLocal(node.Name.Value)
+	if !ok {
+		return nil
+	}
+	// A declaration may leave out trailing type parameters that have defaults
+	// (React's class Component<P, S> merges with interface Component<P, S, SS = any>).
+	g, ok := existing.(*types.GenericType)
+	if !ok || g.InstanceType != nil || len(g.TypeParameters) < len(node.TypeParameters) {
+		return nil
+	}
+	for _, extra := range g.TypeParameters[len(node.TypeParameters):] {
+		if extra.Default == nil {
+			return nil
+		}
+	}
+	body, ok := g.Body.(*types.ObjectType)
+	if !ok || body.ClassMeta != nil {
+		return nil
+	}
+	for i, param := range node.TypeParameters {
+		if g.TypeParameters[i].Name != param.Name.Value {
+			return nil
+		}
+	}
+	return g
 }
 
 // createInstanceType builds an object type representing instances of the class
@@ -1858,7 +1927,21 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		// 2. Instantiate it with the given type arguments
 		debugPrintf("// [Checker Class] Processing GenericTypeRef for '%s'\n", genRef.Name.Value)
 		debugPrintf("// [Checker Class] Looking for generic base constructor '%s'\n", genRef.Name.Value)
-		baseConstructor, _, resolveExists := c.env.Resolve(genRef.Name.Value)
+		var baseConstructor types.Type
+		var resolveExists bool
+		if genRef.Qualifier != nil {
+			// `extends React.Component<P>`: the constructor is the qualified
+			// value.
+			member := &parser.MemberExpression{Token: genRef.Token, Object: genRef.Qualifier, Property: genRef.Name}
+			savedAllowForwardReferences := c.allowForwardReferences
+			c.allowForwardReferences = true
+			c.visit(member)
+			c.allowForwardReferences = savedAllowForwardReferences
+			baseConstructor = member.GetComputedType()
+			resolveExists = baseConstructor != nil
+		} else {
+			baseConstructor, _, resolveExists = c.env.Resolve(genRef.Name.Value)
+		}
 		if !resolveExists {
 			debugPrintf("// [Checker Class] Generic base constructor '%s' not found in environment\n", genRef.Name.Value)
 			c.addError(superClassExpr, fmt.Sprintf("generic superclass '%s' is not defined", genRef.Name.Value))

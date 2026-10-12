@@ -416,6 +416,11 @@ func (c *Checker) reportLeaf(node parser.Node, expr parser.Expression, source, t
 
 	if expr != nil {
 		if ex := c.findExcessProperty(expr, target); ex != nil {
+			if _, isJSX := c.jsxAttributes[expr]; isJSX {
+				c.addErrorAtStart(ex.node, errors.TS2322, fmt.Sprintf(
+					"Type '%s' is not assignable to type '%s'.\n  Property '%s' does not exist on type '%s'.", srcStr, tgtStr, ex.name, tgtStr))
+				return
+			}
 			c.addErrorAtStart(ex.node, errors.TS2353, fmt.Sprintf(
 				"Object literal may only specify known properties, and '%s' does not exist in type '%s'.", ex.name, tgtStr))
 			return
@@ -431,7 +436,19 @@ func (c *Checker) reportLeaf(node parser.Node, expr parser.Expression, source, t
 		}
 	}
 
-	if names, ok := c.missingProperties(source, target); ok {
+	names, ok := c.missingProperties(source, target)
+	_, isJSX := c.jsxAttributes[expr]
+	if inter, isInter := target.(*types.IntersectionType); isInter && !ok && isJSX {
+		// A JSX element missing a required prop is reported against the
+		// props type (the member of `IntrinsicAttributes & P` that has it).
+		for _, member := range inter.Types {
+			if names, ok = c.missingProperties(source, member); ok {
+				_, tgtStr = c.getAssignmentErrorTypes(shown, member)
+				break
+			}
+		}
+	}
+	if ok {
 		if head == headAssign {
 			switch {
 			case len(names) == 1:
