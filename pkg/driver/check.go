@@ -101,18 +101,16 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 		wd = "."
 	}
 	from := filepath.Join(wd, "<check>")
+	// Parse every file the check will reach on all cores ahead of the
+	// loader, which still loads and checks them one at a time in order.
+	p.moduleLoader.EnableParseAhead()
 	var loadErrors []FileDiagnostics
-	if len(opts.Types) > 0 {
-		typesFrom := from
-		if opts.TypesFrom != "" {
-			typesFrom = filepath.Join(opts.TypesFrom, "<check>")
-		}
-		for _, spec := range opts.Types {
-			if _, err := p.moduleLoader.LoadModule(spec, typesFrom); err != nil {
-				loadErrors = append(loadErrors, FileDiagnostics{Path: spec, LoadError: fmt.Errorf("cannot find type definition file for '%s': %w", spec, err)})
-			}
-		}
+	typesFrom := from
+	if opts.TypesFrom != "" {
+		typesFrom = filepath.Join(opts.TypesFrom, "<check>")
 	}
+	type root struct{ spec, abs string }
+	var roots []root
 	for _, file := range files {
 		abs, err := filepath.Abs(file)
 		if err != nil {
@@ -125,8 +123,23 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 		} else {
 			rel = "./" + filepath.ToSlash(rel)
 		}
-		if _, err := p.moduleLoader.LoadModule(rel, from); err != nil {
-			loadErrors = append(loadErrors, FileDiagnostics{Path: abs, LoadError: err})
+		roots = append(roots, root{rel, abs})
+	}
+	for _, spec := range opts.Types {
+		p.moduleLoader.ParseAhead(spec, typesFrom)
+	}
+	for _, r := range roots {
+		p.moduleLoader.ParseAhead(r.spec, from)
+	}
+
+	for _, spec := range opts.Types {
+		if _, err := p.moduleLoader.LoadModule(spec, typesFrom); err != nil {
+			loadErrors = append(loadErrors, FileDiagnostics{Path: spec, LoadError: fmt.Errorf("cannot find type definition file for '%s': %w", spec, err)})
+		}
+	}
+	for _, r := range roots {
+		if _, err := p.moduleLoader.LoadModule(r.spec, from); err != nil {
+			loadErrors = append(loadErrors, FileDiagnostics{Path: r.abs, LoadError: err})
 		}
 	}
 

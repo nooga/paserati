@@ -68,6 +68,11 @@ type moduleLoader struct {
 	// VM instance for native module initialization
 	vmInstance *vm.VM
 
+	// ahead parses modules in the background (EnableParseAhead); resolveMu
+	// keeps the resolvers to one call at a time.
+	ahead     *parseAhead
+	resolveMu sync.Mutex
+
 	// State
 	mutex       sync.RWMutex
 	initialized bool
@@ -185,6 +190,10 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		record.State = ModuleError
 		debugPrintf("// [ModuleLoader] loadModuleSequential EARLY RETURN (parse error): %s - %v\n", specifier, err)
 		return record, nil // Return record with error, don't fail completely
+	}
+
+	if ml.ahead != nil {
+		ml.ahead.startImportsOf(record)
 	}
 
 	// Files and type packages named by triple-slash directives load (and
@@ -458,6 +467,22 @@ func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *Re
 		return ml.handleNativeModuleSource(record, nativeModule)
 	}
 
+	if ml.ahead != nil {
+		if p := ml.ahead.take(resolved.ResolvedPath); p != nil {
+			_ = resolved.Source.Close()
+			if p.readErr != nil {
+				return p.readErr
+			}
+			record.Source = p.source
+			if len(p.errs) > 0 {
+				record.Diagnostics = p.errs
+				return paseratiErrors.NewPositionedError("parsing failed", p.errs[0])
+			}
+			record.AST = p.program
+			return nil
+		}
+	}
+
 	// Read the source content
 	defer resolved.Source.Close()
 
@@ -595,6 +620,8 @@ func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string
 
 // resolveModule resolves a module specifier using the resolver chain
 func (ml *moduleLoader) resolveModule(specifier string, fromPath string) (*ResolvedModule, error) {
+	ml.resolveMu.Lock()
+	defer ml.resolveMu.Unlock()
 	debugPrintf("// [ModuleLoader] resolveModule: %s from %s\n", specifier, fromPath)
 	for _, resolver := range ml.resolvers {
 		if resolver.CanResolve(specifier) {
