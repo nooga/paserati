@@ -518,18 +518,33 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 			return nil // Indicate error
 		}
 
-	case *parser.UnionTypeExpression: // Added
-		leftType := c.resolveTypeAnnotation(node.Left)
-		rightType := c.resolveTypeAnnotation(node.Right)
-
-		if leftType == nil || rightType == nil {
-			// Error occurred resolving one of the sides
+	case *parser.UnionTypeExpression:
+		// `A | B | C` parses as ((A | B) | C); building and de-duplicating a
+		// union at every level made a long union cost a cube of its length
+		// in comparisons. Its members are resolved left to right and made
+		// into one union instead.
+		var operands []parser.Expression
+		var collect func(e parser.Expression)
+		collect = func(e parser.Expression) {
+			if u, ok := e.(*parser.UnionTypeExpression); ok {
+				collect(u.Left)
+				collect(u.Right)
+				return
+			}
+			operands = append(operands, e)
+		}
+		collect(node)
+		members := make([]types.Type, len(operands))
+		failed := false
+		for i, operand := range operands {
+			members[i] = c.resolveTypeAnnotation(operand)
+			failed = failed || members[i] == nil
+		}
+		if failed {
+			// Error occurred resolving a member
 			return nil
 		}
-
-		// --- UPDATED: Use NewUnionType constructor ---
-		// This handles flattening and duplicate removal automatically.
-		return types.NewUnionType(leftType, rightType)
+		return types.NewUnionType(members...)
 
 	case *parser.IntersectionTypeExpression: // NEW: Handle intersection types
 		leftType := c.resolveTypeAnnotation(node.Left)
