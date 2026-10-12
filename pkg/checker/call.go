@@ -1386,7 +1386,11 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 	// === PHASE 2: Re-visit function arguments with inferred types ===
 	if len(partialSolution) > 0 {
 		// Create partially instantiated signature for contextual typing
-		partialSig := c.substituteTypeParameters(genericSig, partialSolution)
+		// Only the parameter types give the remaining arguments context;
+		// substituting the return type too (a whole router type) is waste.
+		paramsOnly := *genericSig
+		paramsOnly.ReturnType = nil
+		partialSig := c.substituteTypeParameters(&paramsOnly, partialSolution)
 		if checkerDebug {
 			debugPrintf("// [Checker Inference] Phase 2: Using partially inferred signature: %s\n", partialSig.String())
 		}
