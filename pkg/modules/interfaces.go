@@ -82,6 +82,14 @@ type ModuleLoader interface {
 
 	// SetSkipTypeCheck sets whether to completely skip type checking during module loading
 	SetSkipTypeCheck(skip bool)
+
+	// EnableParseAhead turns on parsing the modules a load will reach on
+	// other cores ahead of the loader.
+	EnableParseAhead()
+
+	// ParseAhead starts parsing specifier, as imported from fromPath, and
+	// its imports in the background, if parse-ahead is enabled.
+	ParseAhead(specifier, fromPath string)
 }
 
 // ModuleRegistry manages the cache of loaded modules
