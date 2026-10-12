@@ -637,7 +637,7 @@ func (ot *ObjectType) GetConstructSignatures() []*Signature {
 
 // GetEffectiveProperties returns all properties including inherited ones from base types
 func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
-	result := make(map[string]Type)
+	result := make(map[string]Type, len(ot.Props()))
 
 	// First, add properties from base types (in reverse order for proper precedence)
 	for i := len(ot.Bases()) - 1; i >= 0; i-- {
@@ -651,12 +651,27 @@ func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
 	}
 
 	// Then add our own properties (these override base type properties)
-	for _, name := range SortedPropertyNames(ot.Props()) {
-		typ := ot.Props()[name]
+	for name, typ := range ot.Props() {
 		result[name] = typ
 	}
 
 	return result
+}
+
+// EffectiveProperty looks up one property, own or inherited, with the same
+// precedence as GetEffectiveProperties but without building the whole map.
+func (ot *ObjectType) EffectiveProperty(name string) (Type, bool) {
+	if t, ok := ot.Props()[name]; ok {
+		return t, true
+	}
+	for _, base := range ot.Bases() {
+		if baseObj, ok := resolveBaseType(base).(*ObjectType); ok {
+			if t, ok := baseObj.EffectiveProperty(name); ok {
+				return t, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // IsPropertyOptional checks whether a property is optional, including inherited properties

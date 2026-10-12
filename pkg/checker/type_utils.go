@@ -63,7 +63,7 @@ func (c *Checker) resolveObjectMemberForDestructuring(obj *types.ObjectType, pro
 	// Return the bare property type (no `| undefined` for optional members):
 	// the destructuring callers fold in defaults and undefined themselves, and
 	// widening optional props here defeats their default-collapsing logic.
-	if propType, exists := obj.GetEffectiveProperties()[propName]; exists {
+	if propType, exists := obj.EffectiveProperty(propName); exists {
 		if propType == nil {
 			return types.Undefined, false
 		}

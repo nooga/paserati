@@ -100,7 +100,7 @@ func (c *Checker) isReadonlyProperty(t types.Type, name string, depth int) bool 
 		case *types.ArrayType:
 			return name == "length"
 		case *types.ObjectType:
-			if _, ok := inner.GetEffectiveProperties()[name]; ok {
+			if _, ok := inner.EffectiveProperty(name); ok {
 				return true
 			}
 		}
@@ -153,7 +153,7 @@ func (c *Checker) objectPropertyReadonly(obj *types.ObjectType, name string, dep
 func (c *Checker) hasProperty(t types.Type, name string) bool {
 	switch tt := c.apparentType(c.rel.GetWidenedType(t)).(type) {
 	case *types.ObjectType:
-		_, ok := tt.GetEffectiveProperties()[name]
+		_, ok := tt.EffectiveProperty(name)
 		return ok
 	case *types.ReadonlyType:
 		return c.hasProperty(tt.InnerType, name)

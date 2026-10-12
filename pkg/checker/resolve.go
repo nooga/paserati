@@ -2902,14 +2902,12 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 
 	// Handle object types with specific string literal keys
 	if objType, ok := objectType.(*types.ObjectType); ok {
-		// Include members inherited from base types (classes, interfaces)
-		props := objType.GetEffectiveProperties()
 		// Case: Object["propertyName"] where "propertyName" is a string literal
 		if literalType, ok := indexType.(*types.LiteralType); ok {
 			if literalType.Value.Type() == vm.TypeString {
 				strVal := literalType.Value.AsString()
-				// Look up the property directly
-				if propType, exists := props[strVal]; exists {
+				// Look up the property directly, inherited members included
+				if propType, exists := objType.EffectiveProperty(strVal); exists {
 					return propType
 				}
 				// Property doesn't exist - this could be an error or return never/undefined
@@ -2917,6 +2915,9 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 				return nil
 			}
 		}
+
+		// Include members inherited from base types (classes, interfaces)
+		props := objType.GetEffectiveProperties()
 
 		// Case: Object[keyof Object] - return union of all property types
 		if keyofType, ok := indexType.(*types.KeyofType); ok {

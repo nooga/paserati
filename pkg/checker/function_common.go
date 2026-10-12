@@ -75,7 +75,7 @@ func (c *Checker) getAwaitedType(t types.Type) types.Type {
 	}
 
 	if objType, ok := t.(*types.ObjectType); ok {
-		if thenProp, hasThen := objType.GetEffectiveProperties()["then"]; hasThen {
+		if thenProp, hasThen := objType.EffectiveProperty("then"); hasThen {
 			if thenFuncType, ok := thenProp.(*types.ObjectType); ok && len(thenFuncType.CallSigs()) > 0 {
 				sig := thenFuncType.CallSigs()[0]
 				if len(sig.ParameterTypes) > 0 {
