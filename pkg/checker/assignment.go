@@ -387,6 +387,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 	}
 
 	c.checkDestructuringExcess(node.Properties, node.RestProperty != nil, node.Value)
+	rhsType = c.destructurableObject(rhsType)
 
 	// 2. Widen the RHS type for compatibility checking
 	widenedRhsType := c.rel.GetWidenedType(rhsType)

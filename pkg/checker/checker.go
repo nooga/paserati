@@ -4274,6 +4274,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	if expectedType != nil {
 		destructureType = expectedType
 	}
+	destructureType = c.destructurableObject(destructureType)
 
 	// Check if the value is an object-like type (arrays are also objects in JavaScript)
 	var objType *types.ObjectType
@@ -4633,7 +4634,10 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			if expectedSig.ReturnType != nil {
 				// If it's a type parameter, try to use its constraint for contextual typing
 				if typeParam, isTypeParam := expectedSig.ReturnType.(*types.TypeParameterType); isTypeParam {
-					if typeParam.Parameter != nil && typeParam.Parameter.Constraint != nil {
+					// An unconstrained parameter being inferred gives no context:
+					// the body's type is what it is inferred from.
+					if typeParam.Parameter != nil && typeParam.Parameter.Constraint != nil &&
+						typeParam.Parameter.Constraint != types.Any && typeParam.Parameter.Constraint != types.Unknown {
 						contextualReturnType = typeParam.Parameter.Constraint
 						if checkerDebug {
 							debugPrintf("// [Checker ArrowFuncContext] Using type parameter constraint as contextual return type: %s -> %s\n",

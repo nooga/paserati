@@ -253,6 +253,15 @@ func (c *Checker) jsxSignatures(t types.Type, ns *jsxNamespace, ret types.Type) 
 		}
 		return []*types.Signature{jsxSignature(nil, types.NewIntersectionType(props...), ret)}
 	}
+	if inter, ok := t.(*types.IntersectionType); ok {
+		// `(ComponentClass<P> | FunctionComponent<P>) & { getInitialProps?: ... }`:
+		// the members that are components.
+		var out []*types.Signature
+		for _, m := range inter.Types {
+			out = append(out, c.jsxSignatures(m, ns, ret)...)
+		}
+		return out
+	}
 	call, construct := c.componentSignatures(t)
 	var out []*types.Signature
 	for _, sig := range call {
