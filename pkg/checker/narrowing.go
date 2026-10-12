@@ -2444,7 +2444,7 @@ func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
 			propType, exists := objType.Props()[parts[i]]
 			if !exists {
 				// Inherited members (a property of a generic base class).
-				propType, exists = objType.GetEffectiveProperties()[parts[i]]
+				propType, exists = objType.EffectiveProperty(parts[i])
 			}
 			if !exists {
 				return nil

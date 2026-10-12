@@ -444,6 +444,14 @@ type Checker struct {
 	// determines (`const xs: string[] = from()`).
 	returnContexts map[*parser.CallExpression]types.Type
 
+	// lastArgContexts is the contextual type each argument of the generic
+	// call just inferred was last visited with (nil: none);
+	// checkFixedArgumentsWithSpread takes it from skipArgContexts and skips
+	// re-visiting an argument whose parameter type is unchanged. Re-visiting
+	// every argument doubled the work per level of nested generic calls.
+	lastArgContexts map[parser.Expression]types.Type
+	skipArgContexts map[parser.Expression]types.Type
+
 	// pendingInits are unannotated top-level declarators Pass 5 hasn't
 	// reached, inferred on demand when a function body reads them
 	// (hoisted_inits.go).

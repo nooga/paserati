@@ -169,6 +169,8 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 	}
 	allOk := true
 	effectiveArgIndex := 0
+	visited := c.skipArgContexts
+	c.skipArgContexts = nil
 
 	for _, argNode := range arguments {
 		if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
@@ -227,7 +229,11 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 		} else {
 			// Regular argument
 			// Use contextual typing if we have a matching parameter type
-			if effectiveArgIndex < len(paramTypes) {
+			if ctx, seen := visited[argNode]; seen && effectiveArgIndex < len(paramTypes) &&
+				sameArgContext(ctx, argNode.GetComputedType(), paramTypes[effectiveArgIndex]) {
+				// Inference already visited it in this very context, or
+				// the parameter is the argument's own type.
+			} else if effectiveArgIndex < len(paramTypes) {
 				paramType := paramTypes[effectiveArgIndex]
 				// Use contextual typing for the argument
 				c.visitWithContext(argNode, &ContextualType{
@@ -271,6 +277,19 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 	}
 
 	return allOk
+}
+
+// sameArgContext reports whether visiting an argument against param can
+// change nothing: inference already visited it in that context, or param is
+// (a copy of) the argument's own type.
+func sameArgContext(visitedCtx, argType, param types.Type) bool {
+	if param == nil {
+		return false
+	}
+	if visitedCtx != nil && (visitedCtx == param || visitedCtx.Equals(param)) {
+		return true
+	}
+	return argType != nil && (argType == param || argType.Equals(param))
 }
 
 // checkSuperCallExpression handles super() constructor calls
@@ -718,7 +737,10 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	if isGeneric {
 		debugPrintf("// [Checker CallExpr] Detected generic function call, attempting type inference\n")
 		inferredSignature := c.inferGenericFunctionCall(node, funcSignature)
+		argContexts := c.lastArgContexts
+		c.lastArgContexts = nil
 		if inferredSignature != nil {
+			c.skipArgContexts = argContexts
 			if checkerDebug {
 				debugPrintf("// [Checker CallExpr] Type inference successful, using inferred signature: %s\n", inferredSignature.String())
 			}
@@ -744,6 +766,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 	// If there are spread errors, skip detailed arity checking as it's meaningless
 	if hasSpreadErrors {
+		c.skipArgContexts = nil
 		node.SetComputedType(funcSignature.ReturnType)
 		return
 	}
@@ -883,6 +906,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 	}
 	// --- END MODIFIED Checking ---
+	c.skipArgContexts = nil
 
 	// Set Result Type - check if we need to resolve parameterized forward references
 	resultType := funcSignature.ReturnType
@@ -1254,6 +1278,8 @@ func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, ar
 // inferGenericFunctionCall attempts to infer type arguments for a generic function call
 func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, genericSig *types.Signature) *types.Signature {
 	debugPrintf("// [Checker Inference] Starting type inference for generic function call\n")
+	argContexts := make(map[parser.Expression]types.Type, len(callNode.Arguments))
+	defer func() { c.lastArgContexts = argContexts }()
 
 	// === PHASE 0: Check for explicit type arguments ===
 	if len(callNode.TypeArguments) > 0 {
@@ -1304,11 +1330,13 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		for i, argNode := range callNode.Arguments {
 			if i < len(inferredSig.ParameterTypes) {
 				paramType := inferredSig.ParameterTypes[i]
+				argContexts[argNode] = paramType
 				c.visitWithContext(argNode, &ContextualType{
 					ExpectedType: paramType,
 					IsContextual: true,
 				})
 			} else {
+				argContexts[argNode] = nil
 				c.visit(argNode)
 			}
 		}
@@ -1327,6 +1355,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		}
 
 		// Visit non-function arguments without contextual typing to get their natural types
+		argContexts[argNode] = nil
 		c.visit(argNode)
 		argType := argNode.GetComputedType()
 		if argType == nil {
@@ -1370,11 +1399,13 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 					if checkerDebug {
 						debugPrintf("// [Checker Inference] Phase 2: Re-visiting function argument %d with context: %s\n", i, paramType.String())
 					}
+					argContexts[argNode] = paramType
 					c.visitWithContext(argNode, &ContextualType{
 						ExpectedType: paramType,
 						IsContextual: true,
 					})
 				} else {
+					argContexts[argNode] = nil
 					c.visit(argNode)
 				}
 
@@ -1415,11 +1446,13 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		if argTypes[i] == nil {
 			if i < len(genericSig.ParameterTypes) {
 				paramType := genericSig.ParameterTypes[i]
+				argContexts[argNode] = paramType
 				c.visitWithContext(argNode, &ContextualType{
 					ExpectedType: paramType,
 					IsContextual: true,
 				})
 			} else {
+				argContexts[argNode] = nil
 				c.visit(argNode)
 			}
 
@@ -1948,8 +1981,10 @@ func isNumericPropertyName(propName string) bool {
 func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*types.TypeParameter]types.Type) *types.Signature {
 	memo := make(map[types.Type]types.Type)
 
-	// Helper function to substitute type parameters in a type
-	var substitute func(t types.Type) types.Type
+	// Helper function to substitute type parameters in a type. Every result
+	// is memoized: router types share subterms, and substituting a shared
+	// union or mapped type once per path was exponential.
+	var substitute, substituteUncached func(t types.Type) types.Type
 	substitute = func(t types.Type) types.Type {
 		if t == nil {
 			return nil
@@ -1957,7 +1992,11 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 		if substituted, ok := memo[t]; ok {
 			return substituted
 		}
-
+		r := substituteUncached(t)
+		memo[t] = r
+		return r
+	}
+	substituteUncached = func(t types.Type) types.Type {
 		switch typ := t.(type) {
 		case *types.TypeParameterType:
 			if inferredType, found := solution[typ.Parameter]; found {
@@ -2573,3 +2612,4 @@ func (c *Checker) hasConflictingDiscriminant(inter *types.IntersectionType) bool
 	}
 	return false
 }
+

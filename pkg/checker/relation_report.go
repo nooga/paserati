@@ -181,7 +181,7 @@ func (c *Checker) targetObjects(target types.Type) []*types.ObjectType {
 // objectKnowsProperty reports whether a property name is declared by the
 // object type or admitted by one of its index signatures (isKnownProperty).
 func objectKnowsProperty(obj *types.ObjectType, name string) bool {
-	if _, ok := obj.GetEffectiveProperties()[name]; ok {
+	if _, ok := obj.EffectiveProperty(name); ok {
 		return true
 	}
 	for _, idx := range obj.IndexSigs() {
@@ -205,7 +205,7 @@ func objectKnowsProperty(obj *types.ObjectType, name string) bool {
 // (with undefined added when optional), falling back to an applicable index
 // signature.
 func (c *Checker) objectPropertyType(obj *types.ObjectType, name string) (types.Type, bool) {
-	if pt, ok := obj.GetEffectiveProperties()[name]; ok {
+	if pt, ok := obj.EffectiveProperty(name); ok {
 		if obj.IsPropertyOptional(name) && c.rel.StrictNullChecks {
 			return types.NewUnionType(pt, types.Undefined), true
 		}

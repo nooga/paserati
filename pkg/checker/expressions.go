@@ -1515,8 +1515,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				debugPrintf("// [Checker MemberExpr] Function.prototype access, returning 'any' type\n")
 			} else {
 				// Look for the property in the object's fields, including inherited properties
-				effectiveProps := obj.GetEffectiveProperties()
-				fieldType, exists := effectiveProps[propertyName]
+				fieldType, exists := obj.EffectiveProperty(propertyName)
 				if exists {
 					// Property found - check access control for class types
 					c.validateMemberAccess(objectType, propertyName, node.Property)
@@ -2465,7 +2464,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				} else {
 					baseResultType = fieldType
 				}
-			} else if inherited, ok := obj.GetEffectiveProperties()[propertyName]; ok && inherited != nil {
+			} else if inherited, ok := obj.EffectiveProperty(propertyName); ok && inherited != nil {
 				baseResultType = inherited
 			} else if indexed := stringIndexValueType(obj); indexed != nil && !obj.IsCallable() {
 				// `r?.p` over `Record<string, V>` reads V, as `r.p` does.
