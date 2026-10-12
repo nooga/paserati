@@ -157,7 +157,7 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 
 	// Types that mention none of the substituted parameters are returned as
 	// they are, so identity (and class metadata) survives.
-	if !mentionsTypeParameter(t, substitutions, make(map[Type]bool), nil) {
+	if !mentionsTypeParameter(t, substitutions, make(map[Type]bool), nil, nil) {
 		return t
 	}
 
@@ -179,7 +179,7 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		if done, ok := memo[t]; ok {
 			return done
 		}
-		if t.Pending || !mentionsTypeParameter(t, substitutions, map[Type]bool{}, nil) {
+		if t.Pending || !mentionsTypeParameter(t, substitutions, map[Type]bool{}, nil, nil) {
 			// Nothing to substitute (or filled in later, in place): no copy.
 			return t
 		}
@@ -556,7 +556,7 @@ func substituteSignatureMemo(sig *Signature, substitutions map[*TypeParameter]Ty
 
 // mentionsTypeParameter reports whether t refers to any of the given type
 // parameters (visited guards against self-referential types).
-func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[Type]bool, target Type) bool {
+func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited, known map[Type]bool, target Type) bool {
 	if t == nil {
 		return false
 	}
@@ -568,104 +568,104 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[T
 		_, ok := params[tt.Parameter]
 		return ok
 	case *ArrayType:
-		return mentionsTypeParameter(tt.ElementType, params, visited, target)
+		return mentionsTypeParameter(tt.ElementType, params, visited, known, target)
 	case *ReadonlyType:
-		return mentionsTypeParameter(tt.InnerType, params, visited, target)
+		return mentionsTypeParameter(tt.InnerType, params, visited, known, target)
 	case *UnionType:
 		for _, m := range tt.Types {
-			if mentionsTypeParameter(m, params, visited, target) {
+			if mentionsTypeParameter(m, params, visited, known, target) {
 				return true
 			}
 		}
 	case *IntersectionType:
 		for _, m := range tt.Types {
-			if mentionsTypeParameter(m, params, visited, target) {
+			if mentionsTypeParameter(m, params, visited, known, target) {
 				return true
 			}
 		}
 	case *InstantiatedType:
 		for _, a := range tt.TypeArguments {
-			if mentionsTypeParameter(a, params, visited, target) {
+			if mentionsTypeParameter(a, params, visited, known, target) {
 				return true
 			}
 		}
 	case *ObjectType:
-		if visited[t] {
+		if visited[t] || known[t] {
 			return false
 		}
 		visited[t] = true
 		if tt.ClosedInstance {
 			for _, a := range tt.GenericArgs {
-				if mentionsTypeParameter(a, params, visited, target) {
+				if mentionsTypeParameter(a, params, visited, known, target) {
 					return true
 				}
 			}
 			return false
 		}
 		for _, p := range tt.Props() {
-			if mentionsTypeParameter(p, params, visited, target) {
+			if mentionsTypeParameter(p, params, visited, known, target) {
 				return true
 			}
 		}
 		for _, sigs := range [][]*Signature{tt.CallSigs(), tt.ConstructSigs()} {
 			for _, sig := range sigs {
 				for _, p := range sig.ParameterTypes {
-					if mentionsTypeParameter(p, params, visited, target) {
+					if mentionsTypeParameter(p, params, visited, known, target) {
 						return true
 					}
 				}
-				if mentionsTypeParameter(sig.ReturnType, params, visited, target) || mentionsTypeParameter(sig.RestParameterType, params, visited, target) ||
-					mentionsTypeParameter(sig.ThisType, params, visited, target) {
+				if mentionsTypeParameter(sig.ReturnType, params, visited, known, target) || mentionsTypeParameter(sig.RestParameterType, params, visited, known, target) ||
+					mentionsTypeParameter(sig.ThisType, params, visited, known, target) {
 					return true
 				}
 				for _, tp := range sig.TypeParameters {
-					if tp != nil && (mentionsTypeParameter(tp.Constraint, params, visited, target) || mentionsTypeParameter(tp.Default, params, visited, target)) {
+					if tp != nil && (mentionsTypeParameter(tp.Constraint, params, visited, known, target) || mentionsTypeParameter(tp.Default, params, visited, known, target)) {
 						return true
 					}
 				}
 			}
 		}
 		for _, idx := range tt.IndexSigs() {
-			if mentionsTypeParameter(idx.KeyType, params, visited, target) || mentionsTypeParameter(idx.ValueType, params, visited, target) ||
-				mentionsTypeParameter(idx.ConstraintType, params, visited, target) {
+			if mentionsTypeParameter(idx.KeyType, params, visited, known, target) || mentionsTypeParameter(idx.ValueType, params, visited, known, target) ||
+				mentionsTypeParameter(idx.ConstraintType, params, visited, known, target) {
 				return true
 			}
 		}
 		for _, base := range tt.Bases() {
-			if mentionsTypeParameter(base, params, visited, target) {
+			if mentionsTypeParameter(base, params, visited, known, target) {
 				return true
 			}
 		}
 		for _, a := range tt.GenericArgs {
-			if mentionsTypeParameter(a, params, visited, target) {
+			if mentionsTypeParameter(a, params, visited, known, target) {
 				return true
 			}
 		}
 	case *TupleType:
 		for _, e := range tt.ElementTypes {
-			if mentionsTypeParameter(e, params, visited, target) {
+			if mentionsTypeParameter(e, params, visited, known, target) {
 				return true
 			}
 		}
-		return mentionsTypeParameter(tt.RestElementType, params, visited, target)
+		return mentionsTypeParameter(tt.RestElementType, params, visited, known, target)
 	case *MappedType:
-		return mentionsTypeParameter(tt.ConstraintType, params, visited, target) || mentionsTypeParameter(tt.ValueType, params, visited, target)
+		return mentionsTypeParameter(tt.ConstraintType, params, visited, known, target) || mentionsTypeParameter(tt.ValueType, params, visited, known, target)
 	case *ConditionalType:
-		return mentionsTypeParameter(tt.CheckType, params, visited, target) || mentionsTypeParameter(tt.ExtendsType, params, visited, target) ||
-			mentionsTypeParameter(tt.TrueType, params, visited, target) || mentionsTypeParameter(tt.FalseType, params, visited, target)
+		return mentionsTypeParameter(tt.CheckType, params, visited, known, target) || mentionsTypeParameter(tt.ExtendsType, params, visited, known, target) ||
+			mentionsTypeParameter(tt.TrueType, params, visited, known, target) || mentionsTypeParameter(tt.FalseType, params, visited, known, target)
 	case *IndexedAccessType:
-		return mentionsTypeParameter(tt.ObjectType, params, visited, target) || mentionsTypeParameter(tt.IndexType, params, visited, target)
+		return mentionsTypeParameter(tt.ObjectType, params, visited, known, target) || mentionsTypeParameter(tt.IndexType, params, visited, known, target)
 	case *KeyofType:
-		return mentionsTypeParameter(tt.OperandType, params, visited, target)
+		return mentionsTypeParameter(tt.OperandType, params, visited, known, target)
 	case *GenericTypeAliasForwardReference:
 		for _, a := range tt.TypeArguments {
-			if mentionsTypeParameter(a, params, visited, target) {
+			if mentionsTypeParameter(a, params, visited, known, target) {
 				return true
 			}
 		}
 	case *TemplateLiteralType:
 		for _, part := range tt.Parts {
-			if !part.IsLiteral && mentionsTypeParameter(part.Type, params, visited, target) {
+			if !part.IsLiteral && mentionsTypeParameter(part.Type, params, visited, known, target) {
 				return true
 			}
 		}
@@ -689,17 +689,47 @@ var PolymorphicThis = &TypeParameter{Name: "this"}
 // MentionsTypeParameter reports whether t may refer to p (conservatively:
 // type operators it does not walk count as a mention).
 func MentionsTypeParameter(t Type, p *TypeParameter) bool {
-	return mentionsTypeParameter(t, map[*TypeParameter]Type{p: nil}, map[Type]bool{}, nil)
+	return mentionsTypeParameter(t, map[*TypeParameter]Type{p: nil}, map[Type]bool{}, nil, nil)
 }
 
 // MentionsAnyTypeParameter reports whether t may refer to any parameter in
 // params (conservatively, as mentionsTypeParameter).
 func MentionsAnyTypeParameter(t Type, params map[*TypeParameter]Type) bool {
-	return mentionsTypeParameter(t, params, map[Type]bool{}, nil)
+	return mentionsTypeParameter(t, params, map[Type]bool{}, nil, nil)
 }
 
 // Reaches reports whether target may be reachable from t (conservatively, as
 // mentionsTypeParameter: type operators it does not walk count as reaching).
 func Reaches(t, target Type) bool {
-	return mentionsTypeParameter(t, nil, map[Type]bool{}, target)
+	return mentionsTypeParameter(t, nil, map[Type]bool{}, nil, target)
+}
+
+// Reacher answers Reaches for one target over many starting points. A search
+// that fails has walked only objects that cannot reach the target, so they
+// are remembered and the next search does not walk them again: rebinding
+// every inherited member of an interface asks about the same library graphs
+// over and over.
+type Reacher struct {
+	target     Type
+	unreaching map[Type]bool
+}
+
+// NewReacher returns a Reacher for target.
+func NewReacher(target Type) *Reacher {
+	return &Reacher{target: target, unreaching: map[Type]bool{}}
+}
+
+// Reaches reports whether r's target may be reachable from t, as Reaches.
+func (r *Reacher) Reaches(t Type) bool {
+	if r.unreaching[t] {
+		return false
+	}
+	seen := map[Type]bool{}
+	if mentionsTypeParameter(t, nil, seen, r.unreaching, r.target) {
+		return true
+	}
+	for o := range seen {
+		r.unreaching[o] = true
+	}
+	return false
 }

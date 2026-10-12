@@ -335,9 +335,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			extendedObjs = append(extendedObjs, extendedObjectType)
 			c.recordDerived(extendedObjectType, interfaceType)
 			// Copy all properties from the extended interface
+			rb := newThisRebind(extendedObjectType, interfaceType)
 			for _, propName := range extendedObjectType.PropertyNames() {
 				propType := extendedObjectType.Props()[propName]
-				interfaceType.SetProperty(propName, c.rebindThisType(propType, extendedObjectType, interfaceType))
+				interfaceType.SetProperty(propName, c.rebindThisType(propType, rb))
 				interfaceType.SetPropertyDoc(propName, extendedObjectType.PropertyDoc(propName))
 				setReadonlyProperty(interfaceType, propName, extendedObjectType.ReadOnlyProps()[propName])
 				// Copy optional property flags
@@ -361,9 +362,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// types are valid bases; inherit whatever object members they have.
 			for _, baseObject := range baseObjects {
 				c.recordDerived(baseObject, interfaceType)
+				rb := newThisRebind(baseObject, interfaceType)
 				for _, propName := range baseObject.PropertyNames() {
 					propType := baseObject.Props()[propName]
-					interfaceType.SetProperty(propName, c.rebindThisType(propType, baseObject, interfaceType))
+					interfaceType.SetProperty(propName, c.rebindThisType(propType, rb))
 					interfaceType.SetPropertyDoc(propName, baseObject.PropertyDoc(propName))
 					setReadonlyProperty(interfaceType, propName, baseObject.ReadOnlyProps()[propName])
 					if baseObject.OptionalProps() != nil && baseObject.OptionalProps()[propName] {
@@ -704,9 +706,10 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
 			extendedObjs = append(extendedObjs, extendedObjectType)
 			c.recordDerived(extendedObjectType, bodyType)
+			rb := newThisRebind(extendedObjectType, bodyType)
 			for _, propName := range extendedObjectType.PropertyNames() {
 				propType := extendedObjectType.Props()[propName]
-				bodyType.SetProperty(propName, c.rebindThisType(propType, extendedObjectType, bodyType))
+				bodyType.SetProperty(propName, c.rebindThisType(propType, rb))
 				if extendedObjectType.OptionalProps() != nil && extendedObjectType.OptionalProps()[propName] {
 					optionalProperties[propName] = true
 				}
@@ -853,11 +856,23 @@ func interfaceMemberCallSignatures(t types.Type) ([]*types.Signature, bool) {
 	return nil, false
 }
 
-func (c *Checker) rebindThisType(t types.Type, from *types.ObjectType, to *types.ObjectType) types.Type {
-	return c.rebindThisTypeWithVisited(t, from, to, make(map[types.Type]types.Type))
+// thisRebind rebinds the members an interface `to` inherits from `from`: a
+// reference to from becomes one to to, in copies of the objects it is
+// reachable from. One thisRebind serves every member inherited from from, so
+// an object reached from several members is copied once, and a graph found
+// not to reach from is not searched again.
+type thisRebind struct {
+	from, to *types.ObjectType
+	visited  map[types.Type]types.Type
+	reach    *types.Reacher
 }
 
-func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType, to *types.ObjectType, visited map[types.Type]types.Type) types.Type {
+func newThisRebind(from, to *types.ObjectType) *thisRebind {
+	return &thisRebind{from: from, to: to, visited: make(map[types.Type]types.Type), reach: types.NewReacher(from)}
+}
+
+func (c *Checker) rebindThisType(t types.Type, rb *thisRebind) types.Type {
+	from, to, visited := rb.from, rb.to, rb.visited
 	if t == nil {
 		return nil
 	}
@@ -867,7 +882,7 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 
 	switch typ := t.(type) {
 	case *types.ArrayType:
-		return &types.ArrayType{ElementType: c.rebindThisTypeWithVisited(typ.ElementType, from, to, visited)}
+		return &types.ArrayType{ElementType: c.rebindThisType(typ.ElementType, rb)}
 
 	case *types.ObjectType:
 		if replacement, exists := visited[typ]; exists {
@@ -877,7 +892,7 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 		// reaches BB itself) and any other placeholder are kept by
 		// identity, as is every object `from` is not reachable from: a copy
 		// would detach them from their declarations and generics.
-		if typ == to || typ.Pending || !types.Reaches(typ, from) {
+		if typ == to || typ.Pending || !rb.reach.Reaches(typ) {
 			visited[typ] = typ
 			return typ
 		}
@@ -891,11 +906,11 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 			IsReflectIntrinsic: typ.IsReflectIntrinsic,
 		}
 		visited[typ] = result
-		typ.CopyDisplay(result, func(a types.Type) types.Type { return c.rebindThisTypeWithVisited(a, from, to, visited) })
+		typ.CopyDisplay(result, func(a types.Type) types.Type { return c.rebindThisType(a, rb) })
 
 		for _, propName := range typ.PropertyNames() {
 			propType := typ.Props()[propName]
-			result.SetProperty(propName, c.rebindThisTypeWithVisited(propType, from, to, visited))
+			result.SetProperty(propName, c.rebindThisType(propType, rb))
 		}
 		for propName, isOptional := range typ.OptionalProps() {
 			result.OptionalProps()[propName] = isOptional
@@ -905,25 +920,25 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 		}
 		for _, baseType := range typ.Bases() {
 			result.Materialize()
-			result.BaseTypes = append(result.Bases(), c.rebindThisTypeWithVisited(baseType, from, to, visited))
+			result.BaseTypes = append(result.Bases(), c.rebindThisType(baseType, rb))
 		}
 		if typ.IndexSigs() != nil {
 			result.Materialize()
 			result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSigs()))
 			for i, sig := range typ.IndexSigs() {
 				result.IndexSigs()[i] = &types.IndexSignature{
-					KeyType:        c.rebindThisTypeWithVisited(sig.KeyType, from, to, visited),
-					ValueType:      c.rebindThisTypeWithVisited(sig.ValueType, from, to, visited),
+					KeyType:        c.rebindThisType(sig.KeyType, rb),
+					ValueType:      c.rebindThisType(sig.ValueType, rb),
 					IsMapped:       sig.IsMapped,
 					TypeParameter:  sig.TypeParameter,
-					ConstraintType: c.rebindThisTypeWithVisited(sig.ConstraintType, from, to, visited),
+					ConstraintType: c.rebindThisType(sig.ConstraintType, rb),
 				}
 			}
 		}
 		result.Materialize()
-		result.CallSignatures = c.rebindSignaturesThisType(typ.CallSigs(), from, to, visited)
+		result.CallSignatures = c.rebindSignaturesThisType(typ.CallSigs(), rb)
 		result.Materialize()
-		result.ConstructSignatures = c.rebindSignaturesThisType(typ.ConstructSigs(), from, to, visited)
+		result.ConstructSignatures = c.rebindSignaturesThisType(typ.ConstructSigs(), rb)
 		if typ.ClassMeta != nil {
 			// A full copy: SourceClassName and the inheritance fields drive
 			// protected/private access checks on an instantiated generic class (#613).
@@ -936,21 +951,21 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 	case *types.UnionType:
 		newTypes := make([]types.Type, len(typ.Types))
 		for i, memberType := range typ.Types {
-			newTypes[i] = c.rebindThisTypeWithVisited(memberType, from, to, visited)
+			newTypes[i] = c.rebindThisType(memberType, rb)
 		}
 		return types.NewUnionType(newTypes...)
 
 	case *types.IntersectionType:
 		newTypes := make([]types.Type, len(typ.Types))
 		for i, memberType := range typ.Types {
-			newTypes[i] = c.rebindThisTypeWithVisited(memberType, from, to, visited)
+			newTypes[i] = c.rebindThisType(memberType, rb)
 		}
 		return types.NewIntersectionType(newTypes...)
 
 	case *types.TupleType:
 		newElementTypes := make([]types.Type, len(typ.ElementTypes))
 		for i, elementType := range typ.ElementTypes {
-			newElementTypes[i] = c.rebindThisTypeWithVisited(elementType, from, to, visited)
+			newElementTypes[i] = c.rebindThisType(elementType, rb)
 		}
 		return &types.TupleType{ElementTypes: newElementTypes}
 	}
@@ -958,7 +973,7 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 	return t
 }
 
-func (c *Checker) rebindSignaturesThisType(signatures []*types.Signature, from *types.ObjectType, to *types.ObjectType, visited map[types.Type]types.Type) []*types.Signature {
+func (c *Checker) rebindSignaturesThisType(signatures []*types.Signature, rb *thisRebind) []*types.Signature {
 	if signatures == nil {
 		return nil
 	}
@@ -967,17 +982,17 @@ func (c *Checker) rebindSignaturesThisType(signatures []*types.Signature, from *
 	for i, sig := range signatures {
 		newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 		for j, paramType := range sig.ParameterTypes {
-			newParamTypes[j] = c.rebindThisTypeWithVisited(paramType, from, to, visited)
+			newParamTypes[j] = c.rebindThisType(paramType, rb)
 		}
 		result[i] = &types.Signature{
 			TypeParameters:    sig.TypeParameters,
 			ParameterNames:    sig.ParameterNames,
 			ParameterTypes:    newParamTypes,
-			ReturnType:        c.rebindThisTypeWithVisited(sig.ReturnType, from, to, visited),
+			ReturnType:        c.rebindThisType(sig.ReturnType, rb),
 			OptionalParams:    sig.OptionalParams,
 			IsVariadic:        sig.IsVariadic,
 			StrictVariance:    sig.StrictVariance,
-			RestParameterType: c.rebindThisTypeWithVisited(sig.RestParameterType, from, to, visited),
+			RestParameterType: c.rebindThisType(sig.RestParameterType, rb),
 		}
 	}
 	return result
