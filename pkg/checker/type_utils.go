@@ -114,6 +114,24 @@ func objectLikeUnionMembers(union *types.UnionType) (members []*types.ObjectType
 	return members, true
 }
 
+// destructurableObject is the object an object pattern reads properties from
+// when t is an intersection or a mapped type (`MergeC<A, B> = A & B`), and t
+// otherwise.
+func (c *Checker) destructurableObject(t types.Type) types.Type {
+	if eff := c.resolveStructural(types.GetEffectiveType(t)); eff != nil {
+		if _, ok := eff.(*types.IntersectionType); ok {
+			t = eff
+		}
+	}
+	switch t.(type) {
+	case *types.IntersectionType, *types.MappedType:
+		if obj, ok := c.structuralObject(t); ok {
+			return obj
+		}
+	}
+	return t
+}
+
 // resolveObjectMemberForDestructuringUnion resolves a property across the
 // object-like constituents of a union type. A JavaScript destructuring
 // pattern never fails at runtime just because a key is absent — it simply

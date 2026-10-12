@@ -1919,6 +1919,33 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		newElementType := c.substituteTypesWithVisited(typ.ElementType, substitution, visited)
 		return &types.ArrayType{ElementType: newElementType}
 
+	case *types.GenericType:
+		// A generic method (`m<C>(f: () => C): K<A, B & C>` in interface
+		// K<A, B>) takes the outer substitution in its body; its own
+		// parameters shadow outer ones of the same name.
+		body, isFunc := typ.Body.(*types.ObjectType)
+		if !isFunc || typ.InstanceType != nil || !body.IsCallable() {
+			return typ
+		}
+		if replacement, exists := visited[typ]; exists {
+			return replacement
+		}
+		bodySubstitution, bodyVisited := substitution, visited
+		if unshadowed, shadows := unshadowedNames(substitution, typ.TypeParameters); shadows {
+			if len(unshadowed) == 0 {
+				return typ
+			}
+			bodySubstitution, bodyVisited = unshadowed, make(map[types.Type]types.Type)
+		}
+		newBody := c.substituteTypesWithVisited(body, bodySubstitution, bodyVisited)
+		if newBody == typ.Body {
+			visited[typ] = typ
+			return typ
+		}
+		result := &types.GenericType{Name: typ.Name, TypeParameters: typ.TypeParameters, Body: newBody}
+		visited[typ] = result
+		return result
+
 	case *types.ObjectType:
 		if replacement, exists := visited[typ]; exists {
 			return replacement
