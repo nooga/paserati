@@ -12,6 +12,11 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		funcName = node.Name.Value
 	}
 
+	// A declaration hoisted in a block was bound to its signature with the
+	// return type unknown yet (see the BlockStatement case); once its body
+	// is checked the binding takes the inferred type.
+	hoistedType := node.GetComputedType()
+
 	// Create function check context
 	ctx := &FunctionCheckContext{
 		FunctionName:            funcName,
@@ -68,7 +73,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		debugPrintf("// [Checker FuncLit] Async generator function detected, wrapping return type\n")
 
 		// Use the collected yield types to create AsyncGenerator<T, TReturn, TNext>
-		asyncGeneratorType := c.createAsyncGeneratorType(finalReturnType, c.currentInferredYieldTypes)
+		asyncGeneratorType := c.createAsyncGeneratorType(finalReturnType, c.bodyYieldTypes)
 		finalReturnType = asyncGeneratorType
 		if checkerDebug {
 			debugPrintf("// [Checker FuncLit] Created async generator type: %s\n", finalReturnType.String())
@@ -78,7 +83,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		debugPrintf("// [Checker FuncLit] Generator function detected, wrapping return type\n")
 
 		// Use the collected yield types to create the proper Generator<T, TReturn, TNext> type
-		generatorType := c.createGeneratorType(finalReturnType, c.currentInferredYieldTypes)
+		generatorType := c.createGeneratorType(finalReturnType, c.bodyYieldTypes)
 		finalReturnType = generatorType
 		if checkerDebug {
 			debugPrintf("// [Checker FuncLit] Created generator type: %s\n", finalReturnType.String())
@@ -123,6 +128,12 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	// 7. Restore environment
 	c.env = originalEnv
 	debugPrintf("// [Checker FuncLit] Restored environment to: %p\n", originalEnv)
+
+	if node.Name != nil && hoistedType != nil && hoistedType != finalFuncType && node.ReturnTypeAnnotation == nil {
+		if bound, _, ok := c.env.Resolve(funcName); ok && bound == hoistedType {
+			c.env.Update(funcName, finalFuncType)
+		}
+	}
 }
 
 // createGeneratorType creates an instantiated Generator<T, TReturn, TNext> type

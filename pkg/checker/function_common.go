@@ -648,6 +648,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	// Restore return context, this context, and async/generator context
 	c.currentExpectedReturnType = outerExpectedReturnType
 	c.currentInferredReturnTypes = outerInferredReturnTypes
+	c.bodyYieldTypes = c.currentInferredYieldTypes
 	c.currentInferredYieldTypes = outerInferredYieldTypes
 	c.currentThisType = outerThisType
 	c.inAsyncFunction = outerInAsyncFunction

@@ -234,7 +234,14 @@ func (c *Checker) resolveExtendedInterfaceObjectType(t types.Type) (*types.Objec
 			merged.ConstructSignatures = append(merged.ConstructSigs(), obj.ConstructSigs()...)
 		}
 		return merged, true
-	case *types.ArrayType, *types.TupleType, *types.MappedType:
+	case *types.MappedType:
+		// `interface TRPCContextState<T> extends Required<TRPCContextProps<T>>`:
+		// the keys are known even while T is generic.
+		if obj, ok := c.expandIfMappedType(tt).(*types.ObjectType); ok {
+			return obj, true
+		}
+		return types.NewObjectType(), true
+	case *types.ArrayType, *types.TupleType:
 		return types.NewObjectType(), true
 	}
 
@@ -892,7 +899,9 @@ func (c *Checker) rebindThisType(t types.Type, rb *thisRebind) types.Type {
 		// reaches BB itself) and any other placeholder are kept by
 		// identity, as is every object `from` is not reachable from: a copy
 		// would detach them from their declarations and generics.
-		if typ == to || typ.Pending || !rb.reach.Reaches(typ) {
+		// A class instance type is nominal (#private members) and its `this`
+		// is the class's own, so it is never copied either.
+		if typ == to || typ.Pending || typ.ClassMeta != nil || !rb.reach.Reaches(typ) {
 			visited[typ] = typ
 			return typ
 		}
