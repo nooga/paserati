@@ -63,6 +63,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 	typeParameters := p.tryParseTypeParameters()
 
 	var superClass Expression
+	var superTypeArgs []Expression
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // consume 'extends'
 		p.nextToken() // move to start of expression
@@ -89,7 +90,11 @@ func (p *Parser) parseClassDeclaration() Statement {
 
 		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
 			// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
+			p.heritageTypeArgs = nil
 			superClass = p.parseExpression(LOWEST)
+			if _, ok := superClass.(*MemberExpression); ok {
+				superTypeArgs = p.heritageTypeArgs
+			}
 		} else {
 			// Type expression: Container, Container<T>, etc.
 			superClass = p.parseTypeExpression()
@@ -140,6 +145,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 		Name:           name,
 		TypeParameters: typeParameters,
 		SuperClass:     superClass,
+		SuperTypeArgs:  superTypeArgs,
 		Implements:     implements,
 		Body:           body,
 	}
@@ -264,6 +270,7 @@ func (p *Parser) parseClassExpression() Expression {
 	typeParameters := p.tryParseTypeParameters()
 
 	var superClass Expression
+	var superTypeArgs []Expression
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // consume 'extends'
 		p.nextToken() // move to start of expression
@@ -290,7 +297,11 @@ func (p *Parser) parseClassExpression() Expression {
 
 		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
 			// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
+			p.heritageTypeArgs = nil
 			superClass = p.parseExpression(LOWEST)
+			if _, ok := superClass.(*MemberExpression); ok {
+				superTypeArgs = p.heritageTypeArgs
+			}
 		} else {
 			// Type expression: Container, Container<T>, etc.
 			superClass = p.parseTypeExpression()
@@ -341,6 +352,7 @@ func (p *Parser) parseClassExpression() Expression {
 		Name:           name,
 		TypeParameters: typeParameters,
 		SuperClass:     superClass,
+		SuperTypeArgs:  superTypeArgs,
 		Implements:     implements,
 		Body:           body,
 	}

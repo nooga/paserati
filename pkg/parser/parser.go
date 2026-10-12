@@ -74,6 +74,12 @@ type Parser struct {
 	// ambientFile marks a declaration file (.d.ts, .d.mts, .d.cts): every
 	// top-level declaration is ambient, with or without `declare`.
 	ambientFile bool
+	// jsx marks a .tsx or .jsx file, where '<' in an expression starts JSX.
+	// prePeek is the lexer state before peekToken was scanned, which is just
+	// after prePeekCur (see parse_jsx.go).
+	jsx        bool
+	prePeek    lexer.LexerState
+	prePeekCur *lexer.Token
 
 	// speculating > 0 while a parse attempt is running whose failure the caller
 	// detects (and undoes) by return value; error recovery must stay off there,
@@ -98,6 +104,9 @@ type Parser struct {
 	// inHeritage > 0 while parsing a class `extends` clause, where a '{' (or
 	// `implements`) after `a.b<T>` closes the type arguments.
 	inHeritage int
+	// heritageTypeArgs are the type arguments of the instantiation expression
+	// last parsed in an `extends` clause.
+	heritageTypeArgs []Expression
 
 	// inStaticBlock is true directly inside a class static block (not within a
 	// nested function), where `return` has its own diagnostic.
@@ -314,6 +323,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 			name = src.Name
 		}
 		p.ambientFile = IsDeclarationFile(name)
+		p.jsx = isJSXFile(name)
 	}
 
 	// Initialize Pratt parser maps for VALUE expressions
@@ -644,6 +654,10 @@ func (p *Parser) nextToken() {
 	p.checkLegacyOctal(p.curToken)
 	if p.curToken != nil && len(p.curToken.Diags) > 0 {
 		p.reportTokenDiags(p.curToken.Diags)
+	}
+	if p.jsx {
+		p.prePeek = p.l.SaveState()
+		p.prePeekCur = p.curToken
 	}
 	p.peekToken = p.tokenPool.Take(p.l.NextToken())
 	if debugParser && p.curToken != nil {
@@ -10668,6 +10682,16 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 // Returns nil if no specific token can be easily extracted.
 func GetTokenFromNode(node Node) *lexer.Token {
 	switch n := node.(type) {
+	case *JSXElement:
+		return n.Token
+	case *JSXTagType:
+		return n.Token
+	case *JSXText:
+		return n.Token
+	case *JSXExpressionContainer:
+		return n.Token
+	case *JSXNamespacedName:
+		return n.Token
 	// Statements (use the primary keyword/token)
 	case *LetStatement:
 		return n.Token
@@ -10941,6 +10965,17 @@ func (p *Parser) parseGenericArrowFunction() Expression {
 		return nil
 	}
 	startCur := p.curToken
+
+	if p.jsx {
+		// In a JSX file `<` starts JSX unless it reads as a generic arrow's
+		// type parameters; there are no `<T>expr` type assertions.
+		if p.isJSXGenericArrowStart() {
+			if arrow, failed := p.tryParseGenericArrow(false, startCur.StartPos); arrow != nil || !failed {
+				return arrow
+			}
+		}
+		return p.parseJSXElementExpression()
+	}
 
 	if arrow, failed := p.tryParseGenericArrow(false, startCur.StartPos); arrow != nil || !failed {
 		return arrow
@@ -11735,6 +11770,10 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 		// Type arguments with no call - a tagged template or an instantiation
 		// expression (`f<number>`): erased, only the callee remains.
 		if tagErr == nil && len(tagArgs) > 0 && (p.peekTokenIs(lexer.TEMPLATE_START) || p.canFollowTypeArgumentsInExpression()) {
+			if p.inHeritage > 0 {
+				// `extends React.Component<P>`: the checker needs them.
+				p.heritageTypeArgs = tagArgs
+			}
 			return left
 		}
 

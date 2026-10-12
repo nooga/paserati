@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,5 +206,74 @@ func TestCheckFilesModuleAugmentation(t *testing.T) {
 	want := "TS2322 Type 'void' is not assignable to type 'number'."
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("diagnostics = %q, want only %q", got, want)
+	}
+}
+
+// TestCheckFilesJSX checks JSX against a React-shaped declaration package:
+// `export = React` with the JSX namespace nested in it, an interface that a
+// class of the same name merges into, a generic component inferred from its
+// attributes, and tsc's codes for attribute mismatches.
+func TestCheckFilesJSX(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"node_modules/react/package.json": `{"types":"index.d.ts"}`,
+		"node_modules/react/index.d.ts": "export = React;\n" +
+			"declare namespace React {\n" +
+			"  type ReactNode = string | number | boolean | null | undefined | JSX.Element;\n" +
+			"  interface Attributes { key?: string | number }\n" +
+			"  interface Component<P = {}, S = {}, SS = any> {}\n" +
+			"  class Component<P, S> { constructor(props: P); readonly props: Readonly<P>; render(): ReactNode; }\n" +
+			"  namespace JSX {\n" +
+			"    interface Element { type: any }\n" +
+			"    interface ElementAttributesProperty { props: {} }\n" +
+			"    interface ElementChildrenAttribute { children: {} }\n" +
+			"    interface IntrinsicAttributes extends React.Attributes {}\n" +
+			"    interface IntrinsicElements { div: { className?: string; children?: ReactNode; onClick?: (e: { x: number }) => void } }\n" +
+			"  }\n" +
+			"}\n",
+		"main.tsx": "import * as React from 'react';\n" +
+			"function Hello(props: { name: string; children?: React.ReactNode }) { return <div className=\"h\">{props.name}</div>; }\n" +
+			"class Klass extends React.Component<{ title: string }> { render() { return <div>{this.props.title}</div>; } }\n" +
+			"function List<T>(props: { items: T[]; render: (item: T) => string }) { return <div />; }\n" +
+			"const ok = <>\n" +
+			"  <Hello name=\"a\" key=\"k\" data-x=\"1\">text {1}</Hello>\n" +
+			"  <Klass title=\"t\" />\n" +
+			"  <List items={[1, 2]} render={(n) => n.toFixed(1)} />\n" +
+			"  <div onClick={(e) => e.x.toFixed()} />\n" +
+			"</>;\n" +
+			"const a = <Hello />;\n" +
+			"const b = <Hello name={1} />;\n" +
+			"const c = <Hello name=\"x\" extra />;\n" +
+			"const d = <span />;\n",
+	}
+	for p, content := range files {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPaserati()
+	p.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types}))
+	var got []string
+	for _, r := range p.CheckFiles([]string{"main.tsx"}) {
+		for _, d := range r.Diagnostics {
+			got = append(got, fmt.Sprintf("%d:%d %s", d.Pos().Line, d.Pos().Column, d.Code()))
+		}
+	}
+	want := []string{"11:12 TS2741", "12:18 TS2322", "13:27 TS2322", "14:12 TS2339"}
+	if strings.Join(got, ", ") != strings.Join(want, ", ") {
+		t.Errorf("diagnostics = %q, want %q", got, want)
 	}
 }
