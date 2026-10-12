@@ -152,7 +152,7 @@ func (c *Checker) fallBackToConstraints(solution map[*types.TypeParameter]types.
 // plain structural assignability does not see (`string` satisfies
 // `{ length: number }`).
 func (c *Checker) satisfiesConstraint(arg, constraint types.Type) bool {
-	if c.rel.IsAssignable(arg, constraint) {
+	if c.isAssignableWithExpansion(arg, constraint) {
 		return true
 	}
 	if union, ok := arg.(*types.UnionType); ok {

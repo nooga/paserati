@@ -280,6 +280,11 @@ type Checker struct {
 	// GlobalDeclarations); globalScope is the global env of the file being
 	// checked, where `declare global` declares.
 	sharedGlobals *GlobalDeclarations
+
+	// trueBranchConstraints holds, per type parameter, the extends types of
+	// the conditional true branches being resolved whose check type it is
+	// (see withTrueBranchConstraint).
+	trueBranchConstraints map[*types.TypeParameter][]types.Type
 	globalScope   *Environment
 	// skipLibCheck mirrors tsc's skipLibCheck: declarations in library files
 	// (declaration files and modules under node_modules) are not validated.
