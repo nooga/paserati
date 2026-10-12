@@ -1,5 +1,7 @@
 package types
 
+import "github.com/nooga/paserati/pkg/vm"
+
 // --- Union Types ---
 
 // UnionType represents a union of multiple types (e.g., string | number).
@@ -115,9 +117,33 @@ func NewUnionType(ts ...Type) Type {
 		collectTypes(t)
 	}
 
-	// Filter for unique types using the Equals method
+	// Filter for unique types using the Equals method. A literal equals only
+	// a literal with the same key, so literals are looked up instead of
+	// compared with every member (unions of hundreds of string literals are
+	// common); a member already present by identity is a duplicate too.
 	uniqueMembers := make([]Type, 0, len(potentialMembers))
+	var literals map[literalKey]bool
+	var present map[Type]bool
+	if len(potentialMembers) > 8 {
+		literals = make(map[literalKey]bool)
+		present = make(map[Type]bool)
+	}
 	for _, pm := range potentialMembers {
+		if literals != nil {
+			if lt, ok := pm.(*LiteralType); ok && lt != nil {
+				key, ok := keyOfLiteral(lt)
+				if ok {
+					if literals[key] {
+						continue
+					}
+					literals[key] = true
+					uniqueMembers = append(uniqueMembers, pm)
+					continue
+				}
+			} else if present[pm] {
+				continue
+			}
+		}
 		isDuplicate := false
 		for _, um := range uniqueMembers {
 			if pm.Equals(um) { // <<< USE Equals METHOD
@@ -127,6 +153,9 @@ func NewUnionType(ts ...Type) Type {
 		}
 		if !isDuplicate {
 			uniqueMembers = append(uniqueMembers, pm)
+			if present != nil {
+				present[pm] = true
+			}
 		}
 	}
 
@@ -157,6 +186,39 @@ func NewUnionType(ts ...Type) Type {
 	// Members stay in first-seen order, which is the order they were written
 	// in; Equals compares as a set, so nothing relies on a canonical order.
 	return &UnionType{Types: uniqueMembers}
+}
+
+// literalKey identifies a literal type as LiteralType.Equals does: the value's
+// kind and value, with 0 and -0 alike (NaN, never equal to itself, is never
+// found).
+type literalKey struct {
+	kind vm.ValueType
+	num  float64
+	str  string
+}
+
+// keyOfLiteral returns lt's key, or false for a kind Equals never matches.
+func keyOfLiteral(lt *LiteralType) (literalKey, bool) {
+	k := literalKey{kind: lt.Value.Type()}
+	switch k.kind {
+	case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+		k.num = vm.AsNumber(lt.Value)
+		if k.num == 0 {
+			k.num = 0 // -0 equals 0
+		}
+	case vm.TypeBigInt:
+		k.str = lt.Value.AsBigInt().String()
+	case vm.TypeString:
+		k.str = vm.AsString(lt.Value)
+	case vm.TypeBoolean:
+		if lt.Value.AsBoolean() {
+			k.num = 1
+		}
+	case vm.TypeNull, vm.TypeUndefined:
+	default:
+		return k, false
+	}
+	return k, true
 }
 
 // RemoveNullUndefined removes null and undefined from a type.
