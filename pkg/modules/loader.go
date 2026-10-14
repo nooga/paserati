@@ -74,9 +74,85 @@ type moduleLoader struct {
 	ahead     *parseAhead
 	resolveMu sync.Mutex
 
+	// ambient answers non-relative specifiers that an ambient module
+	// declaration names (`declare module "fs" { ... }` in @types/node)
+	// before the resolvers are tried, as tsc does (SetAmbientModules).
+	ambient func(specifier string) map[string]types.Type
+	// ambientFiles indexes which referenced file declares each ambient
+	// module, so a module a file not checked yet declares can be checked on
+	// first import (@types/node's child_process imports "node:net").
+	ambientFiles map[string]ambientFile
+
 	// State
 	mutex       sync.RWMutex
 	initialized bool
+}
+
+// SetAmbientModules installs the lookup for ambient module declarations.
+func (ml *moduleLoader) SetAmbientModules(lookup func(specifier string) map[string]types.Type) {
+	ml.ambient = lookup
+}
+
+// ambientFile is a file that declares an ambient module, as referenced.
+type ambientFile struct{ spec, from string }
+
+// indexAmbientModules records which of refs, the files a file references,
+// declare which ambient modules.
+func (ml *moduleLoader) indexAmbientModules(refs []string, from string) {
+	if ml.ambient == nil {
+		return
+	}
+	for _, ref := range refs {
+		resolved, err := ml.resolveModule(ref, from)
+		if err != nil || resolved.Source == nil {
+			continue
+		}
+		content, err := io.ReadAll(resolved.Source)
+		_ = resolved.Source.Close()
+		if err != nil {
+			continue
+		}
+		for _, name := range AmbientModuleNames(string(content)) {
+			if ml.ambientFiles == nil {
+				ml.ambientFiles = map[string]ambientFile{}
+			}
+			if _, seen := ml.ambientFiles[name]; !seen {
+				ml.ambientFiles[name] = ambientFile{spec: ref, from: from}
+			}
+		}
+	}
+}
+
+// ambientRecord is the module record of an ambient module declaration, or
+// nil. It is built afresh on each lookup: later declaration files may add
+// to the module.
+func (ml *moduleLoader) ambientRecord(specifier string) *ModuleRecord {
+	if ml.ambient == nil || specifier == "" || strings.HasPrefix(specifier, ".") || strings.HasPrefix(specifier, "/") {
+		return nil
+	}
+	exports := ml.ambient(specifier)
+	if exports == nil {
+		file, ok := ml.ambientFiles[specifier]
+		if !ok {
+			return nil
+		}
+		// Check the file that declares it now. A file already loading
+		// (a cycle) comes back as is.
+		delete(ml.ambientFiles, specifier)
+		if _, err := ml.loadModuleSequential(file.spec, file.from); err != nil {
+			return nil
+		}
+		if exports = ml.ambient(specifier); exports == nil {
+			return nil
+		}
+	}
+	return &ModuleRecord{
+		Specifier:    specifier,
+		ResolvedPath: "ambient:" + specifier,
+		State:        ModuleCompiled,
+		LoadTime:     time.Now(),
+		Exports:      exports,
+	}
 }
 
 // NewModuleLoader creates a new module loader
@@ -132,6 +208,10 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	if strings.HasSuffix(specifier, ".json") {
 		debugPrintf("// [ModuleLoader] Detected .json extension, routing to loadJSONModule: %s\n", specifier)
 		return ml.loadJSONModule(specifier, fromPath)
+	}
+
+	if rec := ml.ambientRecord(specifier); rec != nil {
+		return rec, nil
 	}
 
 	// Check cache first. The key includes the importer: the same relative
@@ -201,7 +281,9 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	// are checked) first: their declarations are often global (@types/node's
 	// index is nothing but `/// <reference path="..." />` lines).
 	if record.Source != nil {
-		for _, ref := range TripleSlashReferences(record.Source.Content) {
+		refs := TripleSlashReferences(record.Source.Content)
+		ml.indexAmbientModules(refs, record.ResolvedPath)
+		for _, ref := range refs {
 			if _, err := ml.loadModuleSequential(ref, record.ResolvedPath); err != nil {
 				debugPrintf("// [ModuleLoader] reference %q from %s: %v\n", ref, record.ResolvedPath, err)
 			}
@@ -824,6 +906,9 @@ func (ml *moduleLoader) AddResolver(resolver ModuleResolver) {
 // fromPath, without loading it. Falls back to treating specifier as a
 // resolved path, so callers holding a canonical path can look up by it.
 func (ml *moduleLoader) GetModule(specifier, fromPath string) *ModuleRecord {
+	if rec := ml.ambientRecord(specifier); rec != nil {
+		return rec
+	}
 	if record := ml.registry.Get(ModuleCacheKey(specifier, fromPath)); record != nil {
 		return record
 	}

@@ -444,6 +444,10 @@ type Checker struct {
 	// determines (`const xs: string[] = from()`).
 	returnContexts map[*parser.CallExpression]types.Type
 
+	// currentAmbientModule is the module whose ambient declaration body is
+	// being checked (see ambient_modules.go).
+	currentAmbientModule *ambientModule
+
 	// lastArgContexts is the contextual type each argument of the generic
 	// call just inferred was last visited with (nil: none);
 	// checkFixedArgumentsWithSpread takes it from skipArgContexts and skips

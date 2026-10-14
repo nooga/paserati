@@ -1110,12 +1110,13 @@ func (p *Parser) parseStatementNoDoc() Statement {
 					return p.parseNamespaceDeclaration(true)
 				}
 				// declare module "m" { ... } / declare global { ... }
+				// Always parsed: a body of only functions and constants
+				// declares them (@types/node's `declare module "net" {
+				// function connect(): Socket; }`).
 				if next := p.lookAhead(1); (p.peekToken.Literal == "module" && next.Type == lexer.STRING) ||
 					(p.peekToken.Literal == "global" && next.Type == lexer.LBRACE) {
-					if !p.isEmptyDeclareNamespace() {
-						p.nextToken() // move to 'module' / 'global'
-						return p.parseAmbientModuleDeclaration()
-					}
+					p.nextToken() // move to 'module' / 'global'
+					return p.parseAmbientModuleDeclaration()
 				}
 				// declare module/global with empty body — skip silently.
 				// Only skip empty bodies to avoid suppressing TS1038 errors inside non-empty bodies.

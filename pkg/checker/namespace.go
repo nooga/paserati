@@ -32,12 +32,22 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	// 1. Get-or-create the NamespaceType in the current scope. We look in the
 	//    type env: a NamespaceType always lives there.
 	var nsType *types.NamespaceType
+	var ambientMod *ambientModule
 	if node.AmbientModule {
 		// `declare module "m"` / `declare global`: check the body, bind no name.
-		nsType = types.NewNamespaceType(name)
-		nsType.Declare = true
-		if c.isModuleAugmentation(node) {
+		switch {
+		case c.isModuleAugmentation(node):
+			nsType = types.NewNamespaceType(name)
+			nsType.Declare = true
 			c.augmentations = append(c.augmentations, moduleAugmentation{specifier: name, ns: nsType})
+		case name != "global" && c.sharedGlobals != nil && c.namespaceBodyDepth == 0:
+			// An ambient module declaration in a script file declares the
+			// module "m", merged with its other declarations.
+			ambientMod = c.sharedGlobals.ambientModuleFor(name)
+			nsType = ambientMod.ns
+		default:
+			nsType = types.NewNamespaceType(name)
+			nsType.Declare = true
 		}
 	} else if existing, found := c.env.ResolveTypeLocal(name); found {
 		if c.env.seededNamespaces[name] && !exportedDecl {
@@ -121,6 +131,17 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	// 3. Walk each body statement and dispatch. We deliberately use a single-
 	//    pass walk inside namespaces (good enough for our smoke tests; can be
 	//    upgraded to multi-pass if needed later).
+	if ambientMod != nil && node.Body != nil {
+		// The module's other declarations' types are visible by bare name
+		// (and an interface declared again merges with them), and the
+		// body's imports are bound before its declarations resolve.
+		for typeName, t := range nsType.TypeMembers {
+			if _, isNs := t.(*types.NamespaceType); !isNs {
+				bodyEnv.DefineTypeAlias(typeName, t)
+			}
+		}
+		c.bindAmbientModuleImports(node.Body, bodyEnv)
+	}
 	if node.Body != nil {
 		// Mirror the top-level checker passes:
 		//   Pass A: interfaces, type aliases, classes, nested namespaces (types).
@@ -150,11 +171,14 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 			// re-established here.
 			prevEnv := c.env
 			prevAmbient := c.inAmbientNamespace
+			prevModule := c.currentAmbientModule
 			c.env = bodyEnv
 			c.inAmbientNamespace = ambientBody
+			c.currentAmbientModule = ambientMod
 			c.namespaceBodyDepth++
 			defer func() {
 				c.inAmbientNamespace = prevAmbient
+				c.currentAmbientModule = prevModule
 				c.namespaceBodyDepth--
 			}()
 			// Exported values of earlier declarations of this namespace are
@@ -336,6 +360,9 @@ func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Envi
 // a nested namespace declaration with IsExported=true), its bindings are copied
 // into nsType.
 func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *types.NamespaceType) {
+	if m := c.currentAmbientModule; m != nil && m.ns == nsType && c.checkAmbientModuleStatement(stmt, m) {
+		return
+	}
 	exported := c.inAmbientNamespace
 	inner := stmt
 	if exp, ok := stmt.(*parser.ExportNamedDeclaration); ok && exp.Declaration != nil {
@@ -447,20 +474,51 @@ func (c *Checker) hoistAnnotatedNamespaceVars(body *parser.BlockStatement, env *
 		if exp, ok := stmt.(*parser.ExportNamedDeclaration); ok && exp.Declaration != nil {
 			stmt = exp.Declaration
 		}
-		vs, ok := stmt.(*parser.VarStatement)
-		if !ok {
+		var decls []*parser.VarDeclarator
+		switch vs := stmt.(type) {
+		case *parser.VarStatement:
+			decls = vs.Declarations
+		case *parser.ConstStatement, *parser.LetStatement:
+			// Not hoisted, but a namespace's value side gives way to them
+			// as to a var (see below), so their declaration defines the
+			// name.
+			if cs, ok := vs.(*parser.ConstStatement); ok {
+				decls = cs.Declarations
+			} else {
+				decls = vs.(*parser.LetStatement).Declarations
+			}
+			for _, d := range decls {
+				if d != nil && d.Name != nil && d.TypeAnnotation != nil && namespaceValueOnly(env, d.Name.Value) {
+					delete(env.symbols, d.Name.Value)
+				}
+			}
+			continue
+		default:
 			continue
 		}
-		for _, d := range vs.Declarations {
+		for _, d := range decls {
 			if d == nil || d.Name == nil || d.TypeAnnotation == nil {
 				continue
 			}
 			if _, found := env.symbols[d.Name.Value]; found {
-				continue
+				if !namespaceValueOnly(env, d.Name.Value) {
+					continue
+				}
+				delete(env.symbols, d.Name.Value)
 			}
 			if t := c.resolveTypeAnnotation(d.TypeAnnotation); t != nil {
 				env.Define(d.Name.Value, t, false)
 			}
 		}
 	}
+}
+
+// namespaceValueOnly reports whether name's value binding in env is just the
+// value side of a non-instantiated namespace of that name, which a variable
+// of the same name replaces: `namespace path {...} const path:
+// path.PlatformPath` (@types/node) is one entity whose value is the variable.
+func namespaceValueOnly(env *Environment, name string) bool {
+	sym, found := env.symbols[name]
+	ns, isNs := env.typeAliases[name].(*types.NamespaceType)
+	return found && isNs && !ns.Instantiated && sym.Type == ns.ValueShape
 }

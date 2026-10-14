@@ -98,6 +98,11 @@ type ModuleLoader interface {
 	// ParseAhead starts parsing specifier, as imported from fromPath, and
 	// its imports in the background, if parse-ahead is enabled.
 	ParseAhead(specifier, fromPath string)
+
+	// SetAmbientModules installs the lookup for modules that ambient module
+	// declarations (`declare module "fs" { ... }`) declare: a non-relative
+	// specifier it answers is that module, ahead of the resolvers.
+	SetAmbientModules(lookup func(specifier string) map[string]types.Type)
 }
 
 // ModuleRegistry manages the cache of loaded modules

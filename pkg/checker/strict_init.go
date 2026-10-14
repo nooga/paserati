@@ -25,7 +25,10 @@ func (c *Checker) checkStrictPropertyInit(node *parser.ClassDeclaration) {
 	if node == nil || node.Body == nil {
 		return
 	}
-	if node.Declare || node.IsAbstract {
+	// A class in an ambient namespace or module, or in a declaration file,
+	// is ambient too (@types/node's `declare module "assert" { class
+	// AssertionError { actual: unknown; } }`).
+	if node.Declare || node.IsAbstract || c.inAmbientNamespace || c.inDeclarationFile() {
 		return
 	}
 
