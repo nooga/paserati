@@ -277,3 +277,74 @@ func TestCheckFilesJSX(t *testing.T) {
 		t.Errorf("diagnostics = %q, want %q", got, want)
 	}
 }
+
+// Ambient module declarations in a types package (@types/node style): an
+// import names the module a script file's `declare module "m"` declares,
+// declarations of one module merge across files, a body's imports reach
+// modules declared in files referenced after it, and export= of a namespace
+// merged with a const is the const.
+func TestCheckFilesAmbientModules(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"node_modules/@types/node/package.json": `{"types":"index.d.ts"}`,
+		"node_modules/@types/node/index.d.ts": "/// <reference path=\"events.d.ts\" />\n" +
+			"/// <reference path=\"net.d.ts\" />\n" +
+			"/// <reference path=\"path.d.ts\" />\n",
+		"node_modules/@types/node/events.d.ts": "declare module \"events\" {\n" +
+			"  import { Socket } from \"node:net\";\n" +
+			"  class EventEmitter { on(e: string): this; sock: Socket; }\n" +
+			"  export { EventEmitter };\n" +
+			"}\n" +
+			"declare module \"node:events\" { export * from \"events\"; }\n",
+		"node_modules/@types/node/net.d.ts": "declare module \"net\" {\n" +
+			"  class Socket { remote: string; }\n" +
+			"}\n" +
+			"declare module \"net\" { function connect(): Socket; }\n" +
+			"declare module \"node:net\" { export * from \"net\"; }\n",
+		"node_modules/@types/node/path.d.ts": "declare module \"path\" {\n" +
+			"  namespace path { interface PlatformPath { join(...p: string[]): string } }\n" +
+			"  const path: path.PlatformPath;\n" +
+			"  export = path;\n" +
+			"}\n",
+		"main.ts": "import { EventEmitter } from 'node:events';\n" +
+			"import { connect } from 'net';\n" +
+			"import * as path from 'path';\n" +
+			"const a: number = new EventEmitter().sock.remote;\n" +
+			"const b: number = connect().remote;\n" +
+			"const c: number = path.join('x');\n" +
+			"const ok: string = new EventEmitter().on('x').sock.remote;\n",
+	}
+	for p, content := range files {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPaserati()
+	p.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types}))
+	var got []string
+	for _, r := range p.CheckFilesWithOptions([]string{"main.ts"}, CheckOptions{Types: []string{"node"}, TypesFrom: root}) {
+		if r.LoadError != nil {
+			t.Fatalf("%s: %v", r.Path, r.LoadError)
+		}
+		for _, d := range r.Diagnostics {
+			got = append(got, fmt.Sprintf("%s %d:%d %s", filepath.Base(r.Path), d.Pos().Line, d.Pos().Column, d.Code()))
+		}
+	}
+	want := []string{"main.ts 4:7 TS2322", "main.ts 5:7 TS2322", "main.ts 6:7 TS2322"}
+	if strings.Join(got, ", ") != strings.Join(want, ", ") {
+		t.Fatalf("diagnostics = %v, want %v", got, want)
+	}
+}

@@ -51,3 +51,17 @@ func TripleSlashReferences(content string) []string {
 	}
 	return refs
 }
+
+var ambientModuleDecl = regexp.MustCompile(`(?m)^declare\s+module\s+["']([^"']+)["']`)
+
+// AmbientModuleNames returns the module names a file's top-level ambient
+// module declarations (`declare module "fs" {`) declare, found by scanning its
+// text: an index of which file declares a module, built before the files are
+// checked.
+func AmbientModuleNames(content string) []string {
+	var names []string
+	for _, m := range ambientModuleDecl.FindAllStringSubmatch(content, -1) {
+		names = append(names, m[1])
+	}
+	return names
+}

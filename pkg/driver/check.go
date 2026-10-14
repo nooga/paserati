@@ -95,6 +95,8 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 	// the modules importing it: every module's diagnostics are kept on its
 	// record and reported below.
 	p.moduleLoader.SetIgnoreTypeErrors(true)
+	p.moduleLoader.SetAmbientModules(globals.AmbientExports)
+	defer p.moduleLoader.SetAmbientModules(nil)
 
 	wd, err := os.Getwd()
 	if err != nil {

@@ -25,6 +25,10 @@ type GlobalDeclarations struct {
 	// augmentations are the module augmentations waiting for their target
 	// module's exports, by the target's resolved path (see augment.go).
 	augmentations map[string][]*types.NamespaceType
+
+	// ambient are the modules ambient module declarations declare, by name
+	// (see ambient_modules.go).
+	ambient map[string]*ambientModule
 }
 
 // NewGlobalDeclarations returns an empty registry.
