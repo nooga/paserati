@@ -143,7 +143,15 @@ func (r *FileSystemResolver) calculateTargetPath(specifier string, fromPath stri
 	if strings.HasPrefix(specifier, "/") || filepath.IsAbs(specifier) {
 		// Absolute path
 		if strings.HasPrefix(specifier, "/") && r.baseDir != "" {
-			// Make relative to base directory
+			// A real absolute OS path (a project file or a node_modules
+			// typing outside the working directory) is used as is; only a
+			// "/"-rooted specifier that names nothing there is taken
+			// relative to the base directory.
+			if _, isOS := r.fs.(*osFS); isOS && filepath.IsAbs(specifier) {
+				if _, err := os.Stat(specifier); err == nil {
+					return specifier, nil
+				}
+			}
 			return strings.TrimPrefix(specifier, "/"), nil
 		}
 		return specifier, nil

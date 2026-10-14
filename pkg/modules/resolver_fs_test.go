@@ -409,3 +409,21 @@ func TestOSFileSystemResolver(t *testing.T) {
 
 	resolved3.Source.Close()
 }
+
+// An absolute path outside the base directory names that file (paserati -p
+// on a project elsewhere), not a path under the base directory.
+func TestOSFileSystemResolverAbsoluteOutsideBase(t *testing.T) {
+	outside := t.TempDir()
+	file := filepath.Join(outside, "x.ts")
+	if err := os.WriteFile(file, []byte("export const x = 1;"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewOSFileSystemResolver(t.TempDir())
+	resolved, err := r.Resolve(file, "")
+	if err != nil {
+		t.Fatalf("resolving %s: %v", file, err)
+	}
+	if resolved.ResolvedPath != file {
+		t.Fatalf("resolved to %s, want %s", resolved.ResolvedPath, file)
+	}
+}
