@@ -217,8 +217,15 @@ func (c *Checker) resolveParameterizedForwardReference(paramRef *types.Parameter
 		}
 	}
 
-	// Look up the generic type by class name
-	if typ, _, found := c.env.Resolve(paramRef.ClassName); found {
+	// Look up the generic type by class name, where the reference is used
+	// or else where it was written (#704: a method of an imported class).
+	typ, _, found := c.env.Resolve(paramRef.ClassName)
+	if !found && paramRef.Scope != nil {
+		if t, ok := paramRef.Scope(paramRef.ClassName); ok {
+			typ, found = t, true
+		}
+	}
+	if found {
 		debugPrintf("// [Checker ResolveParamRef] Found type for %s: %T\n", paramRef.ClassName, typ)
 
 		// Check if it's a generic type
@@ -5811,4 +5818,14 @@ func sameParameterTypes(a, b *types.Signature) bool {
 // aliases) are deferred rather than judged against an empty object.
 func (c *Checker) markClassPlaceholder(t *types.ObjectType) {
 	t.Pending = true
+}
+
+// valueScope is a lookup of value names in the current scope, kept with a
+// type that may be resolved in another module.
+func (c *Checker) valueScope() func(name string) (types.Type, bool) {
+	env := c.env
+	return func(name string) (types.Type, bool) {
+		t, _, found := env.Resolve(name)
+		return t, found
+	}
 }
