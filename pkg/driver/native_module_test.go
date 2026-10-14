@@ -418,3 +418,32 @@ func TestNativeModuleGoSignatureTypes(t *testing.T) {
 		})
 	}
 }
+
+// undefined and null passed to a Go string parameter or field arrive as "",
+// not as the strings "undefined" and "null" (#708); other values still
+// convert to their string form.
+func TestNativeStringFromNullish(t *testing.T) {
+	type opts struct {
+		Name string
+		Mode string
+	}
+	p := NewPaserati()
+	var a, b, c string
+	var o opts
+	p.DeclareModule("host", func(m *ModuleBuilder) {
+		m.Function("take", func(x string, y string, z string) { a, b, c = x, y, z })
+		m.Function("configure", func(v opts) { o = v })
+	})
+	_, errs := p.RunStringWithModules(`import { take, configure } from "host";
+take(undefined as any, null as any, 42 as any);
+configure({ Name: "x", Mode: undefined } as any);`)
+	if len(errs) > 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if a != "" || b != "" || c != "42" {
+		t.Fatalf("take got %q, %q, %q; want \"\", \"\", \"42\"", a, b, c)
+	}
+	if o.Name != "x" || o.Mode != "" {
+		t.Fatalf("configure got %+v, want Name x and empty Mode", o)
+	}
+}

@@ -175,6 +175,11 @@ func (c *goConverter) fromVM(vmVal vm.Value, targetType reflect.Type) reflect.Va
 		if vmVal.IsString() {
 			return reflect.ValueOf(vmVal.AsString()).Convert(targetType)
 		}
+		if vmVal.IsUndefined() || vmVal.IsNull() {
+			// An unset optional (`{ token: opts.token }`) is "", not the
+			// string "undefined" (#708). Numbers and booleans still convert.
+			return reflect.Zero(targetType)
+		}
 		return reflect.ValueOf(vmVal.ToString()).Convert(targetType)
 	case reflect.Float64, reflect.Float32:
 		if vmVal.IsNumber() {
