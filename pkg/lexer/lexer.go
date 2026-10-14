@@ -1070,6 +1070,8 @@ func (l *Lexer) NextToken() Token {
 			l.readChar()                                // Consume '$'
 			l.readChar()                                // Consume '{'
 			l.braceDepth = 1                            // Start tracking braces
+			// A regex may start the substitution: `${x} ${/b/.source}` (#707).
+			l.prevToken = TEMPLATE_INTERPOLATION
 			return Token{
 				Type:     TEMPLATE_INTERPOLATION,
 				Literal:  literal,
@@ -1082,13 +1084,16 @@ func (l *Lexer) NextToken() Token {
 			// End of template literal - handle it directly here
 			debugPrintf("NextToken: TEMPLATE MODE - calling readTemplateLiteral for closing backtick, ch='%c', position=%d", l.ch, l.position)
 			result := l.readTemplateLiteral(startLine, startCol, startPos)
+			l.prevToken = result.Type
 			debugPrintf("NextToken: TEMPLATE MODE - got result from readTemplateLiteral, result=%s, ch='%c', position=%d", result.Type, l.ch, l.position)
 			debugPrintf("NextToken: TEMPLATE MODE - about to return result")
 			debugPrintf("NextToken: TEMPLATE MODE - RETURNING NOW")
 			return result
 		} else {
 			// Read template string content
-			return l.readTemplateString(startLine, startCol, startPos)
+			result := l.readTemplateString(startLine, startCol, startPos)
+			l.prevToken = result.Type
+			return result
 		}
 	}
 
@@ -2907,6 +2912,9 @@ func canBeRegexStart(prevTokenType TokenType) bool {
 		return true
 	// After delimiters
 	case LPAREN, LBRACKET, LBRACE, COMMA, SEMICOLON, COLON:
+		return true
+	// At the start of a template substitution: `${x} ${/b/.source}` (#707)
+	case TEMPLATE_INTERPOLATION:
 		return true
 	// After keywords
 	case RETURN, THROW, NEW, DELETE, TYPEOF, VOID, IF, ELSE, WHILE, DO, FOR, WITH, YIELD, AWAIT:
