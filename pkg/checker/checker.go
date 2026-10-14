@@ -758,6 +758,17 @@ func (c *Checker) isSubclassOf(currentClass, targetClass string) bool {
 				}
 			}
 		}
+		if currentClassType == nil {
+			// A generic class (`class B<D> extends A<D>`, #703).
+			if g := genericType.InstanceType; g != nil {
+				if instanceType, ok := g.Body.(*types.ObjectType); ok {
+					currentClassType = instanceType
+				}
+			}
+		}
+	}
+	if currentClassType == nil && c.currentClassInstanceType != nil && c.currentClassInstanceType.GetClassName() == currentClass {
+		currentClassType = c.currentClassInstanceType
 	}
 
 	if currentClassType == nil || !currentClassType.IsClassInstance() {
