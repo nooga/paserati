@@ -642,6 +642,11 @@ func forEachChildInScope(node parser.Node, fn func(parser.Node)) {
 		}
 	case *parser.ExpressionStatement:
 		visit(n.Expression)
+	case *parser.ExportNamedDeclaration:
+		// `export function f() { ... }` and `export const x = ...` (#709).
+		visit(n.Declaration)
+	case *parser.ExportDefaultDeclaration:
+		visit(n.Declaration)
 	case *parser.ReturnStatement:
 		visit(n.ReturnValue)
 	case *parser.ThrowStatement:
