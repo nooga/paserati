@@ -507,6 +507,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	fields := make(map[string]types.Type)
 	seenKeys := make(map[string]bool)
 	seenProtoColon := false // Track if we've seen __proto__: value (colon syntax)
+	spreadsAny := false     // `{ ...anyValue }` is any, as in tsc
 
 	// --- NEW: Create preliminary object type for 'this' context ---
 	// We need to construct the object type first so function methods can reference it
@@ -538,6 +539,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 			// Check if the type can be spread (is an object type)
 			widenedType := c.apparentType(c.rel.GetWidenedType(argType))
+			if widenedType == types.Any {
+				spreadsAny = true
+			}
 			if !c.mergeSpreadOperand(fields, widenedType) {
 				c.addErrorWithCode(key.Argument, errors.TS2698, "Spread types may only be created from object types.")
 			}
@@ -1041,6 +1045,11 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				ValueType: indexValueType,
 			},
 		}
+	}
+
+	if spreadsAny {
+		node.SetComputedType(types.Any)
+		return
 	}
 
 	// Set the computed type for the ObjectLiteral node itself
