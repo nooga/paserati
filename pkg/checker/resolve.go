@@ -804,6 +804,7 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				return &types.ParameterizedForwardReferenceType{
 					ClassName:     node.Name.Value,
 					TypeArguments: typeArgs,
+					Scope:         c.valueScope(),
 				}
 			}
 
@@ -1877,6 +1878,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		return &types.ParameterizedForwardReferenceType{
 			ClassName:     typ.ClassName,
 			TypeArguments: newTypeArgs,
+			Scope:         typ.Scope,
 		}
 
 	case *types.InstantiatedType:

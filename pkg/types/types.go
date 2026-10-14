@@ -47,6 +47,10 @@ type GenericTypeAliasForwardReference struct {
 type ParameterizedForwardReferenceType struct {
 	ClassName     string
 	TypeArguments []Type
+	// Scope looks a value name up where the reference was written, for
+	// resolving it in a module that does not have the class in scope
+	// (`e("a").not` where E's getter returns E<T>, from another module).
+	Scope func(name string) (Type, bool)
 }
 
 func (frt *ForwardReferenceType) String() string {

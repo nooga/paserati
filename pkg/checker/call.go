@@ -2039,6 +2039,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			return &types.ParameterizedForwardReferenceType{
 				ClassName:     typ.ClassName,
 				TypeArguments: newTypeArgs,
+				Scope:         typ.Scope,
 			}
 		case *types.ObjectType:
 			// An object that mentions none of the inferred parameters is kept:
