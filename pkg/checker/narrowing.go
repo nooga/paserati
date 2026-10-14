@@ -2440,6 +2440,11 @@ func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
 	currentType := rootType
 	for i := 1; i < len(parts); i++ {
 		currentType = c.rel.GetWidenedType(currentType)
+		if currentType == types.Any {
+			// A property of any is any, whatever a guard narrowed it to
+			// (#706: `if (o.x === undefined) o.x = 5` with o: any).
+			return types.Any
+		}
 		if objType, ok := currentType.(*types.ObjectType); ok {
 			propType, exists := objType.Props()[parts[i]]
 			if !exists {
