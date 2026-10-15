@@ -78,6 +78,7 @@ func (f *FetchInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("statusText", types.String).
 		WithProperty("url", types.String).
 		WithProperty("headers", headersType).
+		WithProperty("body", types.Any). // ReadableStream or null (#205)
 		WithProperty("bodyUsed", types.Boolean).
 		WithProperty("redirected", types.Boolean).
 		WithProperty("type", types.String).
