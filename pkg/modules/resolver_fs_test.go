@@ -423,6 +423,7 @@ func TestOSFileSystemResolverAbsoluteOutsideBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving %s: %v", file, err)
 	}
+	resolved.Source.Close()
 	if resolved.ResolvedPath != file {
 		t.Fatalf("resolved to %s, want %s", resolved.ResolvedPath, file)
 	}
