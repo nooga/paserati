@@ -149,6 +149,18 @@ func (c *Checker) settleTypeDepth(t types.Type, depth int) types.Type {
 	case *types.ObjectType:
 		// Only properties that are themselves deferred are settled, so an
 		// ordinary (possibly recursive) class type is returned as is.
+		// Settling a member may settle the object again (tailwind's
+		// `backdropBlur: ThemeConfig['blur']` inside ThemeConfig): each
+		// round settles every member anew, exponentially, so an object is
+		// settled once at a time.
+		if c.settlingObjects[tt] {
+			return t
+		}
+		if c.settlingObjects == nil {
+			c.settlingObjects = map[*types.ObjectType]bool{}
+		}
+		c.settlingObjects[tt] = true
+		defer delete(c.settlingObjects, tt)
 		var settled map[string]types.Type
 		for _, name := range tt.PropertyNames() {
 			prop := tt.Props()[name]
