@@ -2610,6 +2610,7 @@ func (c *Checker) resolveIndexedAccessTypeExpression(node *parser.IndexedAccessT
 	if resolvedType != nil {
 		return resolvedType
 	}
+	c.checkIndexedAccessKeyExists(node.IndexType, objectType, indexType)
 
 	// If we can't resolve it now, return an IndexedAccessType for later resolution
 	return &types.IndexedAccessType{
@@ -2924,8 +2925,14 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 				if propType, exists := objType.EffectiveProperty(strVal); exists {
 					return propType
 				}
-				// Property doesn't exist - this could be an error or return never/undefined
-				// For now, return nil to indicate it couldn't be resolved
+				// Otherwise a string index signature has it (tailwind's
+				// CustomThemeConfig['anything']), or it is missing (TS2339,
+				// reported where the type is written).
+				for _, sig := range objType.IndexSigs() {
+					if sig.KeyType == types.String {
+						return sig.ValueType
+					}
+				}
 				return nil
 			}
 		}
@@ -4905,4 +4912,58 @@ func (c *Checker) substituteSignatures(sigs []*types.Signature, substitution map
 		}
 	}
 	return out
+}
+
+// checkIndexedAccessKeyExists reports TS2339 for `T['nope']` where T is an
+// object type without that property. An interface indexing itself
+// (`backdropBlur: ThemeConfig['blur']`) is still being declared here, so the
+// check runs once all declarations are done.
+func (c *Checker) checkIndexedAccessKeyExists(indexNode parser.Node, objectType, indexType types.Type) {
+	lit, ok := indexType.(*types.LiteralType)
+	if !ok || lit.Value.Type() != vm.TypeString {
+		return
+	}
+	if _, ok := objectType.(*types.ObjectType); !ok {
+		return
+	}
+	key := lit.Value.AsString()
+	c.deferRelationCheck(func() {
+		obj, ok := c.settleType(objectType).(*types.ObjectType)
+		if !ok || obj.Pending || c.hasOpaqueBase(obj, 0) {
+			return
+		}
+		if _, exists := obj.EffectiveProperty(key); exists {
+			return
+		}
+		for _, sig := range obj.IndexSigs() {
+			if sig.KeyType == types.String {
+				return
+			}
+		}
+		c.addErrorWithCode(indexNode, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", key, obj.String()))
+	})
+}
+
+// hasOpaqueBase reports whether obj extends something whose members are not
+// known here: @types/node's `interface Response extends _Response {}`, where
+// _Response is a conditional type on globalThis. A key missing from what is
+// known may come from it.
+func (c *Checker) hasOpaqueBase(obj *types.ObjectType, depth int) bool {
+	if depth > 16 {
+		return true
+	}
+	for _, base := range obj.Bases() {
+		b := c.settleType(base)
+		if inst, ok := b.(*types.InstantiatedType); ok {
+			b = inst.Substitute()
+		}
+		baseObj, ok := b.(*types.ObjectType)
+		if !ok || baseObj.Pending {
+			return true
+		}
+		if baseObj != obj && c.hasOpaqueBase(baseObj, depth+1) {
+			return true
+		}
+	}
+	return false
 }
