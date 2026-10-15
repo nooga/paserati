@@ -5275,8 +5275,14 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 			debugPrintf("// [Checker] Imported %s: %s = any (unresolved, type-only: %v)\n", localName, sourceName, isTypeOnly)
 			// Even if unresolved, we should still register the name as a type alias if it's type-only
 			// This allows type annotations to work even when the actual type can't be resolved at compile time
+			// A plain import names a type too: fastify's reply.d.ts imports
+			// RouteGenericInterface from route.d.ts, which imports reply.d.ts,
+			// so while the cycle loads it is unresolved, and a type
+			// parameter defaulting to it lost its default (a false TS2707 on
+			// every bare FastifyReply).
+			// FIXME: resolve it once the cycle completes instead of as any.
+			c.env.DefineTypeAlias(localName, types.Any)
 			if isTypeOnly {
-				c.env.DefineTypeAlias(localName, types.Any)
 				debugPrintf("// [Checker] Registered unresolved type-only import %s as type alias\n", localName)
 			} else {
 				// The value binding is still real and usable at runtime (e.g. a namespace
