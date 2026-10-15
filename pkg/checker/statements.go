@@ -343,16 +343,16 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			c.recordDerived(extendedObjectType, interfaceType)
 			// Copy all properties from the extended interface
 			rb := newThisRebind(extendedObjectType, interfaceType)
-			for _, propName := range extendedObjectType.PropertyNames() {
-				propType := extendedObjectType.Props()[propName]
+			forEachEffectiveMember(extendedObjectType, func(owner *types.ObjectType, propName string) {
+				propType := owner.Props()[propName]
 				interfaceType.SetProperty(propName, c.rebindThisType(propType, rb))
-				interfaceType.SetPropertyDoc(propName, extendedObjectType.PropertyDoc(propName))
-				setReadonlyProperty(interfaceType, propName, extendedObjectType.ReadOnlyProps()[propName])
+				interfaceType.SetPropertyDoc(propName, owner.PropertyDoc(propName))
+				setReadonlyProperty(interfaceType, propName, owner.ReadOnlyProps()[propName])
 				// Copy optional property flags
-				if extendedObjectType.OptionalProps() != nil && extendedObjectType.OptionalProps()[propName] {
+				if owner.OptionalProps() != nil && owner.OptionalProps()[propName] {
 					optionalProperties[propName] = true
 				}
-			}
+			})
 			if checkerDebug {
 				debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from extended interface\n",
 					node.Name.Value, len(extendedObjectType.Props()))
@@ -370,15 +370,15 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			for _, baseObject := range baseObjects {
 				c.recordDerived(baseObject, interfaceType)
 				rb := newThisRebind(baseObject, interfaceType)
-				for _, propName := range baseObject.PropertyNames() {
-					propType := baseObject.Props()[propName]
+				forEachEffectiveMember(baseObject, func(owner *types.ObjectType, propName string) {
+					propType := owner.Props()[propName]
 					interfaceType.SetProperty(propName, c.rebindThisType(propType, rb))
-					interfaceType.SetPropertyDoc(propName, baseObject.PropertyDoc(propName))
-					setReadonlyProperty(interfaceType, propName, baseObject.ReadOnlyProps()[propName])
-					if baseObject.OptionalProps() != nil && baseObject.OptionalProps()[propName] {
+					interfaceType.SetPropertyDoc(propName, owner.PropertyDoc(propName))
+					setReadonlyProperty(interfaceType, propName, owner.ReadOnlyProps()[propName])
+					if owner.OptionalProps() != nil && owner.OptionalProps()[propName] {
 						optionalProperties[propName] = true
 					}
-				}
+				})
 			}
 		} else {
 			c.reportInvalidInterfaceBase(extendedInterfaceExpr, extendedType)
@@ -1861,4 +1861,32 @@ func nameGenericType(obj *types.ObjectType, name string, typeParams []*types.Typ
 	for _, tp := range typeParams {
 		obj.GenericArgs = append(obj.GenericArgs, &types.TypeParameterType{Parameter: tp})
 	}
+}
+
+// forEachEffectiveMember calls fn with each member obj has, its own and
+// inherited, and the object declaring it: inherited first, so an override
+// comes after the member it overrides. An interface extending a class gets
+// the class's base members too (undici's Response extends BodyMixin, which
+// declares body).
+func forEachEffectiveMember(obj *types.ObjectType, fn func(owner *types.ObjectType, name string)) {
+	seen := map[*types.ObjectType]bool{}
+	var walk func(o *types.ObjectType)
+	walk = func(o *types.ObjectType) {
+		if seen[o] {
+			return
+		}
+		seen[o] = true
+		for _, base := range o.Bases() {
+			if inst, ok := base.(*types.InstantiatedType); ok {
+				base = inst.Substitute()
+			}
+			if b, ok := base.(*types.ObjectType); ok {
+				walk(b)
+			}
+		}
+		for _, name := range o.PropertyNames() {
+			fn(o, name)
+		}
+	}
+	walk(obj)
 }
