@@ -513,6 +513,7 @@ type Checker struct {
 	typeRefNode               parser.Node                    // type reference being instantiated, for arity diagnostics
 	mentionScratch            map[types.Type]bool            // objectMayMention's visited set
 	mentionShadowed           map[string]map[types.Type]bool // ... per set of names under a shadowing declaration
+	settlingObjects           map[*types.ObjectType]bool     // objects settleType is settling the members of
 }
 
 type deferredComputedKeyCheck struct {
