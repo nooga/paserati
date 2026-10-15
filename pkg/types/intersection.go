@@ -1,8 +1,6 @@
 package types
 
 import (
-	"sort"
-
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -176,11 +174,9 @@ func NewIntersectionType(ts ...Type) Type {
 	// TODO: Add more sophisticated conflict detection for incompatible types
 	// For now, let the type checker handle conflicts during assignability checks
 
-	// Sort the unique types for a canonical string representation
-	sort.SliceStable(uniqueMembers, func(i, j int) bool {
-		return uniqueMembers[i].String() < uniqueMembers[j].String()
-	})
-
+	// Members keep their written order, as tsc's do: the order of an
+	// intersection's call signatures is its overload order. (Sorting them
+	// by String() printed csstype's huge types over and over.)
 	return &IntersectionType{Types: uniqueMembers}
 }
 
