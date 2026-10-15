@@ -124,6 +124,14 @@ func (r *Relation) isAssignable(source, target Type) bool {
 	// Simplify mapped types (e.g., Record<string, T>) to ObjectType with index signatures
 	source = simplifyMappedType(source)
 	target = simplifyMappedType(target)
+	if r.ExpandMapped != nil {
+		if _, ok := source.(*MappedType); ok {
+			source = r.ExpandMapped(source)
+		}
+		if _, ok := target.(*MappedType); ok {
+			target = r.ExpandMapped(target)
+		}
+	}
 	source = simplifyKeyof(source)
 	target = simplifyKeyof(target)
 
