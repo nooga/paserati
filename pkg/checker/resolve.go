@@ -4560,8 +4560,17 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 		}
 		return false
 	case *types.GenericTypeAliasForwardReference:
+		// A reference with an argument that did not resolve is kept as it
+		// is by substitution. Counting it as a mention made every object
+		// reaching fastify's FastifyInstance a copy per substitution, and
+		// comparing the copies never finished.
 		for _, a := range tt.TypeArguments {
-			if a == nil || mayMentionTypeParamNames(a, names, visited, shadowed) {
+			if a == nil {
+				return false
+			}
+		}
+		for _, a := range tt.TypeArguments {
+			if mayMentionTypeParamNames(a, names, visited, shadowed) {
 				return true
 			}
 		}
