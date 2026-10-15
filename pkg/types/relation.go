@@ -25,6 +25,12 @@ type Relation struct {
 	// ("string", "number", "array", "object", ...).
 	PrototypeMethods GetMethodType
 
+	// ExpandMapped expands a mapped type over concrete keys (Partial<Base>)
+	// to the object type it maps to, or returns it as it is. The checker
+	// supplies it; a mapped type nested in a member (`{ e: Partial<Base> }`)
+	// reaches the relation unexpanded.
+	ExpandMapped func(Type) Type
+
 	// visited holds the (source, target) pairs isAssignable is relating, so a
 	// recursive type relates to itself by assumption.
 	visited map[assignPair]bool

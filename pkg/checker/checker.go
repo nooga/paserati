@@ -548,7 +548,7 @@ func NewCheckerWithBuiltins(builtins *Environment) *Checker {
 }
 
 func newCheckerInEnv(globalEnv *Environment) *Checker {
-	return &Checker{
+	c := &Checker{
 		env:        globalEnv, // Create persistent global environment with custom initializers
 		builtinEnv: globalEnv,
 		rel:        newRelation(globalEnv),
@@ -566,6 +566,8 @@ func newCheckerInEnv(globalEnv *Environment) *Checker {
 		generatorFunctions:         make(map[string]bool),
 		resolvingTypeAliases:       make(map[string]bool),
 	}
+	c.rel.ExpandMapped = c.expandIfMappedType
+	return c
 }
 
 // GetEnvironment returns the current type environment
