@@ -413,10 +413,11 @@ func (p *Paserati) CompileProgramWithStrictMode(program *parser.Program, strict 
 	// Honor session settings to ignore/skip type errors (used for Test262)
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
 	p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
-	// Set strict mode before compilation
-	if strict {
-		p.compiler.SetStrictMode(true)
-	}
+	// Inherited strictness applies to this compile only. Left set, one strict
+	// direct eval made every later eval, Function() body and indirect eval
+	// strict, so their vars never reached the global scope (paserati#590).
+	p.compiler.SetStrictMode(strict)
+	defer p.compiler.SetStrictMode(false)
 	chunk, errs := p.compiler.Compile(program)
 	// Note: Don't sync global names here - this is used for eval which may have
 	// its own scope that shouldn't leak to the global scope (especially in strict mode)
