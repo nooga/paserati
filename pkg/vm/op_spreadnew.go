@@ -225,6 +225,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// array if the constructor is variadic - see populateSpreadCallRegisters
 		// (paserati#182).
 		populateSpreadCallRegisters(vm, constructorFunc, spreadArgs, newFrame.registers, newFrame.spillSlots)
+		vm.trimWithStack()
 		vm.frameCount++
 
 		// Store instance in caller's destination register
@@ -360,6 +361,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// array if the constructor is variadic - see populateSpreadCallRegisters
 		// (paserati#182).
 		populateSpreadCallRegisters(vm, constructorFunc, spreadArgs, newFrame.registers, newFrame.spillSlots)
+		vm.trimWithStack()
 		vm.frameCount++
 
 		// Store instance in caller's destination register

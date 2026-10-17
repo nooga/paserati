@@ -106,6 +106,7 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Check if we have space for the async function frame
@@ -242,6 +243,7 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	}
 
 	// Update VM state
+	vm.trimWithStack()
 	vm.frameCount++
 
 	if debugAsyncAwait {

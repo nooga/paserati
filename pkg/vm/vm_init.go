@@ -2550,6 +2550,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	sentinelFrame.openUpvalues = nil // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg
 	sentinelFrame.registers = callerRegisters
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Set constructor call flag
@@ -2780,6 +2781,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Use prepareCall to set up the function call

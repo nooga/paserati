@@ -347,6 +347,11 @@ type LoopContext struct {
 	// registers.
 	BodyPerIterationRegs   []Register
 	BodyPerIterationSpills []uint16
+	// WithDepth and WithCount snapshot currentFuncWithDepth/currentFuncWithCount
+	// when the context is pushed, so break/continue leaving `with` bodies can
+	// drop their with objects (see emitWithTruncate).
+	WithDepth int
+	WithCount int
 }
 
 // IteratorCleanupInfo tracks iterator objects that need cleanup on early exit
@@ -370,6 +375,8 @@ type FinallyContext struct {
 	// Loop stack depth when this finally context was created
 	// Used to determine if a break/continue targets a loop outside the try-finally
 	LoopStackDepthAtCreation int
+	// WithDepth is currentFuncWithDepth at the try statement.
+	WithDepth int
 }
 
 const debugCompiler = false // Set to true to trace compiler output
@@ -449,6 +456,7 @@ type Compiler struct {
 	finallyContextStack     []*FinallyContext // Stack of active finally contexts
 	withBlockDepth          int               // Total with blocks (inherited, for unresolved var lookup)
 	currentFuncWithDepth    int               // With blocks in current function only (NOT inherited, for local var lookup)
+	currentFuncWithCount    int               // With statements compiled so far in current function (NOT inherited)
 
 	// --- Strict Mode Inheritance ---
 	inheritedStrictMode bool // Inherited strict mode from eval context
@@ -4116,6 +4124,7 @@ func (c *Compiler) pushLoopContext(loopStartPos, continueTargetPos int) {
 		ContinuePlaceholderPosList: make([]int, 0),
 	}
 	c.loopContextStack = append(c.loopContextStack, context)
+	context.WithDepth, context.WithCount = c.currentFuncWithDepth, c.currentFuncWithCount
 }
 
 // popLoopContext removes the current loop context from the stack.

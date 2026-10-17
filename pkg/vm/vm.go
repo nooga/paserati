@@ -305,6 +305,7 @@ type VM struct {
 
 	// With statement support - runtime stack of with objects
 	withObjectStack []Value
+	withObjectDepth []int // frame depth (vm.frameCount) that pushed each entry; see with_stack.go
 
 	// Realm management
 	defaultRealm *Realm // The initial/main realm
@@ -1742,6 +1743,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		frame.spillSlots = nil
 	}
 
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Mark var declaration globals as non-configurable (DontDelete) per ECMAScript spec
@@ -5331,17 +5333,21 @@ startExecution:
 				ip = frame.ip
 				continue
 			}
-			// Push the value to with stack if it's an object-like value
-			// This includes TypeObject, TypeProxy, TypeDictObject, TypePromise, etc.
-			switch objVal.Type() {
-			case TypeObject, TypeProxy, TypeDictObject, TypePromise:
-				vm.withObjectStack = append(vm.withObjectStack, objVal)
-			}
+			// Always push (primitives wrapped per ToObject) so that
+			// OpPopWithObject stays balanced with this push.
+			// FIXME: lookups only see properties of TypeObject, TypeDictObject,
+			// TypePromise and TypeProxy entries; arrays, functions etc. are
+			// pushed but never match.
+			objVal, _ = vm.ToObject(objVal)
+			vm.pushWithObject(objVal)
 
 		case OpPopWithObject:
-			if len(vm.withObjectStack) > 0 {
-				vm.withObjectStack = vm.withObjectStack[:len(vm.withObjectStack)-1]
-			}
+			vm.truncateFrameWithObjects(len(vm.frameWithObjects()) - 1)
+
+		case OpTruncateWith:
+			keep := int(code[ip])
+			ip++
+			vm.truncateFrameWithObjects(keep)
 
 		case OpGetWithProperty:
 			destReg := code[ip]
@@ -5373,7 +5379,7 @@ startExecution:
 			}
 
 			// Check all with-object sources (current stack + closure captured)
-			withSources := [][]Value{vm.withObjectStack}
+			withSources := [][]Value{vm.frameWithObjects()}
 			if closure != nil && len(closure.WithObjects) > 0 {
 				withSources = append(withSources, closure.WithObjects)
 			}
@@ -5673,12 +5679,12 @@ startExecution:
 			// Otherwise, use the innermost with-object (binding captured at start).
 
 			// Check all with-object sources (current stack + closure captured)
-			withSources := [][]Value{vm.withObjectStack}
+			withSources := [][]Value{vm.frameWithObjects()}
 			if closure != nil && len(closure.WithObjects) > 0 {
 				withSources = append(withSources, closure.WithObjects)
 			}
 
-			hasAnyWithObjects := len(vm.withObjectStack) > 0 || (closure != nil && len(closure.WithObjects) > 0)
+			hasAnyWithObjects := len(withSources[0]) > 0 || (closure != nil && len(closure.WithObjects) > 0)
 
 			if hasAnyWithObjects {
 				// Check if there's a global variable with this name
@@ -5821,8 +5827,8 @@ startExecution:
 					// (This is the pure with-property case where binding is captured at start)
 					// Try current stack first, then closure captured
 					var innermostWithObj Value
-					if len(vm.withObjectStack) > 0 {
-						innermostWithObj = vm.withObjectStack[len(vm.withObjectStack)-1]
+					if own := vm.frameWithObjects(); len(own) > 0 {
+						innermostWithObj = own[len(own)-1]
 					} else if closure != nil && len(closure.WithObjects) > 0 {
 						innermostWithObj = closure.WithObjects[len(closure.WithObjects)-1]
 					}
@@ -5856,7 +5862,7 @@ startExecution:
 			propName := nameVal.AsString()
 
 			// Check all with-object sources (current stack + closure captured)
-			withSources := [][]Value{vm.withObjectStack}
+			withSources := [][]Value{vm.frameWithObjects()}
 			if closure != nil && len(closure.WithObjects) > 0 {
 				withSources = append(withSources, closure.WithObjects)
 			}
@@ -6049,7 +6055,7 @@ startExecution:
 			value := registers[valueReg]
 
 			// Check all with-object sources (current stack + closure captured)
-			withSources := [][]Value{vm.withObjectStack}
+			withSources := [][]Value{vm.frameWithObjects()}
 			if closure != nil && len(closure.WithObjects) > 0 {
 				withSources = append(withSources, closure.WithObjects)
 			}
@@ -6255,9 +6261,10 @@ startExecution:
 			bindingIndex := byte(255) // 255 means use local/global fallback
 
 			// First, check current withObjectStack (indices 0-127)
+			frameWiths := vm.frameWithObjects()
 		resolveWithLoopStack:
-			for i := len(vm.withObjectStack) - 1; i >= 0 && i < 128; i-- {
-				withObj := vm.withObjectStack[i]
+			for i := len(frameWiths) - 1; i >= 0 && i < 128; i-- {
+				withObj := frameWiths[i]
 				hasProperty, hadError := checkWithObjProperty(withObj)
 				if hadError {
 					if vm.handlerFound {
@@ -6357,8 +6364,8 @@ startExecution:
 				}
 			} else {
 				// withObjectStack (0-127)
-				if bindingIndex < len(vm.withObjectStack) {
-					withObj = vm.withObjectStack[bindingIndex]
+				if frameWiths := vm.frameWithObjects(); bindingIndex < len(frameWiths) {
+					withObj = frameWiths[bindingIndex]
 					foundWithObj = true
 				}
 			}
@@ -6499,8 +6506,8 @@ startExecution:
 				}
 			} else {
 				// withObjectStack (0-127)
-				if bindingIndex < len(vm.withObjectStack) {
-					withObj = vm.withObjectStack[bindingIndex]
+				if frameWiths := vm.frameWithObjects(); bindingIndex < len(frameWiths) {
+					withObj = frameWiths[bindingIndex]
 					foundWithObj = true
 				}
 			}
@@ -6650,7 +6657,7 @@ startExecution:
 
 			// Check all with-object sources (current stack + closure captured)
 			// Use direct property access (GetOwn) which doesn't trigger Proxy traps
-			withSources := [][]Value{vm.withObjectStack}
+			withSources := [][]Value{vm.frameWithObjects()}
 			if closure != nil && len(closure.WithObjects) > 0 {
 				withSources = append(withSources, closure.WithObjects)
 			}
@@ -6753,7 +6760,7 @@ startExecution:
 			propName := nameVal.AsString()
 
 			// Check all with-object sources (current stack + closure captured)
-			withSources := [][]Value{vm.withObjectStack}
+			withSources := [][]Value{vm.frameWithObjects()}
 			if closure != nil && len(closure.WithObjects) > 0 {
 				withSources = append(withSources, closure.WithObjects)
 			}
@@ -7458,9 +7465,8 @@ startExecution:
 				// Capture with-object stack if we're inside a with block
 				// This allows closures to resolve identifiers through the with-object
 				// even after the with block has finished executing
-				if len(vm.withObjectStack) > 0 {
-					cl.WithObjects = make([]Value, len(vm.withObjectStack))
-					copy(cl.WithObjects, vm.withObjectStack)
+				if captured := vm.closureWithObjects(closure); len(captured) > 0 {
+					cl.WithObjects = captured
 				}
 				// For arrow functions, capture the current 'this' value (lexical this binding)
 				// and the super constructor for super() calls
@@ -7632,9 +7638,8 @@ startExecution:
 				// Capture with-object stack if we're inside a with block
 				// This allows closures to resolve identifiers through the with-object
 				// even after the with block has finished executing
-				if len(vm.withObjectStack) > 0 {
-					cl.WithObjects = make([]Value, len(vm.withObjectStack))
-					copy(cl.WithObjects, vm.withObjectStack)
+				if captured := vm.closureWithObjects(closure); len(captured) > 0 {
+					cl.WithObjects = captured
 				}
 				// For arrow functions, capture the current 'this' value (lexical this binding)
 				// and the super constructor for super() calls
@@ -12535,6 +12540,7 @@ startExecution:
 				// used to read positionally.
 				bindPositionalParams(constructorFunc, newFrame.args, newFrame.registers, newFrame.spillSlots)
 
+				vm.trimWithStack()
 				vm.frameCount++
 
 				// Store the new instance in the caller's destination register
@@ -12756,6 +12762,7 @@ startExecution:
 				// used to read positionally.
 				bindPositionalParams(constructorFunc, newFrame.args, newFrame.registers, newFrame.spillSlots)
 
+				vm.trimWithStack()
 				vm.frameCount++
 
 				// Store the new instance in the caller's destination register
@@ -13243,6 +13250,7 @@ startExecution:
 					// call.go).
 					bindPositionalParams(constructorFunc, finalArgs, newFrame.registers, newFrame.spillSlots)
 
+					vm.trimWithStack()
 					vm.frameCount++
 					callerRegisters[destReg] = newInstance
 
@@ -16264,6 +16272,7 @@ startExecution:
 			// array rather than a copy, or a closure's writes would silently
 			// diverge from what .next()/await sees, same class of bug as #247.
 			genObj.Frame.spillSlots = frame.spillSlots
+			genObj.Frame.withObjects = vm.saveFrameWithObjects()
 
 			// Create iterator result { value: yieldedValue, done: false }
 			result := NewObject(vm.ObjectPrototype).AsPlainObject()
@@ -16315,6 +16324,7 @@ startExecution:
 				genObj.Frame.openUpvalues = frame.openUpvalues
 				relocateOpenUpvalues(genObj.Frame.openUpvalues, registers, genObj.Frame.registers)
 				genObj.Frame.spillSlots = frame.spillSlots
+				genObj.Frame.withObjects = vm.saveFrameWithObjects()
 
 				// Transition to SuspendedStart state
 				logGeneratorStateTransition(genObj, GeneratorSuspendedStart, "OpInitYield")
@@ -16383,6 +16393,7 @@ startExecution:
 			genObj.Frame.openUpvalues = frame.openUpvalues
 			relocateOpenUpvalues(genObj.Frame.openUpvalues, registers, genObj.Frame.registers)
 			genObj.Frame.spillSlots = frame.spillSlots
+			genObj.Frame.withObjects = vm.saveFrameWithObjects()
 
 			// Return the iterator result as-is (don't wrap it)
 			return InterpretOK, iterResult
@@ -16661,6 +16672,7 @@ startExecution:
 			// Carry the frame's spill-slot array itself across the suspend - see
 			// the identical comment on the generator suspend sites above.
 			frame.promiseObj.Frame.spillSlots = frame.spillSlots
+			frame.promiseObj.Frame.withObjects = vm.saveFrameWithObjects()
 
 			asyncPromise := frame.promiseObj
 
@@ -20476,6 +20488,7 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Use prepareCall to set up the generator function call with the stored arguments and 'this' value
@@ -20634,6 +20647,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
@@ -20756,7 +20770,9 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	}
 
 	// Update VM state
+	vm.trimWithStack()
 	vm.frameCount++
+	vm.restoreFrameWithObjects(genObj.Frame.withObjects)
 
 	// Update generator state
 	genObj.State = GeneratorExecuting
@@ -20917,6 +20933,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
@@ -20975,7 +20992,9 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	frame.spillSlots = genObj.Frame.spillSlots
 
 	// Update VM state
+	vm.trimWithStack()
 	vm.frameCount++
+	vm.restoreFrameWithObjects(genObj.Frame.withObjects)
 
 	// Update generator state
 	genObj.State = GeneratorExecuting
@@ -21121,6 +21140,7 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
@@ -21179,7 +21199,9 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	frame.spillSlots = genObj.Frame.spillSlots
 
 	// Update VM state
+	vm.trimWithStack()
 	vm.frameCount++
+	vm.restoreFrameWithObjects(genObj.Frame.withObjects)
 
 	// Update generator state
 	genObj.State = GeneratorExecuting
@@ -21333,6 +21355,7 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Check if we have space for the async function frame
@@ -21396,7 +21419,9 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	}
 
 	// Update VM state
+	vm.trimWithStack()
 	vm.frameCount++
+	vm.restoreFrameWithObjects(promiseObj.Frame.withObjects)
 
 	// Clear the saved frame since we're resuming
 	// promiseObj.Frame = nil  // Don't clear yet - might await again
@@ -21488,6 +21513,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Check if we have space for the async function frame
@@ -21539,7 +21565,9 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	frame.spillSlots = promiseObj.Frame.spillSlots
 
 	// Update VM state
+	vm.trimWithStack()
 	vm.frameCount++
+	vm.restoreFrameWithObjects(promiseObj.Frame.withObjects)
 
 	// Throw the exception at the await point
 	// This will be handled by the VM's exception handling system
@@ -21978,6 +22006,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	} else {
 		frame.spillSlots = nil
 	}
+	vm.trimWithStack()
 	vm.frameCount++
 
 	// Run the module; vm.run() returns when the module frame returns (direct

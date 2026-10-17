@@ -38,6 +38,7 @@ func (c *Compiler) predefineBlockLexicals(stmts []parser.Statement) {
 // compileTryStatement compiles a try/catch/finally statement (Phase 3 design)
 func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register) (Register, errors.PaseratiError) {
 	tryStart := len(c.chunk.Code)
+	tryWithDepth, tryWithCount := c.currentFuncWithDepth, c.currentFuncWithCount
 
 	// Note: tryDepth is only incremented during the try body, NOT catch/finally
 	// This allows tail call optimization in catch and finally blocks per ECMAScript spec
@@ -52,6 +53,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 			FinallyPC:                 -1, // Placeholder, will be set when compiling finally block
 			JumpToFinallyPlaceholders: make([]int, 0),
 			LoopStackDepthAtCreation:  len(c.loopContextStack), // Record current loop depth
+			WithDepth:                 c.currentFuncWithDepth,
 		}
 		c.finallyContextStack = append(c.finallyContextStack, finallyCtx)
 		defer func() {
@@ -116,6 +118,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 		// Compile catch if present
 		if node.CatchClause != nil {
 			catchPC := len(c.chunk.Code)
+			c.emitWithTruncate(tryWithDepth, tryWithCount, node.Token.Line)
 
 			// Allocate register for exception
 			catchReg := c.regAlloc.Alloc()
@@ -227,6 +230,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 
 		// Compile finally block
 		finallyPC = len(c.chunk.Code)
+		c.emitWithTruncate(tryWithDepth, tryWithCount, node.Token.Line)
 
 		// Update the FinallyContext with the actual finally block PC
 		if finallyCtx != nil {
@@ -301,6 +305,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 		// Compile catch if present
 		if node.CatchClause != nil {
 			catchPC := len(c.chunk.Code)
+			c.emitWithTruncate(tryWithDepth, tryWithCount, node.Token.Line)
 
 			// Allocate register for exception
 			catchReg := c.regAlloc.Alloc()

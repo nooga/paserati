@@ -52,6 +52,7 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 	// - currentFuncWithDepth: NOT inherited (for local variable shadowing in same function)
 	c.withBlockDepth++
 	c.currentFuncWithDepth++
+	c.currentFuncWithCount++
 
 	// Per ECMAScript 13.11.7 step 9: Return Completion(UpdateEmpty(C, undefined)).
 	// This means if the with body has an empty completion value (e.g., just "break;"),
