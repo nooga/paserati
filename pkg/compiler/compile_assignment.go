@@ -126,6 +126,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		strictCheckedSet string   // non-empty: strict store to a global unknown at compile time; check it still exists
 		globalIdx        uint16   // Direct global index instead of name constant index
 		isCallerLocal    bool     // Track if this is a caller's local (for direct eval)
+		callerIsUpvalue  bool     // With isCallerLocal: callerRegIdx is a caller upvalue index
 		callerRegIdx     int      // Caller's register index (for direct eval)
 		isSpilled        bool     // Track if this is a spilled variable
 		spillIndex       uint16   // Spill slot index (for spilled variables)
@@ -311,16 +312,19 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			} else if !found {
 				// Check caller scope first (for direct eval with scope access)
 				if c.callerScopeDesc != nil {
-					if callerRegIdx := c.resolveCallerLocal(lhsNode.Value); callerRegIdx >= 0 {
+					callerRegIdx, callerIsUpvalue := c.resolveCallerLocal(lhsNode.Value), false
+					if callerRegIdx < 0 {
+						callerRegIdx, callerIsUpvalue = c.resolveCallerUpvalue(lhsNode.Value), true
+					}
+					if callerRegIdx >= 0 {
 						identInfo.isCallerLocal = true
 						identInfo.callerRegIdx = callerRegIdx
+						identInfo.callerIsUpvalue = callerIsUpvalue
 						// For compound assignments, we need the current value
 						if node.Operator != "=" {
 							currentValueReg = c.regAlloc.Alloc()
 							tempRegs = append(tempRegs, currentValueReg)
-							c.emitOpCode(vm.OpGetCallerLocal, line)
-							c.emitByte(byte(currentValueReg))
-							c.emitByte(byte(callerRegIdx))
+							c.emitGetCallerBinding(currentValueReg, callerRegIdx, callerIsUpvalue, line)
 						} else {
 							currentValueReg = nilRegister // Not needed for simple assignment
 						}
@@ -396,13 +400,12 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				// Caller local variable (for direct eval)
 				identInfo.isCallerLocal = true
 				identInfo.callerRegIdx = symbolRef.CallerLocalIndex
+				identInfo.callerIsUpvalue = symbolRef.IsCallerUpvalue
 				// For compound assignments, we need the current value
 				if node.Operator != "=" {
 					currentValueReg = c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, currentValueReg)
-					c.emitOpCode(vm.OpGetCallerLocal, line)
-					c.emitByte(byte(currentValueReg))
-					c.emitByte(byte(symbolRef.CallerLocalIndex))
+					c.emitGetCallerBinding(currentValueReg, symbolRef.CallerLocalIndex, symbolRef.IsCallerUpvalue, line)
 				} else {
 					currentValueReg = nilRegister // Not needed for simple assignment
 				}
@@ -1051,9 +1054,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					c.emitSetGlobal(identInfo.globalIdx, hint, line)
 				}
 			} else if identInfo.isCallerLocal {
-				c.emitOpCode(vm.OpSetCallerLocal, line)
-				c.emitByte(byte(identInfo.callerRegIdx))
-				c.emitByte(byte(hint))
+				c.emitSetCallerBinding(identInfo.callerRegIdx, identInfo.callerIsUpvalue, hint, line)
 			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
 			} else if identInfo.isSpilled {
@@ -1379,9 +1380,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				}
 			} else if identInfo.isCallerLocal {
 				// Caller local assignment (for direct eval)
-				c.emitOpCode(vm.OpSetCallerLocal, line)
-				c.emitByte(byte(identInfo.callerRegIdx))
-				c.emitByte(byte(hint))
+				c.emitSetCallerBinding(identInfo.callerRegIdx, identInfo.callerIsUpvalue, hint, line)
 			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
 			} else if identInfo.isSpilled {
@@ -1858,6 +1857,10 @@ func (c *Compiler) compileRecursiveAssignment(target parser.Expression, valueReg
 
 // compileIdentifierAssignment handles simple variable assignment
 func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, valueReg Register, line int) errors.PaseratiError {
+	// A binding a direct eval created takes the store (compile_eval_env.go).
+	if toEnd := c.storeViaEvalEnv(identTarget.Value, valueReg, line); toEnd >= 0 {
+		defer c.patchJump(toEnd)
+	}
 	// First check if this is from a with object (flagged by type checker)
 	if identTarget.IsFromWith {
 		if objReg, withFound := c.currentSymbolTable.ResolveWithProperty(identTarget.Value); withFound {
@@ -1873,6 +1876,10 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 	if !found && c.isImportBinding(identTarget.Value) {
 		// Import bindings are immutable.
 		c.emitConstAssignmentError(identTarget.Value, line)
+		return nil
+	}
+	if idx, isUp, ok := c.unresolvedCallerBinding(identTarget.Value, found); ok {
+		c.emitSetCallerBinding(idx, isUp, valueReg, line)
 		return nil
 	}
 	if !found {
@@ -1915,7 +1922,14 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 	}
 
 	// Generate appropriate store instruction based on symbol type
-	if symbol.IsGlobal {
+	if symbol.IsCallerLocal && c.callerScopeDesc != nil {
+		// Direct eval code: keep the pre-loaded register in step and write
+		// through to the caller's binding.
+		if valueReg != symbol.Register {
+			c.emitMove(symbol.Register, valueReg, line)
+		}
+		c.emitSetCallerBinding(symbol.CallerLocalIndex, symbol.IsCallerUpvalue, valueReg, line)
+	} else if symbol.IsGlobal {
 		c.emitSetGlobal(symbol.GlobalIndex, valueReg, line)
 	} else if symbol.IsSpilled {
 		// For spilled variables, store to spill slot

@@ -499,6 +499,12 @@ type VM struct {
 	// Set during InterpretWithCallerScope, nil otherwise
 	evalCallerRegs []Value
 
+	// Caller closure's upvalues for direct eval (OpGetCallerUpvalue and
+	// OpSetCallerUpvalue). OpDirectEval stages them in pendingEvalUpvalues;
+	// InterpretWithCallerScope moves them here for the eval's duration.
+	evalCallerUpvalues  []*Upvalue
+	pendingEvalUpvalues []*Upvalue
+
 	// Caller's 'this' value for direct eval (Phase 3)
 	// Set during InterpretWithCallerScope, Undefined otherwise
 	evalCallerThis       Value
@@ -1871,8 +1877,16 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 // callerThis is the 'this' value from the caller's execution context.
 // callerHomeObject is the [[HomeObject]] for super property access.
 func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerThis Value, callerHomeObject Value) (Value, []errors.PaseratiError) {
-	// Store the caller registers for access by eval code
+	// Save the enclosing eval's caller state (if this is a nested eval) and
+	// restore it afterwards, so eval code running after a nested eval still
+	// reaches its own caller's scope.
+	savedRegs, savedUpvalues := vm.evalCallerRegs, vm.evalCallerUpvalues
+	savedThis, savedHasThis, savedHome := vm.evalCallerThis, vm.hasEvalCallerThis, vm.evalCallerHomeObject
+
+	// Store the caller registers and upvalues for access by eval code
 	vm.evalCallerRegs = callerRegs
+	vm.evalCallerUpvalues = vm.pendingEvalUpvalues
+	vm.pendingEvalUpvalues = nil
 
 	// Store the caller's 'this' value so it's inherited by the eval code
 	vm.evalCallerThis = callerThis
@@ -1884,11 +1898,8 @@ func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerT
 	// Execute the chunk normally
 	result, errs := vm.Interpret(chunk)
 
-	// Clear the caller state after execution
-	vm.evalCallerRegs = nil
-	vm.evalCallerThis = Undefined
-	vm.hasEvalCallerThis = false
-	vm.evalCallerHomeObject = Undefined
+	vm.evalCallerRegs, vm.evalCallerUpvalues = savedRegs, savedUpvalues
+	vm.evalCallerThis, vm.hasEvalCallerThis, vm.evalCallerHomeObject = savedThis, savedHasThis, savedHome
 
 	return result, errs
 }
@@ -17917,7 +17928,9 @@ startExecution:
 					siteDesc.LexicalBindings = lex
 					scopeDesc = &siteDesc
 				}
+				vm.pendingEvalUpvalues = closure.Upvalues
 				result, evalErrs = vm.evalDriver.DirectEvalCode(codeStr, callerIsStrict, scopeDesc, registers, callerThis, frame.homeObject)
+				vm.pendingEvalUpvalues = nil
 				vm.evalCallerNewTarget = Undefined
 			} else {
 				// Use regular EvalCode (no local scope access)
@@ -18048,6 +18061,52 @@ startExecution:
 				return status, Undefined
 			}
 			vm.evalCallerRegs[callerRegIdx] = registers[srcReg]
+
+		case OpGetCallerUpvalue, OpSetCallerUpvalue:
+			// OpGetCallerUpvalue Rx UpvalIdx(16) / OpSetCallerUpvalue UpvalIdx(16) Rx:
+			// read or write the eval caller's upvalue, with the same TDZ check
+			// as OpLoadFree/OpSetUpvalue.
+			isGet := opcode == OpGetCallerUpvalue
+			var reg byte
+			var upIdx int
+			if isGet {
+				reg = code[ip]
+				upIdx = int(code[ip+1])<<8 | int(code[ip+2])
+			} else {
+				upIdx = int(code[ip])<<8 | int(code[ip+1])
+				reg = code[ip+2]
+			}
+			ip += 3
+			if upIdx >= len(vm.evalCallerUpvalues) {
+				frame.ip = ip
+				status := vm.runtimeError("caller upvalue index %d out of range (have %d)", upIdx, len(vm.evalCallerUpvalues))
+				return status, Undefined
+			}
+			upvalue := vm.evalCallerUpvalues[upIdx]
+			slot := &upvalue.Closed
+			if upvalue.Location != nil {
+				slot = upvalue.Location
+			}
+			if slot.typ == TypeUninitialized {
+				frame.ip = ip
+				vm.ThrowReferenceError("Cannot access variable before initialization")
+				if !vm.unwinding {
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				return InterpretRuntimeError, Undefined
+			}
+			if isGet {
+				registers[reg] = *slot
+			} else {
+				*slot = registers[reg]
+			}
 
 		case OpMakeAddInitializer:
 			// OpMakeAddInitializer: Rx Ry

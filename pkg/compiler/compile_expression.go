@@ -715,6 +715,11 @@ type updateIdentInfo struct {
 	// and the expression evaluating to NaN.
 	isSpilled  bool
 	spillIndex uint16
+	// Direct eval code updating a binding of its caller (a caller local or
+	// caller upvalue): the new value is written back to the caller.
+	isCaller        bool
+	callerIndex     int
+	callerIsUpvalue bool
 }
 
 func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint Register) (Register, errors.PaseratiError) {
@@ -815,6 +820,19 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 				// Import bindings are immutable.
 				c.emitConstAssignmentError(argNode.Value, line)
 				return hint, nil
+			} else if idx, isUp, ok := c.unresolvedCallerBinding(argNode.Value, found); ok {
+				identInfo.isCaller, identInfo.callerIndex, identInfo.callerIsUpvalue = true, idx, isUp
+				identInfo.targetReg = nilRegister
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.emitGetCallerBinding(currentValueReg, idx, isUp, line)
+			} else if found && symbolRef.IsCallerLocal && c.callerScopeDesc != nil {
+				// A caller binding pre-loaded into this eval's register:
+				// refresh it, then write the result back (storeToLvalue).
+				identInfo.isCaller, identInfo.callerIndex, identInfo.callerIsUpvalue = true, symbolRef.CallerLocalIndex, symbolRef.IsCallerUpvalue
+				identInfo.targetReg = symbolRef.Register
+				c.emitGetCallerBinding(symbolRef.Register, symbolRef.CallerLocalIndex, symbolRef.IsCallerUpvalue, line)
+				currentValueReg = symbolRef.Register
 			} else if !found {
 				// Variable not found in symbol table
 				// In JavaScript mode, treat as potential global variable (will throw ReferenceError at runtime if doesn't exist)
@@ -1023,7 +1041,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 	// internally (handling BigInt and coercion), so no compile-time type info is
 	// required. dest (hint) differs from targetReg for any result-used context,
 	// which is what postfix correctness needs.
-	if lvalueKind == lvalueIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+	if lvalueKind == lvalueIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && !identInfo.isCaller {
 		var op vm.OpCode
 		switch {
 		case node.Operator == "++" && node.Prefix:
@@ -4693,6 +4711,12 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 // 2. Access the caller's local scope (Phase 3)
 func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
+
+	// `eval` itself may be a binding a direct eval created (`eval("var eval
+	// = f")`); calling that is an ordinary call (compile_eval_env.go).
+	if res, handled, err := c.compileEvalCalleeFromEnv(node, hint); handled {
+		return res, err
+	}
 
 	// Mark that this function contains direct eval - needs scope descriptor
 	c.hasDirectEval = true

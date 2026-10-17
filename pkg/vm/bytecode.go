@@ -150,6 +150,9 @@ const (
 	// --- Caller Scope Access (for direct eval) ---
 	OpGetCallerLocal OpCode = 127 // Rx CallerRegIdx: Load value from caller's register into Rx
 	OpSetCallerLocal OpCode = 128 // CallerRegIdx Rx: Store value from Rx into caller's register
+	// Direct eval access to the calling closure's upvalues (ScopeDescriptor.UpvalueNames).
+	OpGetCallerUpvalue OpCode = 183 // Rx UpvalIdx(16bit): Load the caller's upvalue into Rx (TDZ-checked)
+	OpSetCallerUpvalue OpCode = 184 // UpvalIdx(16bit) Rx: Store Rx into the caller's upvalue (TDZ-checked)
 	// --- END Caller Scope Access ---
 
 	// --- With Statement Support ---
@@ -740,6 +743,10 @@ func (op OpCode) String() string {
 		return "OpGetCallerLocal"
 	case OpSetCallerLocal:
 		return "OpSetCallerLocal"
+	case OpGetCallerUpvalue:
+		return "OpGetCallerUpvalue"
+	case OpSetCallerUpvalue:
+		return "OpSetCallerUpvalue"
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -785,6 +792,17 @@ type ScopeDescriptor struct {
 	// LocalNames maps register index to variable name.
 	// LocalNames[i] is the name of the variable in register i, or "" if not a named local.
 	LocalNames []string
+
+	// UpvalueNames maps the calling closure's upvalue index to the name it
+	// captures. A function containing direct eval captures every binding
+	// visible to it, so eval code can reach outer-function variables too.
+	UpvalueNames []string
+
+	// EvalEnvNames lists, innermost first, the names (among LocalNames and
+	// UpvalueNames) of the eval env objects visible at the eval: hidden
+	// bindings that hold the vars sloppy direct evals create in their
+	// callers' variable environments.
+	EvalEnvNames []string
 
 	// HasArgumentsBinding indicates if the caller's scope has an 'arguments' binding.
 	// This is true for functions (implicit arguments object) or when there's an 'arguments' parameter.
@@ -1724,6 +1742,20 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		srcReg := c.Code[offset+2]
 		builder.WriteString(fmt.Sprintf("%-20s CallerR%d R%d\n", "OpSetCallerLocal", callerReg, srcReg))
 		return offset + 3
+
+	case OpGetCallerUpvalue, OpSetCallerUpvalue:
+		if offset+3 >= len(c.Code) {
+			builder.WriteString(OpCode(c.Code[offset]).String() + " (missing operands)\n")
+			return offset + 1
+		}
+		if OpCode(c.Code[offset]) == OpGetCallerUpvalue {
+			idx := int(c.Code[offset+2])<<8 | int(c.Code[offset+3])
+			builder.WriteString(fmt.Sprintf("%-20s R%d CallerU%d\n", "OpGetCallerUpvalue", c.Code[offset+1], idx))
+		} else {
+			idx := int(c.Code[offset+1])<<8 | int(c.Code[offset+2])
+			builder.WriteString(fmt.Sprintf("%-20s CallerU%d R%d\n", "OpSetCallerUpvalue", idx, c.Code[offset+3]))
+		}
+		return offset + 4
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))

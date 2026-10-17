@@ -149,6 +149,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	}
 
 	// 5. Compile the function body
+	funcCompiler.setupEvalEnv(node.Body, node.Token.Line)
 	var returnReg Register
 	var implicitReturnNeeded bool
 	switch bodyNode := node.Body.(type) {
@@ -190,6 +191,9 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	}
 
 	// Get captured free variables and required register count
+	if funcCompiler.hasDirectEval {
+		c.captureVisibleForEval(funcCompiler)
+	}
 	freeSymbols := funcCompiler.freeSymbols
 	regSize := funcCompiler.regAlloc.MaxRegs()
 	functionChunk := funcCompiler.chunk
@@ -403,6 +407,7 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	}
 
 	// Compile body - handle block vs expression bodies differently
+	funcCompiler.setupEvalEnv(node.Body, node.Token.Line)
 	var returnReg Register
 	var implicitReturnNeeded bool
 	switch bodyNode := node.Body.(type) {
@@ -455,6 +460,9 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	}
 
 	functionChunk := funcCompiler.chunk
+	if funcCompiler.hasDirectEval {
+		c.captureVisibleForEval(funcCompiler)
+	}
 	freeSymbols := funcCompiler.freeSymbols
 	regSize := funcCompiler.regAlloc.MaxRegs()
 	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot) // Set spill slots needed
@@ -1819,6 +1827,8 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		}
 	}
 
+	functionCompiler.setupEvalEnv(node.Body, node.Token.Line)
+
 	// 4.5. For generators, emit OpInitYield AFTER compiling desugared parameter declarations
 	// The parser desugars destructuring parameters into const declarations at the start of the body
 	// We need to compile those first, then emit OpInitYield, then compile the rest of the body
@@ -2028,6 +2038,9 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	// <<< END ADDED >>>
 
 	// <<< Get freeSymbols from the functionCompiler instance >>>
+	if functionCompiler.hasDirectEval {
+		c.captureVisibleForEval(functionCompiler)
+	}
 	freeSymbols := functionCompiler.freeSymbols
 	// Collect any additional errors from the sub-compilation
 	if len(functionCompiler.errors) > 0 {
