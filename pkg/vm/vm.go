@@ -307,6 +307,10 @@ type VM struct {
 	withObjectStack []Value
 	withObjectDepth []int // frame depth (vm.frameCount) that pushed each entry; see with_stack.go
 
+	// Class evaluations' private environments; see private_env.go
+	privateEnvStack  []privateEnvEntry
+	privateEvalCount map[int]int
+
 	// Realm management
 	defaultRealm *Realm // The initial/main realm
 	currentRealm *Realm // Currently executing realm
@@ -1743,7 +1747,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		frame.spillSlots = nil
 	}
 
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 
 	// Mark var declaration globals as non-configurable (DontDelete) per ECMAScript spec
@@ -7469,6 +7473,7 @@ startExecution:
 				if captured := vm.closureWithObjects(closure); len(captured) > 0 {
 					cl.WithObjects = captured
 				}
+				cl.PrivateEnv = vm.currentPrivateEnv(closure)
 				// For arrow functions, capture the current 'this' value (lexical this binding)
 				// and the super constructor for super() calls
 				if cl.Fn.IsArrowFunction {
@@ -7642,6 +7647,7 @@ startExecution:
 				if captured := vm.closureWithObjects(closure); len(captured) > 0 {
 					cl.WithObjects = captured
 				}
+				cl.PrivateEnv = vm.currentPrivateEnv(closure)
 				// For arrow functions, capture the current 'this' value (lexical this binding)
 				// and the super constructor for super() calls
 				if cl.Fn.IsArrowFunction {
@@ -11018,7 +11024,7 @@ startExecution:
 				status := vm.runtimeError("Internal Error: Private field name constant %d is not a string.", nameConstIdx)
 				return status, Undefined
 			}
-			fieldName := AsString(nameVal)
+			fieldName := vm.resolvePrivateKey(closure, AsString(nameVal))
 
 			objVal := registers[objReg]
 
@@ -11067,7 +11073,7 @@ startExecution:
 					ip = frame.ip
 					continue
 				}
-			} else if props := OwnPropertiesTable(objVal); props != nil {
+			} else if props := privateElements(objVal, false); props != nil {
 				// Instances of `class S extends Array/Map/Set {}` (see
 				// paserati#478) store private members in this side table.
 				obj = props
@@ -11218,7 +11224,7 @@ startExecution:
 				status := vm.runtimeError("Internal Error: Private field name constant %d is not a string.", nameConstIdx)
 				return status, Undefined
 			}
-			fieldName := AsString(nameVal)
+			fieldName := vm.resolvePrivateKey(closure, AsString(nameVal))
 
 			objVal := registers[objReg]
 
@@ -11242,7 +11248,7 @@ startExecution:
 					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
-			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+			} else if props := privateElements(objVal, true); props != nil {
 				// See paserati#478: Array/Map/Set subclass instances.
 				obj = props
 			} else {
@@ -11300,7 +11306,7 @@ startExecution:
 				if !obj.HasPrivateField(fieldName) {
 					displayName := fieldName
 					if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
-						displayName = fieldName[colonIdx+1:]
+						displayName = privateDisplayName(fieldName[colonIdx+1:])
 					}
 					frame.ip = ip
 					vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s to an object whose class did not declare it", displayName))
@@ -11343,7 +11349,7 @@ startExecution:
 				status := vm.runtimeError("Internal Error: Private field name constant %d is not a string.", nameConstIdx)
 				return status, Undefined
 			}
-			fieldName := AsString(nameVal)
+			fieldName := vm.resolvePrivateKey(closure, AsString(nameVal))
 
 			objVal := registers[objReg]
 
@@ -11362,7 +11368,7 @@ startExecution:
 					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
-			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+			} else if props := privateElements(objVal, true); props != nil {
 				// Instances of `class S extends Array/Map/Set {}` are the VM's
 				// dedicated ArrayObject/MapObject/SetObject, not PlainObject -
 				// private-member storage for those lives in this side table
@@ -11376,7 +11382,7 @@ startExecution:
 
 			displayName := fieldName
 			if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
-				displayName = fieldName[colonIdx+1:]
+				displayName = privateDisplayName(fieldName[colonIdx+1:])
 			}
 
 			// PrivateFieldAdd: throw if the entry already exists on this object.
@@ -11437,11 +11443,11 @@ startExecution:
 				status := vm.runtimeError("Internal Error: Private setter name constant %d is not a string.", nameConstIdx)
 				return status, Undefined
 			}
-			fieldName := AsString(nameVal)
+			fieldName := vm.resolvePrivateKey(closure, AsString(nameVal))
 			// Extract the display name (remove brand prefix like "1:fieldName" -> "fieldName")
 			displayName := fieldName
 			if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
-				displayName = fieldName[colonIdx+1:]
+				displayName = privateDisplayName(fieldName[colonIdx+1:])
 			}
 
 			objVal := registers[objReg]
@@ -11462,7 +11468,7 @@ startExecution:
 					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
-			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+			} else if props := privateElements(objVal, true); props != nil {
 				// See paserati#478: Array/Map/Set subclass instances.
 				obj = props
 			} else {
@@ -11544,7 +11550,7 @@ startExecution:
 				status := vm.runtimeError("Internal Error: Private method name constant %d is not a string.", nameConstIdx)
 				return status, Undefined
 			}
-			methodName := AsString(nameVal)
+			methodName := vm.resolvePrivateKey(closure, AsString(nameVal))
 
 			objVal := registers[objReg]
 
@@ -11566,7 +11572,7 @@ startExecution:
 					closure.Properties = newPropertiesTable()
 				}
 				obj = closure.Properties
-			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+			} else if props := privateElements(objVal, true); props != nil {
 				// See paserati#478: Array/Map/Set subclass instances.
 				obj = props
 			} else {
@@ -11646,7 +11652,7 @@ startExecution:
 				status := vm.runtimeError("Internal Error: Private field name constant %d is not a string.", nameConstIdx)
 				return status, Undefined
 			}
-			fieldName := AsString(nameVal)
+			fieldName := vm.resolvePrivateKey(closure, AsString(nameVal))
 
 			objVal := registers[objReg]
 
@@ -11655,7 +11661,7 @@ startExecution:
 			// even though the VM represents them with a dedicated Go type rather
 			// than TypeObject - OwnPropertiesTable below recognizes exactly the
 			// same set of kinds that can hold a private member.
-			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction && objVal.Type() != TypeClosure && OwnPropertiesTable(objVal) == nil {
+			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction && objVal.Type() != TypeClosure && privateElements(objVal, false) == nil {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '#%s' in %s", fieldName, objVal.TypeName()))
 				if vm.frameCount == 0 || vm.unwindingCrossedNative {
@@ -11688,7 +11694,7 @@ startExecution:
 					obj = closure.Properties
 				}
 			} else {
-				obj = OwnPropertiesTable(objVal)
+				obj = privateElements(objVal, false)
 			}
 
 			// Check for private field, method, or accessor
@@ -11733,7 +11739,7 @@ startExecution:
 				status := vm.runtimeError("Internal Error: Private accessor name constant %d is not a string.", nameConstIdx)
 				return status, Undefined
 			}
-			fieldName := AsString(nameVal)
+			fieldName := vm.resolvePrivateKey(closure, AsString(nameVal))
 
 			objVal := registers[objReg]
 			getterVal := registers[getterReg]
@@ -11755,7 +11761,7 @@ startExecution:
 					closure.Properties = newPropertiesTable()
 				}
 				obj = closure.Properties
-			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+			} else if props := privateElements(objVal, true); props != nil {
 				// See paserati#478: Array/Map/Set subclass instances.
 				obj = props
 			} else {
@@ -11769,7 +11775,7 @@ startExecution:
 			if obj.IsPrivateMethod(fieldName) || obj.IsPrivateAccessor(fieldName) || obj.HasPrivateField(fieldName) {
 				displayName := fieldName
 				if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
-					displayName = fieldName[colonIdx+1:]
+					displayName = privateDisplayName(fieldName[colonIdx+1:])
 				}
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot add private member #%s, already exists on the object", displayName))
@@ -11792,7 +11798,7 @@ startExecution:
 				// Extract display name without brand prefix for error message
 				displayName := fieldName
 				if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
-					displayName = fieldName[colonIdx+1:]
+					displayName = privateDisplayName(fieldName[colonIdx+1:])
 				}
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot add private accessor #%s to a non-extensible object", displayName))
@@ -12541,7 +12547,7 @@ startExecution:
 				// used to read positionally.
 				bindPositionalParams(constructorFunc, newFrame.args, newFrame.registers, newFrame.spillSlots)
 
-				vm.trimWithStack()
+				vm.trimFrameStacks()
 				vm.frameCount++
 
 				// Store the new instance in the caller's destination register
@@ -12763,7 +12769,7 @@ startExecution:
 				// used to read positionally.
 				bindPositionalParams(constructorFunc, newFrame.args, newFrame.registers, newFrame.spillSlots)
 
-				vm.trimWithStack()
+				vm.trimFrameStacks()
 				vm.frameCount++
 
 				// Store the new instance in the caller's destination register
@@ -13251,7 +13257,7 @@ startExecution:
 					// call.go).
 					bindPositionalParams(constructorFunc, finalArgs, newFrame.registers, newFrame.spillSlots)
 
-					vm.trimWithStack()
+					vm.trimFrameStacks()
 					vm.frameCount++
 					callerRegisters[destReg] = newInstance
 
@@ -17841,6 +17847,13 @@ startExecution:
 			}
 			registers[destReg] = BooleanValue(success)
 
+		case OpPushPrivateEnv:
+			vm.pushPrivateEnv(closure, int(uint16(code[ip])<<8|uint16(code[ip+1])))
+			ip += 2
+
+		case OpPopPrivateEnv:
+			vm.popPrivateEnv()
+
 		case OpDeclareGlobal:
 			globalIdx := int(uint16(code[ip])<<8 | uint16(code[ip+1]))
 			nameIdx := int(uint16(code[ip+2])<<8 | uint16(code[ip+3]))
@@ -20522,7 +20535,7 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 
 	// Use prepareCall to set up the generator function call with the stored arguments and 'this' value
@@ -20681,7 +20694,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
@@ -20804,7 +20817,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	}
 
 	// Update VM state
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 	vm.restoreFrameWithObjects(genObj.Frame.withObjects)
 
@@ -20967,7 +20980,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
@@ -21026,7 +21039,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	frame.spillSlots = genObj.Frame.spillSlots
 
 	// Update VM state
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 	vm.restoreFrameWithObjects(genObj.Frame.withObjects)
 
@@ -21174,7 +21187,7 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
@@ -21233,7 +21246,7 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	frame.spillSlots = genObj.Frame.spillSlots
 
 	// Update VM state
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 	vm.restoreFrameWithObjects(genObj.Frame.withObjects)
 
@@ -21389,7 +21402,7 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 
 	// Check if we have space for the async function frame
@@ -21453,7 +21466,7 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	}
 
 	// Update VM state
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 	vm.restoreFrameWithObjects(promiseObj.Frame.withObjects)
 
@@ -21547,7 +21560,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 
 	// Check if we have space for the async function frame
@@ -21599,7 +21612,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	frame.spillSlots = promiseObj.Frame.spillSlots
 
 	// Update VM state
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 	vm.restoreFrameWithObjects(promiseObj.Frame.withObjects)
 
@@ -22040,7 +22053,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	} else {
 		frame.spillSlots = nil
 	}
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.frameCount++
 
 	// Run the module; vm.run() returns when the module frame returns (direct

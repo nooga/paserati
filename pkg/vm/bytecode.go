@@ -339,6 +339,10 @@ const (
 	// (flags: DeclareGlobal*), leaving an existing var binding untouched and
 	// reflecting it on the global object; Ry is the function's value.
 	OpDeclareGlobal OpCode = 186 // GlobalIdx(16bit) NameIdx(16bit) Flags Ry
+	// OpPushPrivateEnv / OpPopPrivateEnv bracket one evaluation of a class
+	// declaring private names (see private_env.go).
+	OpPushPrivateEnv OpCode = 187 // BrandID(16bit)
+	OpPopPrivateEnv  OpCode = 188 // No operands
 
 	// --- Accessor Property Support ---
 	OpDefineAccessor        OpCode = 80 // ObjReg GetterReg SetterReg NameIdx(16bit): Define accessor property on object
@@ -682,6 +686,10 @@ func (op OpCode) String() string {
 		return "OpTruncateWith"
 	case OpDeclareGlobal:
 		return "OpDeclareGlobal"
+	case OpPushPrivateEnv:
+		return "OpPushPrivateEnv"
+	case OpPopPrivateEnv:
+		return "OpPopPrivateEnv"
 
 	// --- Arguments Object ---
 	case OpGetArguments:
@@ -1543,6 +1551,15 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantInstruction(builder, "OpCreateNamespace", offset, true)
 	case OpCreateDeferredNamespace:
 		return c.registerConstantInstruction(builder, "OpCreateDeferredNamespace", offset, true)
+	case OpPushPrivateEnv:
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpPushPrivateEnv (missing operand)\n")
+			return offset + 1
+		}
+		builder.WriteString(fmt.Sprintf("%-16s brand %d\n", "OpPushPrivateEnv", uint16(c.Code[offset+1])<<8|uint16(c.Code[offset+2])))
+		return offset + 3
+	case OpPopPrivateEnv:
+		return c.simpleInstruction(builder, "OpPopPrivateEnv", offset)
 	case OpDeclareGlobal:
 		if offset+6 >= len(c.Code) {
 			builder.WriteString("OpDeclareGlobal (missing operands)\n")

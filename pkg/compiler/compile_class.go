@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -400,8 +401,11 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 
 	// 1.5. Enter class brand context for private field tracking
 	// Each class gets a unique brand ID to distinguish its private fields from other classes
-	c.enterClassBrand()
+	brandID := c.enterClassBrand()
 	defer c.exitClassBrand()
+	// This evaluation of the class declares its own private names.
+	c.emitPushPrivateEnv(brandID, node.Token.Line)
+	defer c.emitOpCode(vm.OpPopPrivateEnv, node.Token.Line)
 
 	// 1.6. Declare all private fields this class has
 	// This must happen BEFORE compiling any methods so nested classes can distinguish
@@ -1065,6 +1069,7 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 
 	// Extract field initializers from class properties
 	// Only include instance (non-static) fields - static fields are initialized separately
+	fieldsStart := len(fieldInitializers)
 	for i, property := range node.Body.Properties {
 		// Skip static fields - they're handled by setupStaticMembers, not the constructor
 		if property.IsStatic {
@@ -1116,6 +1121,8 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 		fieldInitializers = append(fieldInitializers, fieldInitStatement)
 		debugPrintf("// DEBUG injectFieldInitializers: Added field initializer for '%s'\n", c.extractPropertyName(property.Key))
 	}
+
+	privateStart := len(fieldInitializers)
 
 	// Add private methods as field initializers
 	// Private methods are stored via OpSetPrivateMethod (not writable)
@@ -1197,7 +1204,13 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 	// Now emit the accessor setup code
 	// We need to call: obj.SetPrivateAccessor(name, getter, setter)
 	// Since we're in bytecode, we'll emit this as a special private accessor initialization
-	for fieldName, accessor := range privateAccessors {
+	accessorNames := make([]string, 0, len(privateAccessors))
+	for fieldName := range privateAccessors {
+		accessorNames = append(accessorNames, fieldName)
+	}
+	sort.Strings(accessorNames)
+	for _, fieldName := range accessorNames {
+		accessor := privateAccessors[fieldName]
 		// For now, store these as special field initializers that will be handled
 		// during compilation. We'll create a synthetic call to SetPrivateAccessor.
 		// This is a bit of a hack, but it works within the current architecture.
@@ -1238,6 +1251,14 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 		fieldInitializers = append(fieldInitializers, fieldInitStatement)
 		debugPrintf("// DEBUG injectFieldInitializers: Added private accessor initializer for '%s'\n", fieldName)
 	}
+
+	// InitializeInstanceElements adds every private method and accessor
+	// before running any field initializer, so initializers can use them.
+	reordered := make([]parser.Statement, 0, len(fieldInitializers))
+	reordered = append(reordered, fieldInitializers[:fieldsStart]...)
+	reordered = append(reordered, fieldInitializers[privateStart:]...)
+	reordered = append(reordered, fieldInitializers[fieldsStart:privateStart]...)
+	fieldInitializers = reordered
 
 	// ADDED: Extract parameter property assignments from constructor parameters
 	if functionLiteral.Parameters != nil {

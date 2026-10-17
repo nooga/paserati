@@ -868,6 +868,12 @@ func (c *Compiler) emitWithTruncate(depth, count int, line int) {
 	}
 }
 
+// emitPushPrivateEnv emits OpPushPrivateEnv for class brand brandID.
+func (c *Compiler) emitPushPrivateEnv(brandID int, line int) {
+	c.emitOpCode(vm.OpPushPrivateEnv, line)
+	c.emitUint16(uint16(brandID))
+}
+
 // emitGetWithProperty emits OpGetWithProperty instruction
 func (c *Compiler) emitGetWithProperty(destReg Register, nameIdx int, line int) {
 	c.emitOpCode(vm.OpGetWithProperty, line)
