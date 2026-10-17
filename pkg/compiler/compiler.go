@@ -1382,6 +1382,27 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			hoistedGlobalNames = append(hoistedGlobalNames, name)
 		}
 		sort.Strings(hoistedGlobalNames)
+		// Eval code declares nothing unless every global function and var
+		// is definable (EvalDeclarationInstantiation steps 8 and 10, before
+		// any binding is created).
+		if (c.isIndirectEval || c.callerScopeDesc != nil) && !c.isStrictEvalCode() && c.enclosing == nil && !c.evalHoistsToEnv() {
+			for _, name := range hoistedGlobalNames {
+				if _, ok := program.HoistedDeclarations[name].(*parser.FunctionLiteral); ok {
+					globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
+					c.emitDeclareGlobal(globalIdx, name, vm.DeclareGlobalFunction|vm.DeclareGlobalCheck, 0, 0)
+				}
+			}
+			for _, name := range collectVarDeclarations(program.Statements) {
+				if _, isFunc := program.HoistedDeclarations[name]; isFunc {
+					continue
+				}
+				if _, _, found := c.currentSymbolTable.Resolve(name); found {
+					continue
+				}
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
+				c.emitDeclareGlobal(globalIdx, name, vm.DeclareGlobalCheck, 0, 0)
+			}
+		}
 		for _, name := range hoistedGlobalNames {
 			hoistedNode := program.HoistedDeclarations[name]
 			funcLit, ok := hoistedNode.(*parser.FunctionLiteral)
@@ -1427,8 +1448,14 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			// Update the symbol table entry to mark it as global
 			c.currentSymbolTable.DefineGlobal(name, globalIdx)
 
-			// 5. Emit OpSetGlobal to store the function in the VM's globals array
-			c.emitSetGlobal(globalIdx, closureReg, funcLit.Token.Line)
+			// 5. Store the function in the VM's globals array. Eval code
+			// creates the binding with CreateGlobalFunctionBinding, which
+			// also redefines an existing configurable global property.
+			if c.isIndirectEval || c.callerScopeDesc != nil {
+				c.emitDeclareGlobal(globalIdx, name, vm.DeclareGlobalFunction|vm.DeclareGlobalDeletable, closureReg, funcLit.Token.Line)
+			} else {
+				c.emitSetGlobal(globalIdx, closureReg, funcLit.Token.Line)
+			}
 
 			// 6. Mark as non-configurable (DontDelete) only for true top-level function declarations,
 			// not for eval-created bindings which should be configurable
@@ -1478,9 +1505,17 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			// pre-existing non-writable global of the same name (e.g. `var
 			// undefined = 42`, see #440 follow-up; OpSetGlobalInit resets
 			// writability for exactly this reason).
+			//
+			// Eval code instead leaves an existing binding of the name
+			// alone (CreateGlobalVarBinding): `var x;` in eval must not reset
+			// the caller's x to undefined.
 			tempReg := c.regAlloc.Alloc()
-			c.emitLoadUndefined(tempReg, 0)
-			c.emitSetGlobalInit(globalIdx, tempReg, 0)
+			if c.isIndirectEval || c.callerScopeDesc != nil {
+				c.emitDeclareGlobal(globalIdx, name, vm.DeclareGlobalDeletable, tempReg, 0)
+			} else {
+				c.emitLoadUndefined(tempReg, 0)
+				c.emitSetGlobalInit(globalIdx, tempReg, 0)
+			}
 			c.regAlloc.Free(tempReg)
 			// Mark as non-configurable (DontDelete) only for true top-level var declarations,
 			// not for eval-created bindings which should be configurable
