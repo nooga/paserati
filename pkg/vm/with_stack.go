@@ -11,10 +11,14 @@ package vm
 // new frame at the same depth never inherits them) and before the stack is
 // read or pushed. Depths therefore never decrease towards the top.
 
-// trimWithStack drops entries pushed by frames that have exited.
-func (vm *VM) trimWithStack() {
+// trimFrameStacks drops with-stack and private-environment entries pushed
+// by frames that have exited. Called before every frame push.
+func (vm *VM) trimFrameStacks() {
 	if n := len(vm.withObjectDepth); n != 0 && vm.withObjectDepth[n-1] > vm.frameCount {
 		vm.trimWithStackSlow()
+	}
+	if n := len(vm.privateEnvStack); n != 0 && vm.privateEnvStack[n-1].depth > vm.frameCount {
+		vm.trimPrivateEnvStack()
 	}
 }
 
@@ -31,7 +35,7 @@ func (vm *VM) trimWithStackSlow() {
 
 // frameWithObjects returns the current frame's with objects, innermost last.
 func (vm *VM) frameWithObjects() []Value {
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	n := len(vm.withObjectDepth)
 	i := n
 	for i > 0 && vm.withObjectDepth[i-1] == vm.frameCount {
@@ -42,7 +46,7 @@ func (vm *VM) frameWithObjects() []Value {
 
 // pushWithObject pushes obj for the current frame.
 func (vm *VM) pushWithObject(obj Value) {
-	vm.trimWithStack()
+	vm.trimFrameStacks()
 	vm.withObjectStack = append(vm.withObjectStack, obj)
 	vm.withObjectDepth = append(vm.withObjectDepth, vm.frameCount)
 }

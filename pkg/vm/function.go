@@ -88,6 +88,7 @@ type ClosureObject struct {
 	Fn                       *FunctionObject
 	Upvalues                 []*Upvalue
 	WithObjects              []Value      // Captured with-object stack from enclosing with statements
+	PrivateEnv               *PrivateEnv  // Private environment of the class evaluations enclosing its creation
 	CapturedThis             Value        // Captured 'this' for arrow functions (lexical this binding)
 	CapturedThisCell         *thisCell    // Shared 'this' binding for an arrow created before super() - see this_cell.go
 	CapturedSuperConstructor Value        // Captured super constructor for arrow functions with super() calls

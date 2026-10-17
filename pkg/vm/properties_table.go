@@ -44,6 +44,23 @@ func OwnPropertiesTable(v Value) *PlainObject {
 	return nil
 }
 
+// privateElements returns the table holding v's private elements when v is
+// not an ordinary object: its properties side table, or a proxy's own private
+// store. create allocates a missing table.
+func privateElements(v Value, create bool) *PlainObject {
+	if v.Type() == TypeProxy {
+		p := v.AsProxy()
+		if p.privates == nil && create {
+			p.privates = newPropertiesTable()
+		}
+		return p.privates
+	}
+	if create {
+		return EnsureOwnPropertiesTable(v)
+	}
+	return OwnPropertiesTable(v)
+}
+
 // EnsureOwnPropertiesTable is OwnPropertiesTable, but allocates the table if v
 // doesn't have one yet. Callers that *record* something (Object.freeze,
 // Object.seal, Object.preventExtensions, property definition) want this. Still

@@ -6114,8 +6114,11 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 
 	// Enter class brand context for private field tracking
 	// Each class gets a unique brand ID to distinguish its private fields from other classes
-	c.enterClassBrand()
+	brandID := c.enterClassBrand()
 	defer c.exitClassBrand()
+	// This evaluation of the class declares its own private names.
+	c.emitPushPrivateEnv(brandID, node.Token.Line)
+	defer c.emitOpCode(vm.OpPopPrivateEnv, node.Token.Line)
 
 	// Declare all private fields this class has
 	c.declareClassPrivateNames(node)

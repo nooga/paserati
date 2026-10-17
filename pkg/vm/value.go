@@ -698,6 +698,10 @@ type ProxyObject struct {
 	target  Value // The target object being proxied
 	handler Value // The handler object with traps
 	Revoked bool  // Whether the proxy has been revoked
+	// privates holds private elements added to the proxy itself (a proxy
+	// returned from a base constructor gets the derived class's fields);
+	// they never go through the handler's traps.
+	privates *PlainObject
 }
 
 // Target returns the proxy's target object
