@@ -9,6 +9,7 @@ import (
 
 // compileForOfStatementLabeled compiles for-of loops using iterator protocol uniformly
 func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, label string, hint Register) (Register, errors.PaseratiError) {
+	defer c.pushLexicalScope(lexicalDeclNames([]parser.Statement{node.Variable}))()
 	// Track temporary registers for cleanup
 	var tempRegs []Register
 	defer func() {

@@ -503,6 +503,7 @@ type Compiler struct {
 	hasLexicalArguments       bool                // True when this function declares a let/const named 'arguments'
 	hasEvalInFieldInitializer bool                // True when direct eval was found in a class field initializer
 	allLocalNames             map[Register]string // Tracks all local variable allocations for ScopeDescriptor
+	lexicalScopes             [][]string          // let/const/class names of the enclosing scopes in this function, outermost first
 
 	// --- Parameter TDZ Tracking ---
 	currentDefaultParamIndex int      // Index of parameter whose default we're compiling (-1 if not in default scope)
@@ -1179,6 +1180,19 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 		debugPrintf("[Compile] Finished pre-processing runtime imports\n")
 	}
 
+	// Lexical names a direct eval in this code must not redeclare with var:
+	// the code's own top-level let/const/class and, for sloppy direct eval
+	// code, the ones its caller had between the call and its var environment.
+	// (Module code is strict, so its evals' vars never leave the eval.)
+	c.lexicalScopes = nil
+	if c.callerScopeDesc != nil && !c.chunk.IsStrict {
+		c.pushLexicalScope(c.callerScopeDesc.LexicalBindings)
+	}
+	if !moduleGoal {
+		c.pushLexicalScope(lexicalDeclNames(program.Statements))
+	}
+	c.checkEvalVarLexicalConflicts(program)
+
 	// --- Pre-register global declaration names BEFORE compiling hoisted functions ---
 	// This ensures that when hoisted functions try to assign to global vars,
 	// c.GlobalExists() returns true and strict mode doesn't throw ReferenceError.
@@ -1735,6 +1749,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		if c.isCompilingFunctionBody {
 			c.isCompilingFunctionBody = false
 		}
+		// A function body's let/const sit between its direct evals and its
+		// variable environment too, so push for every block.
+		defer c.pushLexicalScope(lexicalDeclNames(node.Statements))()
 
 		// Create enclosed scope for inner blocks
 		var prevSymbolTable *SymbolTable

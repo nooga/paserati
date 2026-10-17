@@ -4743,6 +4743,7 @@ func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register,
 		c.emitByte(byte(zeroReg))      // index
 
 		// Emit OpDirectEval with the first element
+		c.recordEvalSiteLexicals()
 		c.chunk.WriteOpCode(vm.OpDirectEval, line)
 		c.chunk.EmitByte(byte(hint))
 		c.chunk.EmitByte(byte(codeReg))
@@ -4768,6 +4769,7 @@ func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register,
 	}
 
 	// Emit OpDirectEval: result in hint, code string in codeReg
+	c.recordEvalSiteLexicals()
 	c.chunk.WriteOpCode(vm.OpDirectEval, line)
 	c.chunk.EmitByte(byte(hint))
 	c.chunk.EmitByte(byte(codeReg))

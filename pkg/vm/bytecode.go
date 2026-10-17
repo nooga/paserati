@@ -900,6 +900,10 @@ type Chunk struct {
 	// VarGlobalIndices tracks global indices that are var declarations (non-configurable per ECMAScript)
 	// These indices should have their heap slots marked as non-configurable (DontDelete)
 	VarGlobalIndices []uint16
+	// EvalSiteLexicals maps the offset of an OpDirectEval to the let/const/class
+	// names between that call and its variable environment (ScopeDescriptor's
+	// LexicalBindings for that call). Sites with none are absent.
+	EvalSiteLexicals map[int][]string
 	// Constant deduplication caches for O(1) lookup (avoids O(n) linear search)
 	stringConstCache map[string]uint16  // Cache for string constants
 	intConstCache    map[int64]uint16   // Cache for integer constants
