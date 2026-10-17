@@ -1755,6 +1755,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 			_ = vm.heap.SetConfigurable(int(idx), false) // After resize, this should succeed
 		}
 	}
+	vm.reflectScriptVars(chunk)
 
 	// Run the VM
 	// fmt.Printf("// [VM] Interpret: About to call vm.run() for chunk '%s' (stack depth: %d)\n", mainFuncObj.Name, len(vm.executionContextStack))
@@ -14503,6 +14504,11 @@ startExecution:
 			}
 
 			vm.setGlobalInTable(globalIdx, value)
+			// A sloppy assignment to an unresolvable name creates a
+			// configurable property of the global object.
+			if !heapExists && !function.Chunk.IsModule {
+				vm.mirrorGlobalVar(int(globalIdx), vm.heap.GetNameByIndex(int(globalIdx)), true)
+			}
 
 			// Debug output (disabled)
 			// if globalIdx == 21 {
@@ -17081,7 +17087,9 @@ startExecution:
 					// If this is the GlobalObject, also mark the heap entry as deleted
 					if success && po == vm.GlobalObject {
 						if idx, exists := vm.heap.GetNameToIndex()[propName]; exists {
-							vm.heap.Delete(idx)
+							if vm.heap.Delete(idx) {
+								vm.unmirrorGlobalVar(idx)
+							}
 						}
 					}
 				} else if obj.Type() == TypeDictObject {
@@ -17619,7 +17627,9 @@ startExecution:
 						// GlobalThis special case: keep heap in sync
 						if success && po == vm.GlobalObject {
 							if idx, exists := vm.heap.GetNameToIndex()[propName]; exists {
-								vm.heap.Delete(idx)
+								if vm.heap.Delete(idx) {
+									vm.unmirrorGlobalVar(idx)
+								}
 							}
 						}
 					}
@@ -17826,7 +17836,31 @@ startExecution:
 
 			// Try to delete from heap - returns false if non-configurable
 			success := vm.heap.Delete(int(heapIdx))
+			if success {
+				vm.unmirrorGlobalVar(int(heapIdx))
+			}
 			registers[destReg] = BooleanValue(success)
+
+		case OpDeclareGlobal:
+			globalIdx := int(uint16(code[ip])<<8 | uint16(code[ip+1]))
+			nameIdx := int(uint16(code[ip+2])<<8 | uint16(code[ip+3]))
+			flags := code[ip+4]
+			srcReg := code[ip+5]
+			ip += 6
+			name := constants[nameIdx].AsString()
+			if flags&DeclareGlobalCheck != 0 {
+				isFunc := flags&DeclareGlobalFunction != 0
+				if (isFunc && !vm.canDeclareGlobalFunction(name)) || (!isFunc && !vm.canDeclareGlobalVar(globalIdx, name)) {
+					frame.ip = ip
+					vm.ThrowTypeError(fmt.Sprintf("Cannot declare global binding '%s'", name))
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					goto reloadFrame
+				}
+				continue
+			}
+			vm.declareGlobal(globalIdx, name, flags, registers[srcReg])
 
 		case OpToPropertyKey:
 			// OpToPropertyKey: Rx Ry: Rx = ToPropertyKey(Ry)

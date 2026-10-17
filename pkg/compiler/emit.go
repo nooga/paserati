@@ -754,6 +754,16 @@ func (c *Compiler) emitSetGlobalInit(globalIdx uint16, src Register, line int) {
 	c.emitByte(byte(src))
 }
 
+// emitDeclareGlobal emits OpDeclareGlobal (flags: vm.DeclareGlobal*); src
+// holds a function declaration's value.
+func (c *Compiler) emitDeclareGlobal(globalIdx uint16, name string, flags byte, src Register, line int) {
+	c.emitOpCode(vm.OpDeclareGlobal, line)
+	c.emitUint16(globalIdx)
+	c.emitUint16(c.chunk.AddConstant(vm.String(name)))
+	c.emitByte(flags)
+	c.emitByte(byte(src))
+}
+
 // emitToNumber implements unary plus by converting the operand to a number
 func (c *Compiler) emitToNumber(dest, src Register, line int) {
 	c.emitOpCode(vm.OpToNumber, line)

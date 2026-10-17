@@ -505,7 +505,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// decorator replaced it (#608).
 	if node.Name.Value != "" {
 		if isGlobalClassScope {
-			c.emitSetGlobal(classGlobalIdx, constructorReg, node.Token.Line)
+			c.emitSetGlobalInit(classGlobalIdx, constructorReg, node.Token.Line)
 		} else {
 			c.emitStoreSpill(classSpillSlot, constructorReg, node.Token.Line)
 		}
@@ -539,7 +539,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// spill slot (defined up front in step 1), so a single store satisfies both.
 	if isGlobalClassScope {
 		// Top-level class declaration - set the global value
-		c.emitSetGlobal(classGlobalIdx, constructorReg, node.Token.Line)
+		c.emitSetGlobalInit(classGlobalIdx, constructorReg, node.Token.Line)
 		debugPrintf("// DEBUG compileClassDeclaration: Set global class '%s' to R%d\n", node.Name.Value, constructorReg)
 	} else {
 		c.emitStoreSpill(classSpillSlot, constructorReg, node.Token.Line)

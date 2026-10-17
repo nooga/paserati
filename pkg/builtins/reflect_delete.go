@@ -58,8 +58,8 @@ func reflectDeleteProperty(vmInstance *vm.VM, target vm.Value, key vm.Value) (bo
 		}
 		success := deleteFromTable(po, name)
 		if success && po == vmInstance.GlobalObject && heap != nil {
-			if idx, exists := heap.GetNameToIndex()[name]; exists {
-				heap.Delete(idx)
+			if idx, exists := heap.GetNameToIndex()[name]; exists && heap.Delete(idx) {
+				vmInstance.UnmirrorGlobalVar(idx)
 			}
 		}
 		return success, nil

@@ -169,15 +169,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		switch thisValue.Type() {
 		case vm.TypeObject:
 			plainObj := thisValue.AsPlainObject()
-			// Special case for globalThis: check heap for top-level declarations
-			if plainObj == vmInstance.GlobalObject {
-				if idx, exists := vmInstance.GetHeap().GetNameToIndex()[propName]; exists {
-					// Also verify the heap value is still initialized (not deleted)
-					if _, isInit := vmInstance.GetHeap().Get(idx); isInit {
-						return vm.BooleanValue(true), nil
-					}
-				}
-			}
+			// globalThis's var/function bindings are mirrored as own
+			// properties; its let/const/class bindings are not properties.
 			_, hasOwn := plainObj.GetOwn(propName)
 			return vm.BooleanValue(hasOwn), nil
 		case vm.TypeDictObject:
