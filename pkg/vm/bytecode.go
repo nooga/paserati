@@ -335,6 +335,10 @@ const (
 	// OpTruncateWith drops the current frame's with objects beyond the first
 	// N, for control leaving `with` bodies by break/continue or exception.
 	OpTruncateWith OpCode = 185 // N
+	// OpDeclareGlobal creates an eval-declared global var or function binding
+	// (flags: DeclareGlobal*), leaving an existing var binding untouched and
+	// reflecting it on the global object; Ry is the function's value.
+	OpDeclareGlobal OpCode = 186 // GlobalIdx(16bit) NameIdx(16bit) Flags Ry
 
 	// --- Accessor Property Support ---
 	OpDefineAccessor        OpCode = 80 // ObjReg GetterReg SetterReg NameIdx(16bit): Define accessor property on object
@@ -676,6 +680,8 @@ func (op OpCode) String() string {
 		return "OpCreateDeferredNamespace"
 	case OpTruncateWith:
 		return "OpTruncateWith"
+	case OpDeclareGlobal:
+		return "OpDeclareGlobal"
 
 	// --- Arguments Object ---
 	case OpGetArguments:
@@ -1537,6 +1543,15 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantInstruction(builder, "OpCreateNamespace", offset, true)
 	case OpCreateDeferredNamespace:
 		return c.registerConstantInstruction(builder, "OpCreateDeferredNamespace", offset, true)
+	case OpDeclareGlobal:
+		if offset+6 >= len(c.Code) {
+			builder.WriteString("OpDeclareGlobal (missing operands)\n")
+			return offset + 1
+		}
+		gi := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+		ni := uint16(c.Code[offset+3])<<8 | uint16(c.Code[offset+4])
+		builder.WriteString(fmt.Sprintf("%-16s G%d %s flags=%d R%d\n", "OpDeclareGlobal", gi, c.Constants[ni].Inspect(), c.Code[offset+5], c.Code[offset+6]))
+		return offset + 7
 
 	// --- Arguments Object ---
 	case OpGetArguments:

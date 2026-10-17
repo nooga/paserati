@@ -567,12 +567,6 @@ func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
 		return vm.Undefined, errs
 	}
 
-	// For non-strict indirect eval, sync heap vars to GlobalObject
-	// This makes var declarations accessible via globalThis (ECMAScript requirement)
-	if !chunk.IsStrict {
-		p.vmInstance.SyncHeapToGlobalObject()
-	}
-
 	return result, nil
 }
 
