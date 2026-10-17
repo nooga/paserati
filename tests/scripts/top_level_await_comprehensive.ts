@@ -23,7 +23,7 @@ if (v3 !== 15) {
 }
 
 // Test 4: Promise created and immediately resolved
-let resolveFuncTest4: (value: number) => void;
+let resolveFuncTest4!: (value: number) => void;
 const p4 = new Promise<number>(r => { resolveFuncTest4 = r; });
 resolveFuncTest4(30);
 const v4 = await p4;

@@ -1,6 +1,6 @@
 // expect: undefined
 // Test awaiting a pending promise - should return undefined (promise not resolved synchronously)
-let resolveFunc: (value: number) => void;
+let resolveFunc!: (value: number) => void;
 
 const pendingPromise = new Promise<number>((resolve) => {
     resolveFunc = resolve;

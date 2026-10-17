@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -55,9 +56,6 @@ func (c *Checker) analyzeDefiniteAssignmentScope(stmts []parser.Statement) {
 	for _, s := range stmts {
 		a.collectCandidates(s)
 	}
-	for _, s := range stmts {
-		a.disqualifyFromNestedFunctions(s)
-	}
 
 	if len(a.candidates) > 0 {
 		assigned := map[string]bool{}
@@ -80,6 +78,8 @@ type definiteAssignment struct {
 	// reported guards against emitting the same diagnostic twice for a node
 	// reached through more than one walk (e.g. a loop body).
 	reported map[parser.Node]bool
+	// loopHeadVars holds the `var` declarators of for-of/for-in heads.
+	loopHeadVars map[*parser.VarDeclarator]bool
 }
 
 // --- Candidate collection -------------------------------------------------
@@ -91,12 +91,32 @@ type definiteAssignment struct {
 func (a *definiteAssignment) collectCandidates(node parser.Node) {
 	forEachNodeInScope(node, func(n parser.Node) {
 		switch s := n.(type) {
+		case *parser.ForOfStatement:
+			a.noteLoopHeadVars(s.Variable)
+		case *parser.ForInStatement:
+			a.noteLoopHeadVars(s.Variable)
 		case *parser.LetStatement:
 			a.collectFromDeclarators(s.Declarations, s.Declare)
 		case *parser.VarStatement:
 			a.collectFromDeclarators(s.Declarations, s.Declare)
 		}
 	})
+}
+
+// noteLoopHeadVars records the `var` declarators of a for-of/for-in head. They
+// take their type from the iterated value rather than an annotation, but are
+// hoisted like any other var, so a read before the loop is a TS2454.
+func (a *definiteAssignment) noteLoopHeadVars(variable parser.Statement) {
+	vs, ok := variable.(*parser.VarStatement)
+	if !ok || vs == nil {
+		return
+	}
+	if a.loopHeadVars == nil {
+		a.loopHeadVars = map[*parser.VarDeclarator]bool{}
+	}
+	for _, d := range vs.Declarations {
+		a.loopHeadVars[d] = true
+	}
 }
 
 func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarator, ambient bool) {
@@ -114,6 +134,11 @@ func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarato
 		// that ambient declaration, which is already initialized.
 		if a.c.preexistingGlobals[name] {
 			a.candidates[name] = false
+			continue
+		}
+		if a.loopHeadVars[d] && d.TypeAnnotation == nil {
+			t := declaredVarType(d)
+			a.candidates[name] = t != nil && !strictInitTypePermits(t)
 			continue
 		}
 		a.candidates[name] = !ambient && definiteAssignmentEligible(d)
@@ -144,25 +169,14 @@ func declaredVarType(d *parser.VarDeclarator) types.Type {
 	return nil
 }
 
-// disqualifyFromNestedFunctions drops any candidate that a nested function
-// reads or writes. TS models those flows through closures; this pass does not,
-// so it declines to report on them rather than risk a false positive.
-func (a *definiteAssignment) disqualifyFromNestedFunctions(node parser.Node) {
-	forEachNodeInScope(node, func(n parser.Node) {
-		if body, ok := nestedFunctionBody(n); ok {
-			forEachDescendant(body, func(d parser.Node) {
-				if id, ok := d.(*parser.Identifier); ok {
-					delete(a.candidates, id.Value)
-				}
-			})
-		}
-	})
-}
-
 // analyzeNestedFunctionScopes recurses into every nested function body found in
 // node, analyzing each as an independent scope.
 func (c *Checker) analyzeNestedFunctionScopes(node parser.Node) {
 	forEachNodeInScope(node, func(n parser.Node) {
+		if ns, ok := n.(*parser.NamespaceDeclaration); ok {
+			c.analyzeNamespaceScope(ns)
+			return
+		}
 		body, ok := nestedFunctionBody(n)
 		if !ok {
 			return
@@ -171,6 +185,25 @@ func (c *Checker) analyzeNestedFunctionScopes(node parser.Node) {
 			c.analyzeDefiniteAssignmentScope(block.Statements)
 		}
 	})
+}
+
+// analyzeNamespaceScope analyzes a namespace body as its own scope. Exported
+// variables are properties of the namespace object, which TS does not track
+// through flow analysis, so only non-exported ones are candidates.
+func (c *Checker) analyzeNamespaceScope(ns *parser.NamespaceDeclaration) {
+	if ns.Declare || ns.Body == nil {
+		return
+	}
+	stmts := make([]parser.Statement, 0, len(ns.Body.Statements))
+	for _, s := range ns.Body.Statements {
+		if _, exported := s.(*parser.ExportNamedDeclaration); exported {
+			// Still analyze functions and nested namespaces declared there.
+			c.analyzeNestedFunctionScopes(s)
+			continue
+		}
+		stmts = append(stmts, s)
+	}
+	c.analyzeDefiniteAssignmentScope(stmts)
 }
 
 // nestedFunctionBody returns the body of a function-like node, and whether node
@@ -219,14 +252,17 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 				// Compound assignment reads the target first.
 				a.reportIfUnassigned(id, assigned)
 			}
-			assigned[id.Value] = true
+			if assignmentDefinitelyWrites(n.Operator) {
+				assigned[id.Value] = true
+			}
 		} else {
 			a.walk(n.Left, assigned)
 		}
 	case *parser.UpdateExpression:
+		// TS does not count ++/-- as an assignment for definite assignment:
+		// the variable keeps reading as unassigned afterwards.
 		if id, ok := n.Argument.(*parser.Identifier); ok {
 			a.reportIfUnassigned(id, assigned)
-			assigned[id.Value] = true
 		} else {
 			a.walk(n.Argument, assigned)
 		}
@@ -351,10 +387,18 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 	case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
 		return
 
-	// --- Class and namespace bodies run code this pass does not order (static
-	// --- blocks, field initializers), so assume every write inside happened.
-	case *parser.ClassDeclaration, *parser.ClassExpression, *parser.NamespaceDeclaration:
-		unionSyntacticWrites(assigned, node)
+	// --- Class members and namespace bodies are flow containers of their own
+	// --- in TS: reads there see outer variables as initialized and writes
+	// --- there do not reach the enclosing flow. Only `extends` and static
+	// --- blocks, which run inline during class definition, belong to it.
+	case *parser.ClassDeclaration:
+		a.walk(n.SuperClass, assigned)
+		a.walkStaticBlocks(n.Body, assigned)
+	case *parser.ClassExpression:
+		a.walk(n.SuperClass, assigned)
+		a.walkStaticBlocks(n.Body, assigned)
+	case *parser.NamespaceDeclaration:
+		return
 
 	// --- Member access: only the object side is a variable read ---
 	case *parser.MemberExpression:
@@ -371,7 +415,9 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 			if p == nil {
 				continue
 			}
-			if _, isIdent := p.Key.(*parser.Identifier); !isIdent {
+			if _, isIdent := p.Key.(*parser.Identifier); !isIdent && !isObjectLiteralMethod(p.Value) {
+				// A method's or accessor's computed name sits inside the
+				// method's own flow container in TS, so it is not checked here.
 				a.walk(p.Key, assigned)
 			}
 			a.walk(p.Value, assigned)
@@ -383,6 +429,35 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 			a.walk(child, assigned)
 		})
 	}
+}
+
+// assignmentDefinitelyWrites reports whether an assignment operator leaves its
+// identifier target assigned. Arithmetic compound assignment does not in TS's
+// flow analysis (the result type comes from the unassigned read); `||=` and
+// `??=` do, since an unassigned (undefined) target always takes the right side.
+func assignmentDefinitelyWrites(op string) bool {
+	return op == "=" || op == "||=" || op == "??="
+}
+
+func (a *definiteAssignment) walkStaticBlocks(body *parser.ClassBody, assigned map[string]bool) {
+	if body == nil {
+		return
+	}
+	for _, b := range body.StaticInitializers {
+		a.walk(b, assigned)
+	}
+}
+
+func isObjectLiteralMethod(v parser.Expression) bool {
+	switch f := v.(type) {
+	case *parser.ShorthandMethod, *parser.MethodDefinition:
+		return true
+	case *parser.FunctionLiteral:
+		// Methods parse to function literals too; only `key: function () {}`
+		// starts with the `function` keyword.
+		return f.Token.Type != lexer.FUNCTION
+	}
+	return false
 }
 
 func (a *definiteAssignment) walkDeclarators(decls []*parser.VarDeclarator, assigned map[string]bool) {
@@ -413,7 +488,8 @@ func (a *definiteAssignment) bindLoopVariable(variable parser.Statement, assigne
 		a.markWriteTarget(exprStmt.Expression, assigned)
 		return
 	}
-	a.walk(variable, assigned)
+	// A declaration in the head is written with each iteration's value.
+	markAllIdentifiers(variable, assigned)
 }
 
 // bindDestructuringElement records a destructuring target as written, after
@@ -535,11 +611,7 @@ func unionSyntacticWrites(assigned map[string]bool, node parser.Node) {
 	forEachDescendant(node, func(n parser.Node) {
 		switch w := n.(type) {
 		case *parser.AssignmentExpression:
-			if id, ok := w.Left.(*parser.Identifier); ok {
-				assigned[id.Value] = true
-			}
-		case *parser.UpdateExpression:
-			if id, ok := w.Argument.(*parser.Identifier); ok {
+			if id, ok := w.Left.(*parser.Identifier); ok && assignmentDefinitelyWrites(w.Operator) {
 				assigned[id.Value] = true
 			}
 		case *parser.LetStatement:
@@ -746,6 +818,8 @@ func forEachChildInScope(node parser.Node, fn func(parser.Node)) {
 		}
 	case *parser.SpreadElement:
 		visit(n.Argument)
+	case *parser.ComputedPropertyName:
+		visit(n.Expr)
 	case *parser.ArrayDestructuringAssignment:
 		visit(n.Value)
 		for _, el := range n.Elements {

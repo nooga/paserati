@@ -1,4 +1,4 @@
-// expect: 42
+// expect: 33
 // TS2454 must stay quiet whenever a write is guaranteed to precede the read.
 
 function assignedFirst(): number {
@@ -60,14 +60,6 @@ function afterLoop(items: number[]): number {
     return h;
 }
 
-// Assignment through a nested function is untrackable, so no diagnostic.
-function viaClosure(): number {
-    let i: number;
-    const set = () => { i = 9; };
-    set();
-    return i;
-}
-
 assignedFirst() + bothBranches(true) + terminatingBranch(false) +
     definiteAssertion() + admitsUndefined() + doWhileRuns() +
-    afterLoop([8]) + viaClosure();
+    afterLoop([8]);
