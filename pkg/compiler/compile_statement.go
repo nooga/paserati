@@ -1214,6 +1214,7 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register)
 }
 
 func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label string, hint Register) (Register, errors.PaseratiError) {
+	defer c.pushLexicalScope(lexicalDeclNames([]parser.Statement{node.Initializer}))()
 	// Defer-safety: patch any outstanding placeholder jump to a valid anchor on early returns
 	var (
 		conditionExitJumpPlaceholderPos = -1
@@ -1925,6 +1926,14 @@ func (c *Compiler) predefineCaseLexicals(stmts []parser.Statement) []string {
 }
 
 func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Register) (Register, errors.PaseratiError) {
+	// The CaseBlock is one lexical scope for every clause (see compile_eval_lexical.go).
+	var caseStmts []parser.Statement
+	for _, cc := range node.Cases {
+		if cc.Body != nil {
+			caseStmts = append(caseStmts, cc.Body.Statements...)
+		}
+	}
+	defer c.pushLexicalScope(lexicalDeclNames(caseStmts))()
 	// Track temporary registers for cleanup
 	var tempRegs []Register
 	defer func() {
@@ -2117,6 +2126,7 @@ func (c *Compiler) compileForInStatement(node *parser.ForInStatement, hint Regis
 }
 
 func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, label string, hint Register) (Register, errors.PaseratiError) {
+	defer c.pushLexicalScope(lexicalDeclNames([]parser.Statement{node.Variable}))()
 	// Defer-safety: ensure condition exit is patched
 	var (
 		conditionExitJumpPos = -1

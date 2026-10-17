@@ -17844,6 +17844,7 @@ startExecution:
 		case OpDirectEval:
 			// OpDirectEval: Rx CodeReg - Execute direct eval with code string in CodeReg, result in Rx
 			// Direct eval inherits strict mode from the caller and (in future) can access caller's scope
+			evalSite := ip - 1
 			destReg := code[ip]
 			codeReg := code[ip+1]
 			ip += 2
@@ -17908,7 +17909,15 @@ startExecution:
 				if !function.Chunk.ScopeDesc.InClassFieldInitializer {
 					vm.evalCallerNewTarget = frame.newTarget()
 				}
-				result, evalErrs = vm.evalDriver.DirectEvalCode(codeStr, callerIsStrict, function.Chunk.ScopeDesc, registers, callerThis, frame.homeObject)
+				// The lexical names between this call and the var environment
+				// depend on the call site, not just the function.
+				scopeDesc := function.Chunk.ScopeDesc
+				if lex := function.Chunk.EvalSiteLexicals[evalSite]; lex != nil {
+					siteDesc := *scopeDesc
+					siteDesc.LexicalBindings = lex
+					scopeDesc = &siteDesc
+				}
+				result, evalErrs = vm.evalDriver.DirectEvalCode(codeStr, callerIsStrict, scopeDesc, registers, callerThis, frame.homeObject)
 				vm.evalCallerNewTarget = Undefined
 			} else {
 				// Use regular EvalCode (no local scope access)
