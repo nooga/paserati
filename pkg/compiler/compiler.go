@@ -504,6 +504,8 @@ type Compiler struct {
 	hasEvalInFieldInitializer bool                // True when direct eval was found in a class field initializer
 	allLocalNames             map[Register]string // Tracks all local variable allocations for ScopeDescriptor
 	lexicalScopes             [][]string          // let/const/class names of the enclosing scopes in this function, outermost first
+	evalEnvSyms               []string            // eval env bindings this level contributes, innermost first (compile_eval_env.go)
+	evalEnvBypass             parser.Node         // node compileViaEvalEnv is compiling statically (skip its env check)
 
 	// --- Parameter TDZ Tracking ---
 	currentDefaultParamIndex int      // Index of parameter whose default we're compiling (-1 if not in default scope)
@@ -1053,6 +1055,10 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 	c.regAlloc = NewRegisterAllocator()
 	c.currentSymbolTable = NewSymbolTable()
 	c.allLocalNames = make(map[Register]string) // Reset local name tracking
+	c.evalEnvSyms = nil
+	if c.callerScopeDesc != nil {
+		c.evalEnvSyms = c.callerScopeDesc.EvalEnvNames
+	}
 
 	// Re-populate symbol table with caller locals for direct eval
 	// This must be done after resetting the symbol table but before compilation
@@ -1060,6 +1066,7 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 	var callerLocalRegs []struct {
 		reg       Register
 		callerIdx int
+		isUpvalue bool
 	}
 	if c.callerScopeDesc != nil {
 		for i, name := range c.callerScopeDesc.LocalNames {
@@ -1070,13 +1077,36 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 				if sym, found := c.currentSymbolTable.store[name]; found {
 					sym.Register = reg
 					c.currentSymbolTable.store[name] = sym
+					c.allLocalNames[reg] = name
 					debugPrintf("// [Compile] Re-populated caller local '%s' at index %d with register R%d\n", name, i, reg)
 					callerLocalRegs = append(callerLocalRegs, struct {
 						reg       Register
 						callerIdx int
-					}{reg, i})
+						isUpvalue bool
+					}{reg, i, false})
 				}
 			}
+		}
+		// The caller's upvalues (outer-function bindings, see
+		// compile_eval_scope.go) the same way, unless a caller local of the
+		// same name shadows them. Past a register budget they are left to
+		// the unresolved-name path, which reaches them only from the eval's
+		// top level, not from closures it creates.
+		for i, name := range c.callerScopeDesc.UpvalueNames {
+			if name == "" || c.regAlloc.nextReg > 200 {
+				continue
+			}
+			if _, exists := c.currentSymbolTable.store[name]; exists {
+				continue
+			}
+			reg := c.regAlloc.Alloc()
+			c.currentSymbolTable.store[name] = Symbol{Name: name, IsCallerLocal: true, IsCallerUpvalue: true, CallerLocalIndex: i, Register: reg}
+			c.allLocalNames[reg] = name
+			callerLocalRegs = append(callerLocalRegs, struct {
+				reg       Register
+				callerIdx int
+				isUpvalue bool
+			}{reg, i, true})
 		}
 	}
 
@@ -1149,9 +1179,7 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 	// This must happen at the start of eval code execution so nested functions
 	// can capture the values as upvalues correctly
 	for _, callerLocal := range callerLocalRegs {
-		c.emitOpCode(vm.OpGetCallerLocal, 0)
-		c.emitByte(byte(callerLocal.reg))
-		c.emitByte(byte(callerLocal.callerIdx))
+		c.emitGetCallerBinding(callerLocal.reg, callerLocal.callerIdx, callerLocal.isUpvalue, 0)
 		debugPrintf("// [Compile] Emitted OpGetCallerLocal R%d from caller index %d\n", callerLocal.reg, callerLocal.callerIdx)
 	}
 
@@ -1316,6 +1344,10 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			}
 			sort.Strings(hoistedNames)
 			for _, name := range hoistedNames {
+				if c.evalHoistsToEnv() {
+					c.dropCallerUpvalueSymbol(name)
+					continue
+				}
 				if c.isStrictEvalCode() {
 					// Strict eval code has its own variable environment
 					// (ECMA-262 19.2.1.1 PerformEval step 17): its function
@@ -1348,6 +1380,10 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			if !ok {
 				// Should not happen if checker/parser worked correctly
 				debugPrintf("[Compile Hoisting] ERROR: Hoisted node for '%s' is not FunctionLiteral (%T)\n", name, hoistedNode)
+				continue
+			}
+			if c.evalHoistsToEnv() {
+				c.hoistEvalFunctionToEnv(name, funcLit)
 				continue
 			}
 
@@ -1408,6 +1444,10 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 		varNames := collectVarDeclarations(program.Statements)
 		debugPrintf("[Compile] Hoisting %d top-level var declarations\n", len(varNames))
 		for _, name := range varNames {
+			if c.evalHoistsToEnv() {
+				c.hoistEvalVarToEnv(name)
+				continue
+			}
 			// Skip if already defined (e.g., by a hoisted function with the same name)
 			if _, _, found := c.currentSymbolTable.Resolve(name); found {
 				debugPrintf("[Compile VarHoist] Skipping '%s' - already defined\n", name)
@@ -1632,6 +1672,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		c.line = tok.Line
 		c.markPosition(tok.Column)
 		debugPrintf("// DEBUG compiling line %d (%s)\n", c.line, c.compilingFuncName)
+	}
+
+	// References an eval-created binding may shadow (compile_eval_env.go).
+	if c.evalEnvBypass != nil || c.hasEvalEnvInScope() {
+		if res, handled, err := c.compileViaEvalEnv(node, hint); handled {
+			return res, err
+		}
 	}
 
 	// <<< ADDED: Enhanced node compilation logging >>>
@@ -2260,6 +2307,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		if funcLit, ok := node.Expression.(*parser.FunctionLiteral); ok && funcLit.Name != nil && !funcLit.Parenthesized {
 			debugPrintf("// DEBUG ExprStmt: Handling NAMED function declaration '%s' as statement.\n", funcLit.Name.Value)
 
+			// Eval code hoisted its top-level declarations into the caller's
+			// eval env (compile_eval_env.go), leaving no symbol behind.
+			if c.evalHoistsToEnv() && c.currentSymbolTable.Outer == nil {
+				return BadRegister, nil
+			}
+
 			// Check if this function was already processed during hoisting
 			// For global hoisted functions, IsGlobal is true (but Register may be nilRegister since it was freed)
 			// For local hoisted functions, Register != nilRegister
@@ -2725,9 +2778,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			if c.callerScopeDesc != nil {
 				if callerRegIdx := c.resolveCallerLocal(node.Value); callerRegIdx >= 0 {
 					debugPrintf("// DEBUG Identifier '%s': Found in caller scope at CallerR%d\n", node.Value, callerRegIdx)
-					c.emitOpCode(vm.OpGetCallerLocal, node.Token.Line)
-					c.emitByte(byte(hint))
-					c.emitByte(byte(callerRegIdx))
+					c.emitGetCallerBinding(hint, callerRegIdx, false, node.Token.Line)
+					return hint, nil
+				}
+				if upIdx := c.resolveCallerUpvalue(node.Value); upIdx >= 0 {
+					c.emitGetCallerBinding(hint, upIdx, true, node.Token.Line)
 					return hint, nil
 				}
 			}
@@ -2779,10 +2834,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			// If we're in the eval compiler (have callerScopeDesc), emit OpGetCallerLocal
 			// Load into the symbol's register so upvalue capture works correctly
 			if c.callerScopeDesc != nil {
-				// Emit OpGetCallerLocal to load value into the symbol's register
-				c.emitOpCode(vm.OpGetCallerLocal, node.Token.Line)
-				c.emitByte(byte(symbolRef.Register))
-				c.emitByte(byte(symbolRef.CallerLocalIndex))
+				// Load the caller's current value into the symbol's register
+				c.emitGetCallerBinding(symbolRef.Register, symbolRef.CallerLocalIndex, symbolRef.IsCallerUpvalue, node.Token.Line)
 				// Move to hint if different
 				if symbolRef.Register != hint {
 					c.emitMove(hint, symbolRef.Register, node.Token.Line)
@@ -3662,6 +3715,8 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 	if maxReg == 0 {
 		return &vm.ScopeDescriptor{
 			LocalNames:              []string{},
+			UpvalueNames:            c.upvalueNames(),
+			EvalEnvNames:            c.evalEnvNamesInScope(),
 			HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 			InDefaultParameterScope: c.hasEvalInDefaultParam,
 			ParamScopeHasArguments:  c.paramScopeHasArguments(),
@@ -3680,18 +3735,21 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 
 	// Use allLocalNames if available (tracks all variables including those from popped scopes)
 	// Otherwise fall back to walking the current symbol table
-	if len(c.allLocalNames) > 0 {
-		for reg, name := range c.allLocalNames {
-			if int(reg) < len(localNames) {
-				localNames[reg] = name
-			}
+	// allLocalNames also covers block scopes that have closed; the
+	// function's own scope then wins for the registers it holds (pinned for
+	// the whole call). Either alone can miss names: a function may track
+	// only its eval env (compile_eval_env.go) in allLocalNames.
+	for reg, name := range c.allLocalNames {
+		if int(reg) < len(localNames) {
+			localNames[reg] = name
 		}
-	} else {
-		c.collectLocalNames(c.currentSymbolTable, localNames)
 	}
+	c.collectLocalNames(c.currentSymbolTable, localNames)
 
 	return &vm.ScopeDescriptor{
 		LocalNames:              localNames,
+		UpvalueNames:            c.upvalueNames(),
+		EvalEnvNames:            c.evalEnvNamesInScope(),
 		HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 		InDefaultParameterScope: c.hasEvalInDefaultParam,
 		ParamScopeHasArguments:  c.paramScopeHasArguments(),
@@ -3959,7 +4017,12 @@ func (c *Compiler) storeToLvalue(lvalueKind int, identInfo, memberInfo, indexInf
 	switch lvalueKind {
 	case lvalueIdentifier:
 		info := identInfo.(updateIdentInfo)
-		if info.isGlobal {
+		if info.isCaller {
+			if info.targetReg != nilRegister && valueReg != info.targetReg {
+				c.emitMove(info.targetReg, valueReg, line)
+			}
+			c.emitSetCallerBinding(info.callerIndex, info.callerIsUpvalue, valueReg, line)
+		} else if info.isGlobal {
 			c.emitSetGlobal(info.globalIndex, valueReg, line)
 		} else if info.isUpvalue {
 			c.emitSetUpvalue(info.upvalueIndex, valueReg, line)

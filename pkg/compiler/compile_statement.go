@@ -646,6 +646,9 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				// Variable was pre-defined as spilled IN THE CURRENT FUNCTION, already initialized to undefined
 				// NOTE: Immutable bindings (NFE names) don't count - var shadows them with new binding
 				debugPrintf("// [VarStmt] '%s' was pre-defined as SPILLED (slot %d), skipping\n", node.Name.Value, sym.SpillIndex)
+			} else if c.isSloppyDirectEvalTopLevel() {
+				// Hoisting already instantiated the binding (in the caller,
+				// its eval env, or the global object); `var x;` stores nothing.
 			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsGlobal {
 				// ECMAScript: var re-declaration without initializer is a no-op if variable already exists
 				// Global variable already exists, skip undefined initialization
@@ -685,7 +688,14 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// should assign to obj.x if obj has property 'x'.
 			// NOTE: We use currentFuncWithDepth (not withBlockDepth) because nested functions
 			// have their own scope - their var declarations should NOT check an enclosing with-object.
-			if c.currentFuncWithDepth > 0 {
+			if c.isSloppyDirectEvalTopLevel() {
+				// Direct eval: the binding is the caller's own, one in its
+				// eval env, or a global; compileIdentifierAssignment finds it.
+				if err := c.compileIdentifierAssignment(node.Name, valueReg, node.Name.Token.Line); err != nil {
+					return BadRegister, err
+				}
+				c.regAlloc.Free(valueReg)
+			} else if c.currentFuncWithDepth > 0 {
 				varName := node.Name.Value
 				nameIdx := c.chunk.AddConstant(vm.NewString(varName))
 
@@ -737,6 +747,13 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 				// DON'T free valueReg - it's now the variable's permanent register
 				debugPrintf("// [VarStmt] Successfully defined '%s'\n", node.Name.Value)
+			}
+		} else if c.isSloppyDirectEvalTopLevel() && !handledInWithBlock {
+			// Direct eval: store the function where the binding lives.
+			if symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && symbolRef.Register != nilRegister && !symbolRef.IsGlobal && !symbolRef.IsCallerLocal {
+				if err := c.compileIdentifierAssignment(node.Name, symbolRef.Register, node.Name.Token.Line); err != nil {
+					return BadRegister, err
+				}
 			}
 		} else if c.enclosing == nil && !handledInWithBlock {
 			// Top-level function: also set as global
@@ -2471,7 +2488,13 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		case *parser.Identifier:
 			// Simple identifier: for (x in obj)
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(target.Value)
-			if !found {
+			_, _, isCaller := c.unresolvedCallerBinding(target.Value, found)
+			if isCaller || (found && symbolRef.IsCallerLocal && c.callerScopeDesc != nil) {
+				// Direct eval code assigning its caller's binding.
+				if err := c.compileIdentifierAssignment(target, currentKeyReg, node.Token.Line); err != nil {
+					return BadRegister, err
+				}
+			} else if !found {
 				// fmt.Printf("// [ForInAssign] unresolved %s, defining var in outermost scope\n", target.Value)
 				// Define a function/global-scoped binding (var semantics)
 				// - unless the name already has a global slot, including this module's

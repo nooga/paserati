@@ -29,6 +29,7 @@ type Symbol struct {
 	// Caller local support: for direct eval, symbols that reference caller's local variables
 	IsCallerLocal    bool // True if this is a reference to a caller's local variable
 	CallerLocalIndex int  // Index in caller's register file (only valid if IsCallerLocal is true)
+	IsCallerUpvalue  bool // With IsCallerLocal: CallerLocalIndex indexes the caller closure's upvalues instead
 	// Namespace property support: identifier reads/writes are emitted as
 	// OpGetProp/OpSetProp on the namespace object identified by NamespaceAccess.
 	// Used by `namespace X { export ... }`: exported names resolve to property

@@ -371,7 +371,13 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		switch target := exprStmt.Expression.(type) {
 		case *parser.Identifier:
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(target.Value)
-			if !found && c.isImportBinding(target.Value) {
+			_, _, isCaller := c.unresolvedCallerBinding(target.Value, found)
+			if isCaller || (found && symbolRef.IsCallerLocal && c.callerScopeDesc != nil) {
+				// Direct eval code assigning its caller's binding.
+				if err := c.compileIdentifierAssignment(target, valueReg, node.Token.Line); err != nil {
+					return BadRegister, err
+				}
+			} else if !found && c.isImportBinding(target.Value) {
 				// Import bindings are immutable.
 				c.emitConstAssignmentError(target.Value, node.Token.Line)
 			} else if !found {
