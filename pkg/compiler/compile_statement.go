@@ -1140,6 +1140,7 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 		CompletionReg:              hint, // For break/continue to update via UpdateEmpty
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
+	loopContext.WithDepth, loopContext.WithCount = c.currentFuncWithDepth, c.currentFuncWithCount
 
 	// --- Compile Condition ---
 	conditionReg := c.regAlloc.Alloc()
@@ -1186,6 +1187,7 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	for _, breakPlaceholderPos := range poppedContext.BreakPlaceholderPosList {
 		c.patchJump(breakPlaceholderPos) // Patch break jumps to loop end
 	}
+	c.emitWithTruncate(poppedContext.WithDepth, poppedContext.WithCount, node.Token.Line)
 
 	// --- NEW: Patch continue jumps ---
 	// Continue jumps to continueLandingPos (just before the per-iteration close
@@ -1436,6 +1438,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 		CompletionReg:              hint, // For break/continue to update via UpdateEmpty
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
+	loopContext.WithDepth, loopContext.WithCount = c.currentFuncWithDepth, c.currentFuncWithCount
 	// Scope for body/vars is handled by compileNode for the BlockStatement
 
 	// --- 2. Condition (Optional) ---
@@ -1521,6 +1524,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
 		c.patchJump(breakPos) // Patch to jump to current position
 	}
+	c.emitWithTruncate(poppedContext.WithDepth, poppedContext.WithCount, node.Token.Line)
 
 	// Return completion value
 	return hint, nil
@@ -1711,6 +1715,22 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 		}
 	}
 
+	// Leave the `with` bodies between here and the loop. Routed through a
+	// finally, keep those enclosing the try: the finally body still sees them.
+	// FIXME: those then stay pushed into the next iteration (until the loop
+	// exits), since a continue completion resumed after finally can't drop
+	// them.
+	if keep := targetContext.WithDepth; c.currentFuncWithDepth > keep {
+		if len(c.finallyContextStack) > 0 && !c.inFinallyBlock {
+			if fd := c.finallyContextStack[len(c.finallyContextStack)-1].WithDepth; fd > keep {
+				keep = fd
+			}
+		}
+		if c.currentFuncWithDepth > keep {
+			c.emitTruncateWith(keep, node.Token.Line)
+		}
+	}
+
 	// Check if we're inside a try-finally block
 	// BUT NOT if we're already inside the finally block itself - in that case, just emit direct jump
 	if len(c.finallyContextStack) > 0 && !c.inFinallyBlock {
@@ -1786,6 +1806,7 @@ func (c *Compiler) compileLabeledStatement(node *parser.LabeledStatement, hint R
 			CompletionReg:              BadRegister, // Non-loops don't track completion values
 		}
 		c.loopContextStack = append(c.loopContextStack, labelContext)
+		labelContext.WithDepth, labelContext.WithCount = c.currentFuncWithDepth, c.currentFuncWithCount
 
 		// Compile the statement
 		result, err := c.compileNode(node.Statement, hint)
@@ -1795,6 +1816,7 @@ func (c *Compiler) compileLabeledStatement(node *parser.LabeledStatement, hint R
 		for _, placeholderPos := range labelContext.BreakPlaceholderPosList {
 			c.patchJump(placeholderPos)
 		}
+		c.emitWithTruncate(labelContext.WithDepth, labelContext.WithCount, node.Token.Line)
 
 		return result, err
 	}
@@ -1830,6 +1852,7 @@ func (c *Compiler) compileDoWhileStatementLabeled(node *parser.DoWhileStatement,
 		CompletionReg:              hint, // For break/continue to update via UpdateEmpty
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
+	loopContext.WithDepth, loopContext.WithCount = c.currentFuncWithDepth, c.currentFuncWithCount
 
 	// 3. Compile Body (executes at least once)
 	// Per ECMAScript spec, if body produces a value, update V (the completion value in hint)
@@ -1886,6 +1909,7 @@ func (c *Compiler) compileDoWhileStatementLabeled(node *parser.DoWhileStatement,
 	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
 		c.patchJump(breakPos) // Patch break jumps to loop end
 	}
+	c.emitWithTruncate(poppedContext.WithDepth, poppedContext.WithCount, node.Token.Line)
 
 	// 10. Continue jumps already patched (after body, before condition) in step 3.5
 
@@ -2124,6 +2148,7 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 		for _, breakJumpPos := range loopCtx.BreakPlaceholderPosList {
 			c.patchJump(breakJumpPos)
 		}
+		c.emitWithTruncate(loopCtx.WithDepth, loopCtx.WithCount, node.Token.Line)
 	}
 
 	// Restore the previous scope
@@ -2292,6 +2317,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		CompletionReg:              hint, // For break/continue to update via UpdateEmpty
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
+	loopContext.WithDepth, loopContext.WithCount = c.currentFuncWithDepth, c.currentFuncWithCount
 
 	// 4. Check if keyIndex < length (loop condition)
 	conditionReg := c.regAlloc.Alloc()
@@ -2604,6 +2630,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
 		c.patchJump(breakPos)
 	}
+	c.emitWithTruncate(poppedContext.WithDepth, poppedContext.WithCount, node.Token.Line)
 
 	// Return completion value
 	return hint, nil

@@ -497,6 +497,9 @@ type SuspendedFrame struct {
 	// flagged this exact gap as pre-existing and out of scope there. nil when
 	// the function never spills, which is the common case.
 	spillSlots []Value
+	// withObjects are the frame's own with-statement objects at the suspend
+	// point, re-pushed on resume (see with_stack.go).
+	withObjects []Value
 }
 
 // GeneratorFrame is an alias for backwards compatibility

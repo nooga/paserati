@@ -178,6 +178,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		CompletionReg: hint, // For break/continue to update via UpdateEmpty
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
+	loopContext.WithDepth, loopContext.WithCount = c.currentFuncWithDepth, c.currentFuncWithCount
 
 	// 8. Produce {value, done} for this iteration. The fast path steps the
 	// array iterator in place (no call, no result object); the generic path
@@ -521,6 +522,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
 		c.patchJump(breakPos)
 	}
+	c.emitWithTruncate(poppedContext.WithDepth, poppedContext.WithCount, node.Token.Line)
 
 	// Return completion value
 	return hint, nil

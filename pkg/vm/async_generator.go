@@ -148,6 +148,7 @@ func (vm *VM) saveGeneratorFrame(genObj *GeneratorObject, frame *CallFrame, regi
 	f.openUpvalues = frame.openUpvalues
 	relocateOpenUpvalues(f.openUpvalues, registers, f.registers)
 	f.spillSlots = frame.spillSlots
+	f.withObjects = vm.saveFrameWithObjects()
 }
 
 func (vm *VM) asAsyncGen(this Value) (*GeneratorObject, bool) {

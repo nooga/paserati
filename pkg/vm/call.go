@@ -576,6 +576,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		}
 
 		// Frame is ready, tell interpreter to switch to it
+		vm.trimWithStack()
 		vm.frameCount++
 		return true, nil
 

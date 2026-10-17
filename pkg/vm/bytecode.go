@@ -332,6 +332,9 @@ const (
 	// a throw/return completion, storing a normal result in OutputReg.
 	OpAsyncYieldStar OpCode = 181 // OutputReg IterReg NextReg
 	OpCreateDeferredNamespace OpCode = 182 // Rx ModulePathIdx: the module's deferred (import defer) namespace, store in Rx
+	// OpTruncateWith drops the current frame's with objects beyond the first
+	// N, for control leaving `with` bodies by break/continue or exception.
+	OpTruncateWith OpCode = 185 // N
 
 	// --- Accessor Property Support ---
 	OpDefineAccessor        OpCode = 80 // ObjReg GetterReg SetterReg NameIdx(16bit): Define accessor property on object
@@ -671,6 +674,8 @@ func (op OpCode) String() string {
 		return "OpCreateNamespace"
 	case OpCreateDeferredNamespace:
 		return "OpCreateDeferredNamespace"
+	case OpTruncateWith:
+		return "OpTruncateWith"
 
 	// --- Arguments Object ---
 	case OpGetArguments:
@@ -1464,6 +1469,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerInstruction(builder, instruction.String(), offset) // ObjReg
 	case OpPopWithObject:
 		return c.simpleInstruction(builder, instruction.String(), offset) // No operands
+	case OpTruncateWith:
+		return c.byteOperandInstruction(builder, instruction.String(), offset) // N
 	case OpGetWithProperty:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx NameIdx(16bit)
 	case OpSetWithProperty:
@@ -1771,6 +1778,16 @@ func (c *Chunk) registerInstruction(builder *strings.Builder, name string, offse
 	}
 	reg := c.Code[offset+1]
 	builder.WriteString(fmt.Sprintf("%-16s R%d\n", name, reg))
+	return offset + 2
+}
+
+// byteOperandInstruction handles disassembly of instructions like OpCode N
+func (c *Chunk) byteOperandInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+1 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operand)\n", name))
+		return offset + 1
+	}
+	builder.WriteString(fmt.Sprintf("%-16s %d\n", name, c.Code[offset+1]))
 	return offset + 2
 }
 

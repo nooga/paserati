@@ -840,6 +840,24 @@ func (c *Compiler) emitPopWithObject(line int) {
 	c.emitOpCode(vm.OpPopWithObject, line)
 }
 
+// emitTruncateWith emits OpTruncateWith, keeping the current frame's first
+// depth with objects.
+func (c *Compiler) emitTruncateWith(depth int, line int) {
+	c.emitOpCode(vm.OpTruncateWith, line)
+	c.emitByte(byte(depth))
+}
+
+// emitWithTruncate drops the with objects of `with` statements entered since
+// a construct with the given currentFuncWithDepth/currentFuncWithCount
+// snapshot started, at a point control can reach by leaving them abruptly
+// (a loop's break landing, a catch or finally entry). Emits nothing unless a
+// `with` was compiled since the snapshot.
+func (c *Compiler) emitWithTruncate(depth, count int, line int) {
+	if c.currentFuncWithCount > count {
+		c.emitTruncateWith(depth, line)
+	}
+}
+
 // emitGetWithProperty emits OpGetWithProperty instruction
 func (c *Compiler) emitGetWithProperty(destReg Register, nameIdx int, line int) {
 	c.emitOpCode(vm.OpGetWithProperty, line)
