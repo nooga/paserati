@@ -1171,6 +1171,7 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	// (There's no header binding to close for `while` - only for/for-in/for-of
 	// have one - so unlike those loops this is the only closing done here.)
 	continueLandingPos := len(c.chunk.Code)
+	c.emitWithTruncate(loopContext.WithDepth, loopContext.WithCount, line)
 	c.closeLoopBodyPerIterationBindings(loopContext, line)
 
 	// --- Jump Back To Start ---
@@ -1473,6 +1474,8 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList { // Use context on stack
 		c.patchJump(continuePos) // Patch placeholder to jump to current position
 	}
+	// A continue routed through finally can still have with objects pushed.
+	c.emitWithTruncate(loopContext.WithDepth, loopContext.WithCount, node.Token.Line)
 
 	// *** Per-iteration bindings: close upvalues for let/const loop variables ***
 	// ECMAScript spec: each iteration gets fresh bindings. This is achieved by
@@ -1716,10 +1719,8 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 	}
 
 	// Leave the `with` bodies between here and the loop. Routed through a
-	// finally, keep those enclosing the try: the finally body still sees them.
-	// FIXME: those then stay pushed into the next iteration (until the loop
-	// exits), since a continue completion resumed after finally can't drop
-	// them.
+	// finally, keep those enclosing the try: the finally body still sees them,
+	// and the loop's continue landing drops them afterwards.
 	if keep := targetContext.WithDepth; c.currentFuncWithDepth > keep {
 		if len(c.finallyContextStack) > 0 && !c.inFinallyBlock {
 			if fd := c.finallyContextStack[len(c.finallyContextStack)-1].WithDepth; fd > keep {
@@ -1870,6 +1871,7 @@ func (c *Compiler) compileDoWhileStatementLabeled(node *parser.DoWhileStatement,
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
 		c.patchJump(continuePos)
 	}
+	c.emitWithTruncate(loopContext.WithDepth, loopContext.WithCount, node.Token.Line)
 
 	// #132: close per-iteration bindings for let/const/class declared directly
 	// in the loop body, same as for/for-in/for-of/while.
@@ -2595,6 +2597,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
 		c.patchJump(continuePos)
 	}
+	c.emitWithTruncate(loopContext.WithDepth, loopContext.WithCount, node.Token.Line)
 
 	// 8a. Per-iteration bindings: close upvalues for let/const loop variables
 	// ECMAScript spec: each iteration gets fresh bindings. This ensures closures

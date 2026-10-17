@@ -463,6 +463,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
 		c.patchJump(continuePos)
 	}
+	c.emitWithTruncate(loopContext.WithDepth, loopContext.WithCount, node.Token.Line)
 
 	// 15a. Per-iteration bindings: close upvalues for let/const loop variables
 	// ECMAScript spec: each iteration gets fresh bindings. This ensures closures
