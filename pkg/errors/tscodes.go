@@ -58,6 +58,7 @@ const (
 	TS2872  = "TS2872"  // This kind of expression is always truthy
 	TS2873  = "TS2873"  // This kind of expression is always falsy
 	TS2725  = "TS2725"  // Class name cannot be 'Object' when targeting ES5 and above with module X
+	TS2465  = "TS2465"  // 'this' cannot be referenced in a computed property name
 	TS2610  = "TS2610"  // 'X' is defined as an accessor in class 'Y', but is overridden here in 'Z' as an instance property
 	TS2611  = "TS2611"  // 'X' is defined as a property in class 'Y', but is overridden here in 'Z' as an accessor
 	TS2678  = "TS2678"  // Type 'X' is not comparable to type 'Y'

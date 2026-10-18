@@ -2062,6 +2062,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.env = check.env
 			c.visit(check.expr)
 			c.validateComputedPropertyNameType(check.expr, check.expr)
+			c.reportThisInComputedName(check.expr)
 		}
 		c.env = savedEnv
 		c.deferredComputedKeyChecks = nil
@@ -2188,6 +2189,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.reportImplicitAnyParameters()
 
 	c.applyModuleAugmentations()
+	c.applyCommentDirectives()
 	return c.errors
 }
 

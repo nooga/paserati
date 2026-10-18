@@ -857,6 +857,10 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	for _, method := range body.Methods {
 		if method.IsStatic {
 			deferStaticKey(method.Key)
+			// TS2378, as for instance getters below.
+			if method.Kind == "getter" && method.Value != nil && method.Value.Body != nil && !bodyContainsReturn(method.Value.Body) {
+				c.addErrorWithCode(method.Key, errors.TS2378, "A 'get' accessor must return a value.")
+			}
 		}
 	}
 	for _, sig := range body.MethodSigs {

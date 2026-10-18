@@ -20,6 +20,24 @@ func (c *Checker) validateComputedPropertyNameType(expr parser.Expression, error
 	}
 }
 
+// reportThisInComputedName reports `this` in a class member's computed name
+// (TS2465): it is evaluated outside any instance. Arrow functions do not bind
+// their own `this`, so they are searched too.
+func (c *Checker) reportThisInComputedName(expr parser.Expression) {
+	var walk func(n parser.Node)
+	walk = func(n parser.Node) {
+		switch x := n.(type) {
+		case *parser.ThisExpression:
+			c.addErrorWithCode(x, errors.TS2465, "'this' cannot be referenced in a computed property name.")
+			return
+		case *parser.FunctionLiteral, *parser.ShorthandMethod, *parser.ClassExpression:
+			return
+		}
+		forEachChildInScope(n, walk)
+	}
+	walk(expr)
+}
+
 // isValidComputedPropertyNameType is tsc's checkComputedPropertyName rule:
 // the key's type must be assignable to string | number | symbol.
 func (c *Checker) isValidComputedPropertyNameType(t types.Type) bool {
