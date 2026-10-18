@@ -428,6 +428,26 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 		if valueType == nil {
 			valueType = types.Any
 		}
+		// An accessor's property has the getter's return type, or else the
+		// setter's parameter type.
+		if isAccessor {
+			md := prop.Value.(*parser.MethodDefinition)
+			fn, _ := valueType.(*types.ObjectType)
+			if fn == nil || len(fn.CallSigs()) == 0 {
+				valueType = types.Any
+			} else if sig := fn.CallSigs()[0]; md.Kind == "getter" {
+				valueType = sig.ReturnType
+			} else if _, hasGetter := fields[keyName]; hasGetter {
+				continue
+			} else if len(sig.ParameterTypes) > 0 {
+				valueType = sig.ParameterTypes[0]
+			} else {
+				valueType = types.Any
+			}
+			if valueType == nil {
+				valueType = types.Any
+			}
+		}
 
 		// Handle __proto__: value specially
 		if keyName == "__proto__" && !isShorthand {

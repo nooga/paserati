@@ -1123,8 +1123,23 @@ func (r *Relation) indexSignaturesRelated(sourceObj, targetObj *ObjectType, sour
 			if tIdx.KeyType == Number && !isNumericName(name) {
 				continue
 			}
+			// An optional property's missing value does not count against a
+			// string index signature (membersRelatedToIndexer), unless its
+			// type is undefined itself.
 			if r.StrictNullChecks && sourceObj.IsPropertyOptional(name) {
-				pt = NewUnionType(pt, Undefined)
+				if tIdx.KeyType == Number || pt == Undefined {
+					pt = NewUnionType(pt, Undefined)
+				} else if u, ok := pt.(*UnionType); ok {
+					kept := make([]Type, 0, len(u.Types))
+					for _, m := range u.Types {
+						if m != Undefined {
+							kept = append(kept, m)
+						}
+					}
+					if len(kept) > 0 && len(kept) < len(u.Types) {
+						pt = NewUnionType(kept...)
+					}
+				}
 			}
 			if !r.isAssignable(pt, tIdx.ValueType) {
 				return false

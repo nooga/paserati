@@ -521,6 +521,15 @@ func (c *Checker) elaborate(expr parser.Expression, source, target types.Type, h
 				continue
 			}
 			sp := p.Value.GetComputedType()
+			// An accessor contributes the property's type, not a function.
+			md, accessor := p.Value.(*parser.MethodDefinition)
+			accessor = accessor && (md.Kind == "getter" || md.Kind == "setter")
+			if accessor {
+				sp = nil
+				if so, ok := source.(*types.ObjectType); ok {
+					sp = so.Props()[name]
+				}
+			}
 			if sp == nil || tp == nil {
 				continue
 			}
@@ -528,6 +537,10 @@ func (c *Checker) elaborate(expr parser.Expression, source, target types.Type, h
 				continue
 			}
 			reported = true
+			if accessor {
+				c.reportLeaf(p.Key, p.Key, sp, tp, headAssign)
+				continue
+			}
 			if !c.elaborate(p.Value, sp, tp, headAssign) {
 				c.reportLeaf(p.Key, p.Value, sp, tp, headAssign)
 			}
