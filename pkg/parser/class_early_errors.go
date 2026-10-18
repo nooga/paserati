@@ -121,10 +121,14 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 		kind     string // "field", "method", "getter", "setter"
 		isStatic bool
 	}
+	className := p.classBodyName
+	staticPrototype := func(tok *lexer.Token) {
+		p.addSemanticErrorWithCode(tok, "TS2699", "Static property 'prototype' conflicts with built-in property 'Function.prototype' of constructor function '"+className+"'.")
+	}
 	declared := map[string][]privateDecl{}
 	declare := func(tok *lexer.Token, name, kind string, isStatic bool) {
 		if name == "#constructor" {
-			p.addError(tok, "Classes may not have a private field named '#constructor'")
+			p.addSemanticErrorWithCode(tok, "TS18012", "'#constructor' is a reserved word.")
 			return
 		}
 		prev := declared[name]
@@ -181,7 +185,7 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 				}
 			}
 		case m.IsStatic && name == "prototype":
-			p.addError(m.Token, "Classes may not have a static property named 'prototype'")
+			staticPrototype(m.Token)
 		}
 	}
 
@@ -199,9 +203,9 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 		}
 		if name, ok := staticKeyName(prop.Key); ok {
 			if name == "constructor" {
-				p.addError(prop.Token, "Classes may not have a field named 'constructor'")
+				p.addGrammarErrorWithCode(prop.Token, "TS18006", "Classes may not have a field named 'constructor'.")
 			} else if prop.IsStatic && name == "prototype" {
-				p.addError(prop.Token, "Classes may not have a static property named 'prototype'")
+				staticPrototype(prop.Token)
 			}
 		}
 	}

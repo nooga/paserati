@@ -69,6 +69,9 @@ type Parser struct {
 
 	// JS redeclaration early errors, re-labelled by finishBinding.
 	redeclarationErrors []*errors.SyntaxError
+	// classBodyName names the class whose body is about to be parsed, for
+	// diagnostics that quote it.
+	classBodyName string
 
 	curToken  *lexer.Token
 	peekToken *lexer.Token
@@ -1127,6 +1130,19 @@ func (p *Parser) parseStatementNoDoc() Statement {
 	case lexer.ABSTRACT:
 		stmt := p.parseAbstractClassDeclarationStatement()
 		// After abstract class declaration ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
+	case lexer.CATCH, lexer.FINALLY:
+		if !p.canRecover() || !p.stepBackForMissing() {
+			p.reportStatementStart()
+			return nil
+		}
+		// tsc parses a try statement whose 'try' and block are missing.
+		p.addErrorWithCode(p.peekToken, errors.TS1005, "'try' expected.")
+		stmt := &TryStatement{Token: p.peekToken, Body: &BlockStatement{Token: p.peekToken, HoistedDeclarations: map[string]Expression{}}}
+		if !p.parseTryClauses(stmt) {
+			return nil
+		}
 		p.rescanPeekAsRegex()
 		return stmt
 	case lexer.TRY:
@@ -4597,6 +4613,11 @@ const (
 // never allows super properties. Strict mode set by the body's directive
 // prologue ends with the body.
 func (p *Parser) parseFunctionBody(params []*Parameter, rest *RestParameter, kind functionBodyKind) *BlockStatement {
+	if !p.curTokenIs(lexer.LBRACE) && p.canRecover() {
+		// expectPeekBraceRecover found no '{': the body is missing (tsc's
+		// parseBlock with a missing list); nothing is consumed.
+		return &BlockStatement{Token: p.peekToken, Statements: []Statement{}, HoistedDeclarations: map[string]Expression{}}
+	}
 	savedStrict := p.strictMode
 	savedLabels := p.labels
 	savedFunctionDepth := p.functionDepth
@@ -4642,6 +4663,10 @@ func (p *Parser) parseFunctionBody(params []*Parameter, rest *RestParameter, kin
 // parseMethodParameters parses an object-literal method's parameter list,
 // where (as in its body) super properties are legal.
 func (p *Parser) parseMethodParameters() ([]*Parameter, *RestParameter, error) {
+	if !p.curTokenIs(lexer.LPAREN) {
+		// expectPeekParenRecover found no '(': the list is missing.
+		return []*Parameter{}, nil, nil
+	}
 	p.superPropertyDepth++
 	defer func() { p.superPropertyDepth-- }()
 	return p.parseFunctionParameters(false)
@@ -5027,7 +5052,7 @@ func (p *Parser) parsePrefixExpression() Expression {
 
 	// ECMA-262 13.5.1.1: delete of a private reference is an early error.
 	if expression.Operator == "delete" && isPrivateReference(expression.Right) {
-		p.addError(expression.Token, "Private fields can not be deleted")
+		p.addSemanticErrorWithCode(expression.Token, "TS18011", "The operand of a 'delete' operator cannot be a private identifier.")
 	}
 
 	return expression
@@ -6940,6 +6965,13 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 
 			if p.curTokenIs(lexer.IDENT) {
 				property.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.canRecover() && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !p.curTokenIsIdentLike() {
+				// tsc's parseBindingIdentifier: a missing name; the token is
+				// left for the element list.
+				if !p.reportMissingBindingIdentifier() {
+					return nil, nil
+				}
+				property.Target = p.missingExpression()
 			} else if p.curTokenIs(lexer.LBRACKET) {
 				// Nested array destructuring: {prop: [a, b]}
 				property.Target = p.parseArrayLiteral()
@@ -6970,6 +7002,19 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 			// Computed properties MUST have an explicit target with ':'
 			p.addError(p.peekToken, "computed property names in destructuring require an explicit target (e.g., {[expr]: target})")
 			return nil, nil
+		} else if ident, ok := propertyKey.(*Identifier); ok && p.canRecover() && ident.Token.Type != lexer.IDENT && tscReservedWords[ident.Value] {
+			// tsc: a reserved word is no binding name, so the property needs
+			// ':' and a target, which are missing.
+			p.addErrorWithCode(p.peekToken, errors.TS1005, "':' expected.")
+			property.Target = p.missingExpression()
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // Consume '='
+				p.nextToken() // Move to default expression
+				property.Default = p.parseExpression(COMMA)
+				if property.Default == nil {
+					return nil, nil
+				}
+			}
 		} else if p.peekTokenIs(lexer.ASSIGN) {
 			// Shorthand with default: { prop = default }
 			// Only valid for identifier keys
@@ -7002,6 +7047,12 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 		if p.peekTokenIs(lexer.COMMA) {
 			p.nextToken() // Consume comma
 		} else if !p.peekTokenIs(lexer.RBRACE) {
+			if p.canRecover() && (p.isKeywordThatCanBeIdentifier(p.peekToken.Type) || p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) || p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.SPREAD)) {
+				// tsc's parseDelimitedList: the comma is missing but the next
+				// element starts here.
+				p.addErrorWithCode(p.peekToken, errors.TS1005, "',' expected.")
+				continue
+			}
 			p.addError(p.peekToken, fmt.Sprintf("expected ',' or '}' after property in destructuring pattern, got %s", p.peekToken.Type))
 			return nil, nil
 		}
@@ -8173,7 +8224,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 
 			// Expect '(' for getter function
-			if !p.expectPeek(lexer.LPAREN) {
+			if !p.expectPeekParenRecover() {
 				return nil
 			}
 
@@ -8205,7 +8256,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 
 			// Expect '{' for body
-			if !p.expectPeek(lexer.LBRACE) {
+			if !p.expectPeekBraceRecover() {
 				return nil
 			}
 
@@ -8274,7 +8325,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 
 			// Expect '(' for setter function
-			if !p.expectPeek(lexer.LPAREN) {
+			if !p.expectPeekParenRecover() {
 				return nil
 			}
 
@@ -8306,7 +8357,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 
 			// Expect '{' for body
-			if !p.expectPeek(lexer.LBRACE) {
+			if !p.expectPeekBraceRecover() {
 				return nil
 			}
 
@@ -8364,7 +8415,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '(' for parameters
-				if !p.expectPeek(lexer.LPAREN) {
+				if !p.expectPeekParenRecover() {
 					return nil
 				}
 
@@ -8385,7 +8436,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '{' for body
-				if !p.expectPeek(lexer.LBRACE) {
+				if !p.expectPeekBraceRecover() {
 					return nil
 				}
 
@@ -8486,7 +8537,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '(' for parameters
-				if !p.expectPeek(lexer.LPAREN) {
+				if !p.expectPeekParenRecover() {
 					return nil
 				}
 
@@ -8507,7 +8558,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '{' for method body
-				if !p.expectPeek(lexer.LBRACE) {
+				if !p.expectPeekBraceRecover() {
 					return nil
 				}
 
@@ -8618,13 +8669,24 @@ func (p *Parser) parseObjectLiteral() Expression {
 						Token:       asteriskToken,
 						IsGenerator: true,
 					}
+				} else if p.canRecover() {
+					// tsc's parsePropertyName: a missing identifier name.
+					p.addErrorWithCode(p.curToken, errors.TS1003, "Identifier expected.")
+					if !p.stepBackForMissing() {
+						return nil
+					}
+					key = p.missingExpression()
+					funcLit = &FunctionLiteral{
+						Token:       asteriskToken,
+						IsGenerator: true,
+					}
 				} else {
 					p.addError(p.curToken, "expected identifier, string literal, or computed property name after '*' in generator method")
 					return nil
 				}
 
 				// Expect '(' for parameters
-				if !p.expectPeek(lexer.LPAREN) {
+				if !p.expectPeekParenRecover() {
 					return nil
 				}
 
@@ -8645,7 +8707,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '{' for method body
-				if !p.expectPeek(lexer.LBRACE) {
+				if !p.expectPeekBraceRecover() {
 					return nil
 				}
 
@@ -8708,7 +8770,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '(' for parameters
-				if !p.expectPeek(lexer.LPAREN) {
+				if !p.expectPeekParenRecover() {
 					return nil
 				}
 
@@ -8729,7 +8791,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '{' for method body
-				if !p.expectPeek(lexer.LBRACE) {
+				if !p.expectPeekBraceRecover() {
 					return nil
 				}
 
@@ -8759,7 +8821,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '(' for parameters
-				if !p.expectPeek(lexer.LPAREN) {
+				if !p.expectPeekParenRecover() {
 					return nil
 				}
 
@@ -8780,7 +8842,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '{' for method body
-				if !p.expectPeek(lexer.LBRACE) {
+				if !p.expectPeekBraceRecover() {
 					return nil
 				}
 
@@ -8805,7 +8867,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '(' for parameters
-				if !p.expectPeek(lexer.LPAREN) {
+				if !p.expectPeekParenRecover() {
 					return nil
 				}
 
@@ -8826,7 +8888,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Expect '{' for method body
-				if !p.expectPeek(lexer.LBRACE) {
+				if !p.expectPeekBraceRecover() {
 					return nil
 				}
 
@@ -8993,7 +9055,7 @@ func (p *Parser) parseShorthandMethod() *MethodDefinition {
 	}
 
 	// Expect '(' for parameters
-	if !p.expectPeek(lexer.LPAREN) {
+	if !p.expectPeekParenRecover() {
 		return nil
 	}
 
@@ -9014,7 +9076,7 @@ func (p *Parser) parseShorthandMethod() *MethodDefinition {
 	}
 
 	// Expect '{' for method body
-	if !p.expectPeek(lexer.LBRACE) {
+	if !p.expectPeekBraceRecover() {
 		return nil
 	}
 
@@ -11520,13 +11582,21 @@ func (p *Parser) parseTryStatement() *TryStatement {
 	if stmt.Body == nil {
 		return nil
 	}
+	if !p.parseTryClauses(stmt) {
+		return nil
+	}
+	return stmt
+}
 
+// parseTryClauses parses the catch and finally clauses of a try statement whose
+// block ends at the current token.
+func (p *Parser) parseTryClauses(stmt *TryStatement) bool {
 	// Optional catch clause
 	if p.peekTokenIs(lexer.CATCH) {
 		p.nextToken() // consume 'catch'
 		stmt.CatchClause = p.parseCatchClause()
 		if stmt.CatchClause == nil {
-			return nil
+			return false
 		}
 	}
 
@@ -11536,22 +11606,29 @@ func (p *Parser) parseTryStatement() *TryStatement {
 
 		if !p.expectPeek(lexer.LBRACE) {
 			p.addError(p.curToken, "expected '{' after 'finally'")
-			return nil
+			return false
 		}
 
 		stmt.FinallyBlock = p.parseBlockStatement()
 		if stmt.FinallyBlock == nil {
-			return nil
+			return false
 		}
 	}
 
 	// Must have either catch or finally
 	if stmt.CatchClause == nil && stmt.FinallyBlock == nil {
+		if p.canRecover() {
+			// tsc: parseExpected(finally) with its own message; the finally
+			// block is then missing.
+			p.addErrorWithCode(p.peekToken, "TS1472", "'catch' or 'finally' expected.")
+			stmt.FinallyBlock = &BlockStatement{Token: p.peekToken, HoistedDeclarations: map[string]Expression{}}
+			return true
+		}
 		p.addError(stmt.Token, "try statement must have a catch clause, finally clause, or both")
-		return nil
+		return false
 	}
 
-	return stmt
+	return true
 }
 
 // parseCatchClause parses a catch clause
@@ -11600,6 +11677,10 @@ func (p *Parser) parseCatchClause() *CatchClause {
 			// Object destructuring: catch ({message, code})
 			clause.Parameter = p.parseObjectParameterPattern()
 		default:
+			if p.canRecover() && p.reportMissingBindingIdentifier() {
+				clause.Parameter = p.missingExpression()
+				break
+			}
 			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern for catch parameter, got %s", p.curToken.Type))
 			return nil
 		}
@@ -11638,8 +11719,16 @@ func (p *Parser) parseThrowStatement() *ThrowStatement {
 	stmt := &ThrowStatement{Token: p.curToken} // 'throw' token
 	throwLine := p.curToken.Line
 
+	if p.canRecover() && p.peekToken.Line != throwLine {
+		// tsc: the expression is missing (an empty identifier) and the
+		// checker reports the line break.
+		p.addGrammarErrorWithCode(&lexer.Token{Line: throwLine, Column: stmt.Token.Column + 5, StartPos: stmt.Token.EndPos, EndPos: stmt.Token.EndPos}, "TS1142", "Line break not permitted here.")
+		stmt.Value = p.missingExpression()
+		return stmt
+	}
+
 	// In JavaScript, throw requires an expression on the same line
-	if p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) {
+	if (p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF)) && !p.canRecover() {
 		p.addError(p.curToken, "throw statement requires an expression")
 		return nil
 	}
@@ -12885,15 +12974,29 @@ func (p *Parser) parseExportDeclaration() Statement {
 		if p.curToken.HasEscape {
 			// e.g. `export d\u0065fault 0`: an escaped keyword is just an identifier.
 			p.addError(p.curToken, "Keyword must not contain escaped characters")
-		} else {
+		} else if !p.exportStartsNothing(exportToken) {
 			p.addError(p.curToken, "SyntaxError: Unexpected token '"+p.curToken.Literal+"' after export")
 		}
 		return nil
 
 	default:
-		p.addError(p.curToken, "SyntaxError: Unexpected token '"+p.curToken.Literal+"' after export")
+		if !p.exportStartsNothing(exportToken) {
+			p.addError(p.curToken, "SyntaxError: Unexpected token '"+p.curToken.Literal+"' after export")
+		}
 		return nil
 	}
+}
+
+// exportStartsNothing handles an `export` that does not begin a declaration
+// (cur is the token after it): like tsc's statement list, report TS1128 at
+// the 'export' and skip just that token. It reports false when recovery is
+// not possible.
+func (p *Parser) exportStartsNothing(exportToken *lexer.Token) bool {
+	if !p.canRecover() || p.prevToken != exportToken {
+		return false
+	}
+	p.addErrorWithCode(exportToken, errors.TS1128, "Declaration or statement expected.")
+	return p.stepBackForMissing()
 }
 
 // parseExportDefaultDeclaration parses: export default expression;

@@ -110,14 +110,16 @@ func (w *eeWalker) ident(id *Identifier, c eeCtx) {
 	case reservedWords[name]:
 		w.errorf(id.Token, "Unexpected reserved word '%s'", name)
 	case name == "yield" && (c.yield || c.strict):
-		if c.strict && !c.yield {
+		if c.strict {
 			w.strictReserved(id, c)
 		} else {
 			w.errorf(id.Token, "'yield' is not a valid identifier in a generator")
 		}
 	case c.strict && strictReservedWords[name]:
 		w.strictReserved(id, c)
-	case name == "await" && (c.await || c.staticBlock):
+	case name == "await" && c.staticBlock:
+		w.p.addErrorWithCode(id.Token, "TS1359", "Identifier expected. 'await' is a reserved word that cannot be used here.")
+	case name == "await" && c.await:
 		w.errorf(id.Token, "'await' is not a valid identifier here")
 	}
 }
@@ -675,7 +677,9 @@ func (w *eeWalker) function(fn *FunctionLiteral, outer eeCtx, isDecl, isMethod b
 		nc := outer
 		if !isDecl {
 			nc.yield, nc.await = inner.yield, inner.await
-			nc.staticBlock = false
+			// tsc still rejects `await` naming a function expression in a
+			// static block (TS1359), though ECMAScript allows it.
+			nc.staticBlock = nc.staticBlock && w.p.tscDiagnostics
 		}
 		nc.strict = inner.strict
 		w.binding(fn.Name, nc)

@@ -6,4 +6,4 @@ class C {
   }
 }
 
-// expect_compile_error: Private fields can not be deleted
+// expect_compile_error: The operand of a 'delete' operator cannot be a private identifier

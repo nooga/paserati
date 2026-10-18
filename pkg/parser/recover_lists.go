@@ -200,3 +200,48 @@ func (p *Parser) recoverMissingComma(close lexer.TokenType) listStep {
 		p.nextToken()
 	}
 }
+
+// tscReservedWords are tsc's FirstReservedWord..LastReservedWord.
+var tscReservedWords = map[string]bool{
+	"break": true, "case": true, "catch": true, "class": true, "const": true, "continue": true, "debugger": true,
+	"default": true, "delete": true, "do": true, "else": true, "enum": true, "export": true, "extends": true,
+	"false": true, "finally": true, "for": true, "function": true, "if": true, "import": true, "in": true,
+	"instanceof": true, "new": true, "null": true, "return": true, "super": true, "switch": true, "this": true,
+	"throw": true, "true": true, "try": true, "typeof": true, "var": true, "void": true, "while": true, "with": true,
+}
+
+// reportMissingBindingIdentifier is tsc's createIdentifier for a token that is
+// not a binding identifier: TS1359 for a reserved word, TS1003 otherwise. The
+// token is left unconsumed: on success cur is stepped back before it, so a
+// caller that expects cur on the name's (zero-width) last token can go on.
+func (p *Parser) reportMissingBindingIdentifier() bool {
+	tok := p.curToken
+	if tok.Type != lexer.IDENT && tscReservedWords[tok.Literal] {
+		p.addErrorWithCode(tok, "TS1359", "Identifier expected. '"+tok.Literal+"' is a reserved word that cannot be used here.")
+	} else {
+		p.addErrorWithCode(tok, errors.TS1003, "Identifier expected.")
+	}
+	return p.stepBackForMissing()
+}
+
+// expectPeekParenRecover expects the '(' of a parameter list. When it is
+// missing tsc reports it and treats the list as missing, so on recovery this
+// reports and returns true without advancing; parseMethodParameters then
+// yields an empty list.
+func (p *Parser) expectPeekParenRecover() bool {
+	if p.peekTokenIs(lexer.LPAREN) || !p.canRecover() {
+		return p.expectPeek(lexer.LPAREN)
+	}
+	p.peekError(lexer.LPAREN)
+	return true
+}
+
+// expectPeekBraceRecover is expectPeekParenRecover for a function body's '{';
+// parseFunctionBody then yields an empty body.
+func (p *Parser) expectPeekBraceRecover() bool {
+	if p.peekTokenIs(lexer.LBRACE) || !p.canRecover() {
+		return p.expectPeek(lexer.LBRACE)
+	}
+	p.peekError(lexer.LBRACE)
+	return true
+}

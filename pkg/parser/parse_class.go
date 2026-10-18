@@ -139,6 +139,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 		return nil
 	}
 
+	p.classBodyName = name.Value
 	body := p.parseClassBody()
 	if body == nil {
 		return nil
@@ -188,7 +189,7 @@ func (p *Parser) finishDeclareClass(classStmt Statement) Statement {
 	for _, sig := range cd.Body.ConstructorSigs {
 		for _, param := range sig.Parameters {
 			if param.IsPublic || param.IsPrivate || param.IsProtected || param.IsReadonly {
-				p.addError(param.Token, "A parameter property is only allowed in a constructor implementation.")
+				p.addSemanticErrorWithCode(param.Token, "TS2369", "A parameter property is only allowed in a constructor implementation.")
 			}
 		}
 	}
@@ -346,6 +347,10 @@ func (p *Parser) parseClassExpression() Expression {
 		return nil
 	}
 
+	p.classBodyName = "(Anonymous class)"
+	if name != nil {
+		p.classBodyName = name.Value
+	}
 	body := p.parseClassBody()
 	if body == nil {
 		return nil
@@ -748,7 +753,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				if p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.ASSIGN) ||
 					p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) ||
 					p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.EOF) {
-					p.addError(p.curToken, "Classes may not have a field named 'constructor'")
+					p.addGrammarErrorWithCode(p.curToken, "TS18006", "Classes may not have a field named 'constructor'.")
 					// Skip past the problematic field
 					p.nextToken()
 					for !p.curTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
