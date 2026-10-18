@@ -40,6 +40,24 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 		// applied inverted; this composes onto c.env.
 		savedEnvForLogical = c.env
 		c.applyInvertedOrNarrowing(node.Left)
+	} else if node.Operator == "??" {
+		// The right operand of `x ?? y` runs only when x is null or
+		// undefined.
+		if id, ok := node.Left.(*parser.Identifier); ok {
+			if u, ok := node.Left.GetComputedType().(*types.UnionType); ok {
+				var nullish []types.Type
+				for _, m := range u.Types {
+					if m == types.Null || m == types.Undefined {
+						nullish = append(nullish, m)
+					}
+				}
+				if _, isConst, found := c.env.Resolve(id.Value); found && len(nullish) > 0 && len(nullish) < len(u.Types) {
+					savedEnvForLogical = c.env
+					c.env = NewEnclosedEnvironment(c.env)
+					c.env.Define(id.Value, types.NewUnionType(nullish...), isConst)
+				}
+			}
+		}
 	}
 
 	if rightContext != nil {
