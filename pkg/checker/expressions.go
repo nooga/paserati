@@ -1598,7 +1598,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					}
 
 					if resultType == types.Never {
-						if obj.IsCallable() {
+						if (obj.IsCallable() || obj.IsConstructable()) {
 							// Check for function prototype methods if this is a callable object
 							if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
 								resultType = methodType
@@ -2516,7 +2516,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 			} else if indexed := stringIndexValueType(obj); indexed != nil && !obj.IsCallable() {
 				// `r?.p` over `Record<string, V>` reads V, as `r.p` does.
 				baseResultType = indexed
-			} else if obj.IsCallable() {
+			} else if (obj.IsCallable() || obj.IsConstructable()) {
 				// Check for function prototype methods if this is a callable object
 				if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
 					baseResultType = methodType

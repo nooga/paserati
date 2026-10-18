@@ -101,7 +101,7 @@ func (c *Checker) resolveObjectMemberForDestructuring(obj *types.ObjectType, pro
 		}
 	}
 
-	if obj.IsCallable() {
+	if (obj.IsCallable() || obj.IsConstructable()) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("function", propName); methodType != nil {
 			return methodType, true
 		}
