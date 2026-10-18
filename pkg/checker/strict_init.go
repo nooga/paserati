@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -49,7 +50,11 @@ func (c *Checker) checkStrictPropertyInit(node *parser.ClassDeclaration) {
 		if propType == nil || strictInitTypePermits(propType) {
 			continue
 		}
-		c.addErrorWithCode(prop.Key, errors.TS2564, fmt.Sprintf(
+		var at parser.Node = prop.Key
+		if _, computed := prop.Key.(*parser.ComputedPropertyName); computed && prop.Token != nil && prop.Token.Literal == "[" {
+			at = &parser.Identifier{Token: prop.Token, Value: "["}
+		}
+		c.addErrorWithCode(at, errors.TS2564, fmt.Sprintf(
 			"Property '%s' has no initializer and is not definitely assigned in the constructor.",
 			name,
 		))
@@ -63,7 +68,7 @@ func shouldEmitStrictInit(prop *parser.PropertyDefinition) bool {
 	if prop.Value != nil {
 		return false
 	}
-	if prop.Optional || prop.IsStatic || prop.DefiniteAssignment {
+	if prop.Optional || prop.IsStatic || prop.DefiniteAssignment || prop.IsDeclare {
 		return false
 	}
 	if prop.TypeAnnotation == nil {
@@ -72,9 +77,23 @@ func shouldEmitStrictInit(prop *parser.PropertyDefinition) bool {
 	return true
 }
 
+// strictInitPropertyName names the properties tsc checks: identifiers and
+// computed names, not string or numeric literal names.
 func strictInitPropertyName(key parser.Expression) (string, bool) {
-	if id, ok := key.(*parser.Identifier); ok {
-		return id.Value, true
+	switch k := key.(type) {
+	case *parser.Identifier:
+		if k.Token != nil && (k.Token.Type == lexer.NUMBER || k.Token.Type == lexer.STRING || k.Token.Type == lexer.BIGINT) {
+			return "", false
+		}
+		return k.Value, true
+	case *parser.ComputedPropertyName:
+		if k.Expr != nil {
+			text := entityNameText(k.Expr)
+			if text == "" {
+				text = k.Expr.String()
+			}
+			return "[" + text + "]", true
+		}
 	}
 	return "", false
 }

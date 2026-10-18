@@ -13,7 +13,7 @@ const k1 = Symbol("a");
 const k2 = Symbol("b");
 
 class A {
-  [k1]: { a: number }
+  [k1]!: { a: number }
 
   [k2]() {
     return 1;
