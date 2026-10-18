@@ -2922,10 +2922,10 @@ func (c *Checker) visit(node parser.Node) {
 			// type as the first one (TS2403) and the variable keeps that type.
 			reliableDecl := c.varDeclTypeIsReliable(declarator.TypeAnnotation, declarator.Value)
 			if first, seen := c.firstVarDecl(funcScope, declarator.Name.Value); seen {
-				c.reportSubsequentVarDeclaration(declarator.Name, first, finalVariableType, reliableDecl, declarator.TypeAnnotation != nil)
+				c.reportSubsequentVarDeclaration(declarator.Name, first, finalVariableType, reliableDecl, declarator.TypeAnnotation, declarator.Value)
 				finalVariableType = first.typ
 			} else {
-				c.recordFirstVarDecl(funcScope, declarator.Name.Value, finalVariableType, reliableDecl, declarator.TypeAnnotation != nil)
+				c.recordFirstVarDecl(funcScope, declarator.Name.Value, finalVariableType, reliableDecl, declarator.TypeAnnotation, declarator.Value)
 			}
 
 			// 4. UPDATE variable type in function scope with the final type

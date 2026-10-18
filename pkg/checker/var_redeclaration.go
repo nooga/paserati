@@ -21,8 +21,12 @@ type varDeclRecord struct {
 	// reliable is true when typ came from an annotation or from an initializer
 	// whose type does not depend on narrowing/inference we only approximate.
 	reliable bool
-	// annotated is true when typ was written out as a type annotation.
+	// annotated is true when typ was written out as a type annotation, or
+	// comes from an initializer whose type we infer exactly.
 	annotated bool
+	// explicitAny is true when that annotation is the `any` keyword itself,
+	// not a type the parser lowered to any.
+	explicitAny bool
 }
 
 // firstVarDecl returns the record for the first declaration of the `var`
@@ -35,11 +39,12 @@ func (c *Checker) firstVarDecl(scope *Environment, name string) (varDeclRecord, 
 	return r, ok
 }
 
-func (c *Checker) recordFirstVarDecl(scope *Environment, name string, t types.Type, reliable, annotated bool) {
+func (c *Checker) recordFirstVarDecl(scope *Environment, name string, t types.Type, reliable bool, annotation, initializer parser.Expression) {
+	annotated := annotation != nil || c.exactInitializer(initializer)
 	if c.varFirstDecl == nil {
 		c.varFirstDecl = make(map[varDeclKey]varDeclRecord)
 	}
-	c.varFirstDecl[varDeclKey{scope, name}] = varDeclRecord{typ: t, reliable: reliable, annotated: annotated}
+	c.varFirstDecl[varDeclKey{scope, name}] = varDeclRecord{typ: t, reliable: reliable, annotated: annotated, explicitAny: isAnyKeyword(annotation)}
 }
 
 // varDeclTypeIsReliable reports whether the type of a declaration can be
@@ -62,10 +67,44 @@ func (c *Checker) varDeclTypeIsReliable(typeAnnotation, initializer parser.Expre
 	case *parser.NewExpression:
 		// User-defined classes only: builtin generics (Array, Map, ...) have
 		// evolving or inferred type arguments we do not model exactly.
-		id, ok := e.Constructor.(*parser.Identifier)
-		return ok && !c.preexistingGlobals[id.Value]
+		return c.exactInitializer(e)
+	case *parser.ArrayLiteral, *parser.Identifier, *parser.MemberExpression:
+		return c.exactInitializer(e)
 	case *parser.PrefixExpression:
 		return e.Operator == "-" || e.Operator == "!" || e.Operator == "typeof"
+	}
+	return false
+}
+
+// exactInitializer reports whether an initializer's type is inferred exactly
+// enough for the identity relation: a user class instance, or an array
+// literal of those or of primitive literals.
+func (c *Checker) exactInitializer(init parser.Expression) bool {
+	switch e := init.(type) {
+	case *parser.NewExpression:
+		id, ok := e.Constructor.(*parser.Identifier)
+		if ok && id.Value == "Array" && len(e.TypeArguments) == 1 {
+			return true // new Array<T>() is T[]
+		}
+		return ok && !c.preexistingGlobals[id.Value]
+	case *parser.Identifier, *parser.MemberExpression:
+		// A class or namespace value: `typeof X`.
+		obj, ok := init.GetComputedType().(*types.ObjectType)
+		return ok && strings.HasPrefix(obj.DisplayName, "typeof ")
+	case *parser.ArrayLiteral:
+		if len(e.Elements) == 0 {
+			return false
+		}
+		for _, el := range e.Elements {
+			switch el.(type) {
+			case *parser.NumberLiteral, *parser.StringLiteral, *parser.BooleanLiteral:
+			default:
+				if !c.exactInitializer(el) {
+					return false
+				}
+			}
+		}
+		return true
 	}
 	return false
 }
@@ -78,8 +117,17 @@ func (c *Checker) varDeclTypeIsReliable(typeAnnotation, initializer parser.Expre
 // so we only report when both types are reliable (see varDeclTypeIsReliable)
 // and clearly different, rather than risk a false positive on a type we merely
 // failed to model.
-func (c *Checker) reportSubsequentVarDeclaration(name *parser.Identifier, first varDeclRecord, laterType types.Type, laterReliable, laterAnnotated bool) {
-	if name == nil || !first.reliable || !laterReliable || !c.varTypesClearlyDiffer(first.typ, laterType, first.annotated && laterAnnotated) {
+func (c *Checker) reportSubsequentVarDeclaration(name *parser.Identifier, first varDeclRecord, laterType types.Type, laterReliable bool, laterAnnotation, laterInitializer parser.Expression) {
+	if name == nil || !first.reliable || !laterReliable {
+		return
+	}
+	laterAnnotated := laterAnnotation != nil || c.exactInitializer(laterInitializer)
+	if first.explicitAny || isAnyKeyword(laterAnnotation) {
+		// An any written out is any: anything else differs from it.
+		if (first.typ == types.Any) == (laterType == types.Any) {
+			return
+		}
+	} else if !c.varTypesClearlyDiffer(first.typ, laterType, first.annotated && laterAnnotated) {
 		return
 	}
 	c.addErrorWithCode(name, tsSubsequentVarDecl, fmt.Sprintf(
@@ -102,6 +150,15 @@ func (c *Checker) varTypesClearlyDiffer(a, b types.Type, bothAnnotated bool) boo
 		// Both sides are built from kinds the relation models (including
 		// function and object literal types): use the real identity relation.
 		return !c.rel.IsIdenticalType(a, b)
+	}
+	if bothAnnotated && !containsAny(a, 0) && !containsAny(b, 0) {
+		// Identical types are assignable both ways, so failing either way
+		// proves a difference even where identity is beyond our model.
+		if _, isObj := a.(*types.ObjectType); isObj {
+			if _, isObj := b.(*types.ObjectType); isObj {
+				return !c.rel.IsAssignable(a, b) || !c.rel.IsAssignable(b, a)
+			}
+		}
 	}
 	ka, kb := identityKind(a), identityKind(b)
 	if ka == "" || kb == "" {
@@ -195,7 +252,7 @@ func (c *Checker) checkSecondaryTopLevelVar(name *parser.Identifier, typeAnnotat
 		c.reportNotAssignable(name, initializer, initType, declType, headAssign)
 	}
 	name.SetComputedType(declType)
-	c.reportSubsequentVarDeclaration(name, first, declType, c.varDeclTypeIsReliable(typeAnnotation, initializer), typeAnnotation != nil)
+	c.reportSubsequentVarDeclaration(name, first, declType, c.varDeclTypeIsReliable(typeAnnotation, initializer), typeAnnotation, initializer)
 }
 
 // checkTopLevelVarLikeDeclarators runs the Pass 5 initializer check for every
@@ -223,7 +280,7 @@ func (c *Checker) checkTopLevelVarLikeDeclarators(declarations []*parser.VarDecl
 		c.checkVarLikeInitializerAndRefine(d.Name, d.TypeAnnotation, value, globalEnv, flow)
 		if isVar {
 			if t, _, ok := globalEnv.Resolve(d.Name.Value); ok {
-				c.recordFirstVarDecl(globalEnv, d.Name.Value, t, c.varDeclTypeIsReliable(d.TypeAnnotation, d.Value), d.TypeAnnotation != nil)
+				c.recordFirstVarDecl(globalEnv, d.Name.Value, t, c.varDeclTypeIsReliable(d.TypeAnnotation, d.Value), d.TypeAnnotation, d.Value)
 			}
 		}
 	}
@@ -366,4 +423,10 @@ func containsAny(t types.Type, depth int) bool {
 		}
 	}
 	return false
+}
+
+// isAnyKeyword reports whether a type annotation is the `any` keyword.
+func isAnyKeyword(annotation parser.Expression) bool {
+	id, ok := annotation.(*parser.Identifier)
+	return ok && id.Value == "any"
 }
