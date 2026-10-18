@@ -173,6 +173,11 @@ func (p *Paserati) SetStrictBindCallApply(enabled bool) {
 	p.checker.SetStrictBindCallApply(enabled)
 }
 
+// SetExperimentalDecorators controls tsc's experimentalDecorators.
+func (p *Paserati) SetExperimentalDecorators(enabled bool) {
+	p.checker.SetExperimentalDecorators(enabled)
+}
+
 // SetAllowTopLevelReturn controls whether script/eval style top-level returns
 // are accepted by the type checker.
 func (p *Paserati) SetAllowTopLevelReturn(allow bool) {

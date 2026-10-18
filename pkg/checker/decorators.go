@@ -34,6 +34,10 @@ func (c *Checker) checkAllDecorators(program *parser.Program) {
 // checkDecorators validates all decorators on a class declaration and its members.
 // Per TC39 spec, each decorator must resolve to a callable value.
 func (c *Checker) checkDecorators(node *parser.ClassDeclaration) {
+	if c.experimentalDecorators {
+		c.checkLegacyDecorators(node)
+		return
+	}
 	// Check class-level decorators
 	for _, dec := range node.Decorators {
 		c.checkDecoratorExpression(dec)

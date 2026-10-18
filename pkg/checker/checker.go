@@ -399,6 +399,8 @@ type Checker struct {
 	fixInScopeTypeParams bool
 	// strictBindCallApply: see SetStrictBindCallApply.
 	strictBindCallApply bool
+	// experimentalDecorators: see SetExperimentalDecorators.
+	experimentalDecorators bool
 	// varOnlyDecls maps names declared by a single `var` and nothing else
 	// to that declarator.
 	varOnlyDecls map[string]*parser.VarDeclarator
@@ -854,6 +856,13 @@ func (c *Checker) SetNoImplicitOverride(enabled bool) {
 // (tsc's strictBindCallApply) instead of Function's any-typed methods.
 func (c *Checker) SetStrictBindCallApply(enabled bool) {
 	c.strictBindCallApply = enabled
+}
+
+// SetExperimentalDecorators selects tsc's legacy decorators
+// (--experimentalDecorators), which are resolved against the arguments the
+// legacy runtime passes.
+func (c *Checker) SetExperimentalDecorators(enabled bool) {
+	c.experimentalDecorators = enabled
 }
 
 // --- Access Control Helper Methods ---
