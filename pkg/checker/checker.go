@@ -394,6 +394,9 @@ type Checker struct {
 	// used before being assigned (collectUnassignedReads).
 	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
 	daCollectOnly   bool
+	// fixInScopeTypeParams makes isGenericSignature treat type parameters
+	// in scope as fixed (a call's callee signature).
+	fixInScopeTypeParams bool
 	// strictBindCallApply: see SetStrictBindCallApply.
 	strictBindCallApply bool
 	// varOnlyDecls maps names declared by a single `var` and nothing else

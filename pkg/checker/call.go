@@ -742,7 +742,9 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	}
 
 	// Check if this is a generic function call that needs type inference
+	c.fixInScopeTypeParams = true
 	isGeneric := c.isGenericSignature(funcSignature)
+	c.fixInScopeTypeParams = false
 	if checkerDebug {
 		debugPrintf("// [Checker CallExpr] isGenericSignature returned: %t for signature: %s\n", isGeneric, funcSignature.String())
 	}
@@ -1188,6 +1190,13 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 
 		switch typ := t.(type) {
 		case *types.TypeParameterType:
+			// The enclosing declaration's own type parameter is fixed at a
+			// call, not inferred from its arguments.
+			if c.fixInScopeTypeParams && typ.Parameter != nil {
+				if inScope, ok := c.env.ResolveTypeParameter(typ.Parameter.Name); ok && inScope == typ.Parameter {
+					return false
+				}
+			}
 			return true
 		case *types.ArrayType:
 			return containsTypeParameters(typ.ElementType)
