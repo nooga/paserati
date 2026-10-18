@@ -168,6 +168,11 @@ func (p *Paserati) SetNoImplicitOverride(enabled bool) {
 	p.checker.SetNoImplicitOverride(enabled)
 }
 
+// SetStrictBindCallApply controls tsc's strictBindCallApply.
+func (p *Paserati) SetStrictBindCallApply(enabled bool) {
+	p.checker.SetStrictBindCallApply(enabled)
+}
+
 // SetAllowTopLevelReturn controls whether script/eval style top-level returns
 // are accepted by the type checker.
 func (p *Paserati) SetAllowTopLevelReturn(allow bool) {

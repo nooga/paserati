@@ -428,8 +428,8 @@ var supportedOptions = map[string]bool{
 // emit (sourceMap, outFile, ...) are not listed.
 var unmodeledOptions = map[string]bool{
 	"noimplicitany": true, "noimplicitthis": true, "noimplicitreturns": true,
-	"strictbindcallapply": true, "strictbuiltiniteratorreturn": true,
-	"exactoptionalpropertytypes": true, "nouncheckedindexedaccess": true,
+	"strictbuiltiniteratorreturn": true,
+	"exactoptionalpropertytypes":  true, "nouncheckedindexedaccess": true,
 	"useunknownincatchvariables": true, "nopropertyaccessfromindexsignature": true,
 	"nolib": true, "lib": true, "target": true, "module": true, "moduleresolution": true,
 	"moduledetection": true, "jsx": true, "jsxfactory": true, "jsxfragmentfactory": true,

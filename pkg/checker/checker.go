@@ -394,6 +394,8 @@ type Checker struct {
 	// used before being assigned (collectUnassignedReads).
 	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
 	daCollectOnly   bool
+	// strictBindCallApply: see SetStrictBindCallApply.
+	strictBindCallApply bool
 	// varOnlyDecls maps names declared by a single `var` and nothing else
 	// to that declarator.
 	varOnlyDecls map[string]*parser.VarDeclarator
@@ -838,6 +840,12 @@ func (c *Checker) skipValidation() bool {
 // explicit `override` modifier. Default false.
 func (c *Checker) SetNoImplicitOverride(enabled bool) {
 	c.noImplicitOverride = enabled
+}
+
+// SetStrictBindCallApply types a function's call and apply by its signature
+// (tsc's strictBindCallApply) instead of Function's any-typed methods.
+func (c *Checker) SetStrictBindCallApply(enabled bool) {
+	c.strictBindCallApply = enabled
 }
 
 // --- Access Control Helper Methods ---

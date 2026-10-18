@@ -1625,7 +1625,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					if resultType == types.Never {
 						if obj.IsCallable() || obj.IsConstructable() {
 							// Check for function prototype methods if this is a callable object
-							if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
+							if methodType := c.strictCallApplyType(obj, propertyName); methodType != nil {
+								resultType = methodType
+							} else if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
 								resultType = methodType
 								if checkerDebug {
 									debugPrintf("// [Checker MemberExpr] Found function prototype method '%s': %s\n", propertyName, methodType.String())
@@ -2198,9 +2200,22 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 							resultType = propType
 						}
 					} else {
-						// Check index signatures before defaulting to any
+						// Check index signatures before defaulting to any; a
+						// numeric name takes the number index signature first.
 						found := false
+						if isNumericPropertyName(indexStringValue) {
+							for _, sig := range base.IndexSigs() {
+								if sig.KeyType == types.Number && !sig.IsMapped && !sig.Synthetic {
+									resultType = sig.ValueType
+									found = true
+									break
+								}
+							}
+						}
 						for _, sig := range base.IndexSigs() {
+							if found {
+								break
+							}
 							if sig.KeyType == types.String || sig.KeyType == types.Any {
 								resultType = sig.ValueType
 								found = true

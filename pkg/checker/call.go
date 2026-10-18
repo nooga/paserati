@@ -2790,3 +2790,61 @@ func constrainedTypeParams(tps []*types.TypeParameter) map[*types.TypeParameter]
 	}
 	return m
 }
+
+// strictCallApplyType types fn.call and fn.apply by fn's signature, as
+// tsc's CallableFunction does under strictBindCallApply: call takes the
+// receiver and then fn's parameters, apply the receiver and a tuple of
+// them. Only a single non-generic call signature is modelled; anything
+// else keeps Function's methods.
+func (c *Checker) strictCallApplyType(fn *types.ObjectType, name string) types.Type {
+	if !c.strictBindCallApply || (name != "call" && name != "apply") {
+		return nil
+	}
+	sigs := fn.CallSigs()
+	if len(sigs) != 1 || len(sigs[0].TypeParameters) > 0 || sigs[0].IsVariadic && sigs[0].RestParameterType == nil {
+		return nil
+	}
+	sig := sigs[0]
+	if sig.RestParameterType != nil {
+		if _, isArray := sig.RestParameterType.(*types.ArrayType); !isArray {
+			return nil // a generic rest (`...args: A`) is not modelled
+		}
+	}
+	thisType := sig.ThisType
+	if thisType == nil {
+		thisType = types.Any
+	}
+	ret := sig.ReturnType
+	if ret == nil {
+		ret = types.Any
+	}
+	params := sig.ParameterTypes
+	optional := make([]bool, len(params))
+	copy(optional, sig.OptionalParams)
+	if name == "call" {
+		return types.NewFunctionType(&types.Signature{
+			ParameterNames:    append([]string{"thisArg"}, sig.ParameterNames...),
+			ParameterTypes:    append([]types.Type{thisType}, params...),
+			OptionalParams:    append([]bool{false}, optional...),
+			RestParameterType: sig.RestParameterType,
+			IsVariadic:        sig.IsVariadic,
+			ReturnType:        ret,
+		})
+	}
+	tuple := &types.TupleType{ElementTypes: append([]types.Type(nil), params...), OptionalElements: optional}
+	if r, ok := sig.RestParameterType.(*types.ArrayType); ok {
+		tuple.RestElementType = r.ElementType
+	}
+	allOptional := true
+	for i := range params {
+		if !optional[i] {
+			allOptional = false
+		}
+	}
+	return types.NewFunctionType(&types.Signature{
+		ParameterNames: []string{"thisArg", "args"},
+		ParameterTypes: []types.Type{thisType, tuple},
+		OptionalParams: []bool{false, allOptional},
+		ReturnType:     ret,
+	})
+}
