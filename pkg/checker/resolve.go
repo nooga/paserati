@@ -2370,6 +2370,19 @@ func (c *Checker) resolveInferTypeExpression(node *parser.InferTypeExpression) t
 // computeKeyofType computes the keyof type for a given type
 func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 	switch typ := operandType.(type) {
+	case *types.EnumType:
+		// keyof typeof E: the member names.
+		var keys []types.Type
+		for _, name := range typ.OrderedMemberNames() {
+			keys = append(keys, &types.LiteralType{Value: vm.String(name)})
+		}
+		switch len(keys) {
+		case 0:
+			return types.Never
+		case 1:
+			return keys[0]
+		}
+		return types.NewUnionType(keys...)
 	case *types.ObjectType:
 		// Property names as string literals, in declaration order, then
 		// inherited ones; a string index signature adds string | number.
