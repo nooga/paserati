@@ -178,6 +178,11 @@ func (p *Paserati) SetExperimentalDecorators(enabled bool) {
 	p.checker.SetExperimentalDecorators(enabled)
 }
 
+// SetNoImplicitThis mirrors --noImplicitThis (TS2683).
+func (p *Paserati) SetNoImplicitThis(enabled bool) {
+	p.checker.SetNoImplicitThis(enabled)
+}
+
 // SetAllowTopLevelReturn controls whether script/eval style top-level returns
 // are accepted by the type checker.
 func (p *Paserati) SetAllowTopLevelReturn(allow bool) {

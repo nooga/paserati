@@ -555,6 +555,10 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 
 	// Set up 'this' context - check for explicit 'this' parameter
 	outerThisType := c.currentThisType
+	outerImplicitThis := c.implicitAnyThis
+	if !ctx.IsArrow {
+		c.implicitAnyThis = false
+	}
 	hasExplicitThisParam := false
 	for _, param := range ctx.Parameters {
 		if param.IsThis {
@@ -576,6 +580,8 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 		// No explicit 'this' parameter - only set to 'any' if not already set by calling context
 		if c.currentThisType == nil {
 			c.currentThisType = types.Any
+			// A function with no this of its own: reading it is TS2683.
+			c.implicitAnyThis = !ctx.IsArrow && !c.hasContextualThis(ctx.Body)
 			debugPrintf("// [Checker Function Body] No explicit this parameter and no context, setting this to any for function literal\n")
 		} else {
 			if checkerDebug {
@@ -653,6 +659,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	c.bodyYieldTypes = c.currentInferredYieldTypes
 	c.currentInferredYieldTypes = outerInferredYieldTypes
 	c.currentThisType = outerThisType
+	c.implicitAnyThis = outerImplicitThis
 	c.inAsyncFunction = outerInAsyncFunction
 	c.inGeneratorFunction = outerInGeneratorFunction
 	c.loopDepth = outerLoopDepth
@@ -827,4 +834,52 @@ func (c *Checker) reportImplicitAnyParameters() {
 		}
 	}
 	c.implicitAnyParams = nil
+}
+
+// hasContextualThis reports whether the function with the given body gets
+// its this from where it is written, as tsc's getContextualThisParameterType
+// does: a method or property value of an object literal (this is the
+// literal) and the value assigned to `obj.x` or `obj[x]` (this is obj).
+func (c *Checker) hasContextualThis(body parser.Node) bool {
+	if c.program == nil || isNilNode(body) {
+		return false
+	}
+	if c.contextualThisBodies == nil || c.contextualThisProgram != c.program {
+		c.contextualThisProgram = c.program
+		c.contextualThisBodies = map[parser.Node]bool{}
+		mark := func(fn parser.Expression) {
+			switch f := fn.(type) {
+			case *parser.FunctionLiteral:
+				if f.Body != nil {
+					c.contextualThisBodies[f.Body] = true
+				}
+			case *parser.ShorthandMethod:
+				if f.Body != nil {
+					c.contextualThisBodies[f.Body] = true
+				}
+			case *parser.MethodDefinition:
+				if f.Value != nil && f.Value.Body != nil {
+					c.contextualThisBodies[f.Value.Body] = true
+				}
+			}
+		}
+		forEachDescendant(c.program, func(n parser.Node) {
+			switch e := n.(type) {
+			case *parser.ObjectLiteral:
+				for _, p := range e.Properties {
+					if p != nil {
+						mark(p.Value)
+					}
+				}
+			case *parser.ShorthandMethod:
+				mark(e)
+			case *parser.AssignmentExpression:
+				switch e.Left.(type) {
+				case *parser.MemberExpression, *parser.IndexExpression:
+					mark(e.Value)
+				}
+			}
+		})
+	}
+	return c.contextualThisBodies[body]
 }

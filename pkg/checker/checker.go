@@ -492,7 +492,14 @@ type Checker struct {
 	contextualParams   map[parser.Node]bool             // parameters of function arguments that a callee types
 	implicitAnyParams  map[parser.Node]implicitAnyParam // noImplicitAny candidates, reported when checking ends
 	noImplicitAny      bool                             // Mirrors --noImplicitAny; when true, TS7006/TS7019 are emitted
-	noImplicitOverride bool                             // When true, overriding class members require explicit override
+	// noImplicitThis mirrors --noImplicitThis; implicitAnyThis is set inside
+	// a function whose this is any only for want of any context (TS2683).
+	noImplicitThis  bool
+	implicitAnyThis bool
+	// contextualThisBodies: see hasContextualThis.
+	contextualThisBodies  map[parser.Node]bool
+	contextualThisProgram *parser.Program
+	noImplicitOverride    bool // When true, overriding class members require explicit override
 	// Comma expressions sitting in callee position, recorded so the TS2695
 	// check can spare the `(0, eval)(...)` indirect-call idiom.
 	indirectCallCallees map[*parser.InfixExpression]bool
@@ -822,6 +829,11 @@ func (c *Checker) SetIsModule(isModule bool) {
 // TS7006 and TS7019. Default false: Paserati also runs untyped JavaScript.
 func (c *Checker) SetNoImplicitAny(enabled bool) {
 	c.noImplicitAny = enabled
+}
+
+// SetNoImplicitThis mirrors --noImplicitThis.
+func (c *Checker) SetNoImplicitThis(enabled bool) {
+	c.noImplicitThis = enabled
 }
 
 // SetSkipLibCheck mirrors tsc's skipLibCheck: library files' own
@@ -1845,6 +1857,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		} else {
 			// No explicit 'this' parameter - set to 'any' for top-level functions
 			c.currentThisType = types.Any
+			c.implicitAnyThis = true
 			debugPrintf("// [Checker Pass 3] No explicit this parameter, setting this to any for potential constructor function\n")
 		}
 
@@ -2098,6 +2111,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.currentInferredReturnTypes = outerInferredReturnTypes
 		c.currentInferredYieldTypes = outerInferredYieldTypes
 		c.currentThisType = outerThisType
+		c.implicitAnyThis = false
 		c.inAsyncFunction = outerInAsyncFunction
 		c.inGeneratorFunction = outerInGeneratorFunction
 		c.loopDepth = outerLoopDepth
@@ -3230,6 +3244,9 @@ func (c *Checker) visit(node parser.Node) {
 		// In global context or regular function context, 'this' is undefined
 		// In method context, 'this' refers to the object the method is called on
 		if c.currentThisType != nil {
+			if c.noImplicitThis && c.implicitAnyThis && c.currentThisType == types.Any {
+				c.addErrorWithCode(node, "TS2683", "'this' implicitly has type 'any' because it does not have a type annotation.")
+			}
 			node.SetComputedType(c.currentThisType)
 			if checkerDebug {
 				debugPrintf("// [Checker ThisExpr] Using context this type: %s\n", c.currentThisType.String())
@@ -4102,7 +4119,10 @@ func (c *Checker) visit(node parser.Node) {
 		// --- END NEW ---
 
 		// 5. Visit method body
+		outerImplicitThis := c.implicitAnyThis
+		c.implicitAnyThis = false // a method's this is its object literal
 		c.visit(node.Body)
+		c.implicitAnyThis = outerImplicitThis
 		c.checkMissingReturn(node.ReturnTypeAnnotation, resolvedReturnType, node.Body, false, false)
 
 		// 6. Determine final return type
