@@ -299,6 +299,10 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		// A logical assignment evaluates like the logical operator: the
 		// retained part of the old value or the assigned value.
 		if lhsType != nil && rhsType != nil {
+			if isEmptyArrayLiteral(node.Value) {
+				// A bare `[]` is tsc's `never[]` (see the logical operators).
+				rhsType = &types.ArrayType{ElementType: types.Never}
+			}
 			node.SetComputedType(c.logicalOperatorResultType(strings.TrimSuffix(node.Operator, "="), lhsType, rhsType))
 		}
 	}

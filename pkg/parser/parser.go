@@ -5562,6 +5562,7 @@ func (p *Parser) parseGroupedExpression() Expression {
 		p.noPrefixParseFnError(p.curToken.Type)
 		return nil
 	}
+	openParen := p.curToken
 	p.nextToken() // Consume '('
 	debugPrint("parseGroupedExpression: Consumed '(', cur='%s'", p.curToken.Literal)
 	exp := p.parseExpression(LOWEST)
@@ -5570,6 +5571,9 @@ func (p *Parser) parseGroupedExpression() Expression {
 	}
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil // Missing closing parenthesis
+	}
+	if pe, ok := exp.(interface{ setParenStart(*lexer.Token) }); ok {
+		pe.setParenStart(openParen)
 	}
 	debugPrint("parseGroupedExpression: Finished grouped expr %T", exp)
 	// Mark prefix expressions as parenthesized so we can distinguish

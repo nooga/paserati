@@ -38,6 +38,18 @@ type Expression interface {
 // --- Base struct for Expressions to hold ComputedType --- (Optional but helps)
 type BaseExpression struct {
 	ComputedType types.Type
+	// OpenParen is the outermost '(' the expression was written inside,
+	// where its source text (and tsc's diagnostics on it) begins.
+	OpenParen *lexer.Token
+}
+
+// ParenStart returns the outermost '(' wrapping the expression, if any.
+func (be *BaseExpression) ParenStart() *lexer.Token {
+	return be.OpenParen
+}
+
+func (be *BaseExpression) setParenStart(t *lexer.Token) {
+	be.OpenParen = t
 }
 
 func (be *BaseExpression) GetComputedType() types.Type {

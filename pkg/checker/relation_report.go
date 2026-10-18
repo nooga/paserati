@@ -30,6 +30,11 @@ const (
 
 // leftmostToken returns the token a node's source text starts with.
 func leftmostToken(node parser.Node) *lexer.Token {
+	if pe, ok := node.(interface{ ParenStart() *lexer.Token }); ok && !isNilNode(node) {
+		if t := pe.ParenStart(); t != nil {
+			return t
+		}
+	}
 	switch n := node.(type) {
 	case *parser.MemberExpression:
 		if n.Object != nil {

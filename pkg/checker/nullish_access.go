@@ -95,11 +95,11 @@ func (c *Checker) reportNullishFacts(operand parser.Expression, hasNull, hasUnde
 	}
 	switch {
 	case hasNull && hasUndefined:
-		c.addErrorWithCode(operand, errors.TS2533, "Object is possibly 'null' or 'undefined'.")
+		c.addErrorAtStart(operand, errors.TS2533, "Object is possibly 'null' or 'undefined'.")
 	case hasNull:
-		c.addErrorWithCode(operand, errors.TS2531, "Object is possibly 'null'.")
+		c.addErrorAtStart(operand, errors.TS2531, "Object is possibly 'null'.")
 	default:
-		c.addErrorWithCode(operand, errors.TS2532, "Object is possibly 'undefined'.")
+		c.addErrorAtStart(operand, errors.TS2532, "Object is possibly 'undefined'.")
 	}
 }
 
