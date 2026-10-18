@@ -562,6 +562,18 @@ func (ul *UndefinedLiteral) expressionNode()      {}
 func (ul *UndefinedLiteral) TokenLiteral() string { return ul.Token.Literal }
 func (ul *UndefinedLiteral) String() string       { return ul.Token.Literal }
 
+// TypedPlaceholder is an expression of a fixed type the checker synthesizes,
+// such as the strings array a tagged template passes to its tag. It never
+// reaches the compiler.
+type TypedPlaceholder struct {
+	BaseExpression
+	Token *lexer.Token
+}
+
+func (tp *TypedPlaceholder) expressionNode()      {}
+func (tp *TypedPlaceholder) TokenLiteral() string { return tp.Token.Literal }
+func (tp *TypedPlaceholder) String() string       { return "<placeholder>" }
+
 // RegexLiteral represents a regular expression literal /pattern/flags.
 type RegexLiteral struct {
 	BaseExpression              // Embed base for ComputedType

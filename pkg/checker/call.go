@@ -821,7 +821,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			// Don't check args if minimum count isn't met.
 		} else {
 			// Check fixed arguments with spread expansion support
-			c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic, funcSignature.OptionalParams)
+			// tsc reports only the first argument that does not fit.
+			argErr := !c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic, funcSignature.OptionalParams)
 
 			// Check variadic arguments — always, even when the fixed-args
 			// check reported errors. Variadic args own their own visit (since
@@ -859,12 +860,14 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 							if c.isSpreadableIterableType(argType) {
 								spreadElementType := c.getSpreadElementType(argType)
-								if !c.rel.IsAssignable(spreadElementType, variadicElementType) {
+								if !argErr && !c.rel.IsAssignable(spreadElementType, variadicElementType) {
+									argErr = true
 									c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", spreadElementType.String(), variadicElementType.String()))
 								}
 								continue
 							}
-							if !c.rel.IsAssignable(argType, variadicParamType) {
+							if !argErr && !c.rel.IsAssignable(argType, variadicParamType) {
+								argErr = true
 								c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicParamType.String()))
 							}
 						} else {
@@ -880,7 +883,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 								continue
 							}
 
-							if !c.rel.IsAssignable(argType, variadicElementType) {
+							if !argErr && !c.rel.IsAssignable(argType, variadicElementType) {
+								argErr = true
 								c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
 							}
 						}

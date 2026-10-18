@@ -1126,12 +1126,31 @@ func (c *Checker) checkTemplateLiteral(node *parser.TemplateLiteral) {
 
 // checkTaggedTemplateExpression: the result type is any (string) for now; proper semantics later
 func (c *Checker) checkTaggedTemplateExpression(node *parser.TaggedTemplateExpression) {
-	// Check tag expression
-	c.visit(node.Tag)
-	// Check template parts
-	c.checkTemplateLiteral(node.Template)
-	// Result of a tag call is Any for now
-	node.SetComputedType(types.Any)
+	// A tagged template is a call of the tag with the strings array and the
+	// substitutions as arguments.
+	strs := &parser.TypedPlaceholder{Token: node.Token}
+	strsType := types.Type(types.Any)
+	if t, ok := c.env.ResolveType("TemplateStringsArray"); ok && t != nil {
+		strsType = t
+	}
+	strs.SetComputedType(strsType)
+	args := []parser.Expression{strs}
+	if node.Template != nil {
+		for _, part := range node.Template.Parts {
+			if e, ok := part.(parser.Expression); ok {
+				if _, isStr := part.(*parser.TemplateStringPart); !isStr {
+					args = append(args, e)
+				}
+			}
+		}
+	}
+	call := &parser.CallExpression{Token: node.Token, Function: node.Tag, Arguments: args}
+	c.visit(call)
+	result := call.GetComputedType()
+	if result == nil {
+		result = types.Any
+	}
+	node.SetComputedType(result)
 }
 
 // Helper function

@@ -3711,6 +3711,9 @@ func (c *Checker) visit(node parser.Node) {
 
 		node.SetComputedType(resultType)
 
+	case *parser.TypedPlaceholder:
+		// Its type is set by whoever made it.
+
 	case *parser.FunctionLiteral:
 		c.checkFunctionLiteral(node)
 
