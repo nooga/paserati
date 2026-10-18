@@ -390,7 +390,12 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 			}
 		}
 
-		if keyName != "__COMPUTED_PROPERTY__" && keyName != "__UNKNOWN_KEY__" {
+		// A getter and setter may share a name, as in checkObjectLiteral.
+		isAccessor := false
+		if md, ok := prop.Value.(*parser.MethodDefinition); ok && (md.Kind == "getter" || md.Kind == "setter") {
+			isAccessor = true
+		}
+		if keyName != "__COMPUTED_PROPERTY__" && keyName != "__UNKNOWN_KEY__" && !isAccessor {
 			isProtoColon := (keyName == "__proto__" && !isShorthand)
 			if seenKeys[keyName] && keyName != "__proto__" {
 				c.addErrorWithCode(prop.Key, errors.TS1117, "An object literal cannot have multiple properties with the same name.")

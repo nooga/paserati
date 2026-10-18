@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
@@ -28,11 +29,17 @@ func indexSignatureApplies(keyType types.Type, name string) bool {
 // is not assignable to an applicable index signature
 // (checkIndexConstraintForProperty).
 func (c *Checker) checkPropertyAgainstIndexSignatures(owner *types.ObjectType, nameNode parser.Node, name string, propType types.Type, sigs []*types.IndexSignature) {
+	c.checkPropertyAgainstIndexSignaturesNamed(owner, nameNode, name, name, propType, sigs)
+}
+
+// checkPropertyAgainstIndexSignaturesNamed is checkPropertyAgainstIndexSignatures
+// for a property written as name whose property name is key (`2.0` is "2").
+func (c *Checker) checkPropertyAgainstIndexSignaturesNamed(owner *types.ObjectType, nameNode parser.Node, name, key string, propType types.Type, sigs []*types.IndexSignature) {
 	if propType == nil || nameNode == nil {
 		return
 	}
 	for _, sig := range sigs {
-		if sig == nil || sig.ValueType == nil || sig.IsMapped || sig.Synthetic || !indexSignatureApplies(sig.KeyType, name) {
+		if sig == nil || sig.ValueType == nil || sig.IsMapped || sig.Synthetic || !indexSignatureApplies(sig.KeyType, key) {
 			continue
 		}
 		if c.isAssignableWithExpansion(propType, sig.ValueType) {
@@ -77,7 +84,7 @@ func (c *Checker) checkInterfaceIndexConstraints(node *parser.InterfaceDeclarati
 		if prop.Name == nil {
 			continue
 		}
-		c.checkPropertyAgainstIndexSignatures(own, prop.Name, prop.Name.Value, own.Props()[prop.Name.Value], sigs)
+		c.checkPropertyAgainstIndexSignaturesNamed(own, prop.Name, prop.Name.Value, numericLiteralKey(prop.Name), own.Props()[prop.Name.Value], sigs)
 	}
 }
 
@@ -283,7 +290,11 @@ func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceTyp
 		if propType == nil {
 			return
 		}
-		c.checkPropertyAgainstIndexSignatures(owner, key, name, propType, sigs)
+		keyName := name
+		if id, ok := key.(*parser.Identifier); ok {
+			keyName = numericLiteralKey(id)
+		}
+		c.checkPropertyAgainstIndexSignaturesNamed(owner, key, name, keyName, propType, sigs)
 	}
 	// A computed name that is not a literal binds no property; tsc checks
 	// the member against the index signatures its key type selects.
@@ -366,6 +377,17 @@ func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceTyp
 		}
 	}
 	c.checkInheritedAgainstOwnIndexSignatures(body, instanceType, declared)
+}
+
+// numericLiteralKey is the property name a member name binds: a numeric
+// literal names its numeric value (`2.0` is "2").
+func numericLiteralKey(id *parser.Identifier) string {
+	if id.Token != nil && id.Token.Type == lexer.NUMBER {
+		if f, err := strconv.ParseFloat(strings.ReplaceAll(id.Value, "_", ""), 64); err == nil {
+			return strconv.FormatFloat(f, 'g', -1, 64)
+		}
+	}
+	return id.Value
 }
 
 // computedNameText spells a computed name's expression roughly as written.

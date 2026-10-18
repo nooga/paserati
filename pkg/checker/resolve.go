@@ -1373,7 +1373,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			if prop.Name == nil {
 				continue
 			}
-			c.checkPropertyAgainstIndexSignatures(nil, prop.Name, prop.Name.Value, properties[prop.Name.Value], indexSignatures)
+			c.checkPropertyAgainstIndexSignaturesNamed(nil, prop.Name, prop.Name.Value, numericLiteralKey(prop.Name), properties[prop.Name.Value], indexSignatures)
 		}
 	}
 
