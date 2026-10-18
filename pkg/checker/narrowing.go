@@ -759,6 +759,10 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		}
 
 		debugPrintf("// [TypeNarrowing] Discriminated union narrowing failed for '%s'\n", guard.VariableName)
+		if c.narrowsAsMemberValue(guard, originalType) {
+			// Not a discriminated union: the property itself is narrowed.
+			return c.applyPositiveTypeNarrowing(memberValueGuard(guard))
+		}
 		return nil
 	}
 
@@ -1286,6 +1290,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		}
 
 		debugPrintf("// [InvertedTypeNarrowing] Discriminated union else branch failed for '%s'\n", guard.VariableName)
+		if c.narrowsAsMemberValue(guard, originalType) {
+			// Not a discriminated union: the property itself is narrowed.
+			return c.applyInvertedTypeNarrowing(memberValueGuard(guard))
+		}
 		return nil
 	}
 
@@ -1400,6 +1408,33 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					}
 					return narrowedEnv
 				}
+			}
+		}
+
+		// The else branch of `typeof x === "string"` drops every member
+		// whose values all have that typeof: the primitive, its literals,
+		// and a type parameter constrained to them.
+		if guard.NarrowedType != nil && !guard.Predicate && !guard.Instanceof && isTypeofPrimitive(guard.NarrowedType) {
+			var rest []types.Type
+			for _, m := range unionType.Types {
+				base := m
+				if tp, isTP := m.(*types.TypeParameterType); isTP && tp.Parameter != nil && tp.Parameter.Constraint != nil {
+					base = tp.Parameter.Constraint
+				}
+				if !c.allOfTypeof(base, guard.NarrowedType) {
+					rest = append(rest, m)
+				}
+			}
+			if len(rest) < len(unionType.Types) {
+				var narrowedType types.Type = types.Never
+				if len(rest) == 1 {
+					narrowedType = rest[0]
+				} else if len(rest) > 1 {
+					narrowedType = types.NewUnionType(rest...)
+				}
+				narrowedEnv := NewEnclosedEnvironment(c.env)
+				narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+				return narrowedEnv
 			}
 		}
 
@@ -3011,4 +3046,48 @@ func isTypeofPrimitive(t types.Type) bool {
 		return true
 	}
 	return false
+}
+
+// allOfTypeof reports whether every value of t has the typeof primitive p:
+// p itself, its literals, or a union of them.
+func (c *Checker) allOfTypeof(t, p types.Type) bool {
+	if u, ok := t.(*types.UnionType); ok {
+		for _, m := range u.Types {
+			if !c.allOfTypeof(m, p) {
+				return false
+			}
+		}
+		return len(u.Types) > 0
+	}
+	if t == p {
+		return true
+	}
+	if _, isLit := t.(*types.LiteralType); isLit {
+		return c.rel.GetWidenedType(t) == p
+	}
+	return false
+}
+
+// memberValueGuard turns a discriminant guard (`x.p === "A"`) into a guard
+// on the property reference x.p itself.
+func memberValueGuard(guard *TypeGuard) *TypeGuard {
+	return &TypeGuard{
+		VariableName: guard.VariableName + "." + guard.DiscriminantProp,
+		NarrowedType: guard.DiscriminantValue,
+		IsNegated:    guard.IsNegated,
+	}
+}
+
+// narrowsAsMemberValue reports whether a discriminant guard on a value that
+// is not a union narrows the property reference instead: an object whose
+// property is declared with a union type.
+func (c *Checker) narrowsAsMemberValue(guard *TypeGuard, objectType types.Type) bool {
+	if _, isUnion := objectType.(*types.UnionType); isUnion {
+		return false
+	}
+	if _, isObj := objectType.(*types.ObjectType); !isObj {
+		return false
+	}
+	_, isUnionProp := c.resolveMemberExpressionOriginalType(guard.VariableName + "." + guard.DiscriminantProp).(*types.UnionType)
+	return isUnionProp
 }

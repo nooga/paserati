@@ -2285,6 +2285,12 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 	if !ok {
 		return nil
 	}
+	if len(path) > 1 {
+		// `typeof x.p` where a guard narrowed x.p.
+		if narrowed := typeOfRefIn(c.env, strings.Join(path, ".")); narrowed != nil && !isNarrowingMarker(narrowed) {
+			varType = narrowed
+		}
+	}
 
 	debugPrintf("// [Checker resolveTypeofType] Found type for '%v': %T\n", path, varType)
 	return varType
