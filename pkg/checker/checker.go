@@ -401,6 +401,8 @@ type Checker struct {
 	// used before being assigned (collectUnassignedReads).
 	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
 	daCollectOnly   bool
+	// inferSpreadArgs marks the spread arguments of the call being inferred.
+	inferSpreadArgs map[int]bool
 	// everWritten holds every name the program writes anywhere.
 	everWritten map[string]bool
 	// fixInScopeTypeParams makes isGenericSignature treat type parameters

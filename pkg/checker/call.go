@@ -1056,7 +1056,10 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 			if !c.isGenericSignature(sig) {
 				continue
 			}
+			savedSpreads := c.inferSpreadArgs
+			c.inferSpreadArgs = nil // an enclosing call's arguments, not these
 			constraints := c.collectTypeParameterConstraints(sig, argTypes)
+			c.inferSpreadArgs = savedSpreads
 			solution := c.solveTypeParameterConstraints(constraints)
 			if len(solution) == 0 {
 				continue
@@ -1317,15 +1320,40 @@ func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, ar
 			if argTypes[i] == nil {
 				continue
 			}
-			constraints = append(constraints, c.collectConstraintsFromType(sig.RestParameterType, argTypes[i])...)
+			constraints = append(constraints, c.collectRestArgConstraints(sig, i, argTypes[i])...)
 		}
 	}
 
 	return constraints
 }
 
+// collectRestArgConstraints infers from an argument bound to the rest
+// parameter: a spread argument (typed as its array) against the rest array,
+// any other against its element type.
+func (c *Checker) collectRestArgConstraints(sig *types.Signature, i int, argType types.Type) []TypeParameterConstraint {
+	arr, isArray := sig.RestParameterType.(*types.ArrayType)
+	spread, known := c.inferSpreadArgs[i]
+	if !known {
+		// Without the argument nodes an array argument may be a spread.
+		_, spread = argType.(*types.ArrayType)
+	}
+	if !isArray || spread {
+		return c.collectConstraintsFromType(sig.RestParameterType, argType)
+	}
+	savedTop, savedSig := c.inferTopParam, c.inferSig
+	c.inferTopParam, c.inferSig = arr.ElementType, sig
+	defer func() { c.inferTopParam, c.inferSig = savedTop, savedSig }()
+	return c.collectConstraintsFromType(arr.ElementType, argType)
+}
+
 // inferGenericFunctionCall attempts to infer type arguments for a generic function call
 func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, genericSig *types.Signature) *types.Signature {
+	savedSpreads := c.inferSpreadArgs
+	c.inferSpreadArgs = make(map[int]bool, len(callNode.Arguments))
+	for i, arg := range callNode.Arguments {
+		_, c.inferSpreadArgs[i] = arg.(*parser.SpreadElement)
+	}
+	defer func() { c.inferSpreadArgs = savedSpreads }()
 	debugPrintf("// [Checker Inference] Starting type inference for generic function call\n")
 	argContexts := make(map[parser.Expression]types.Type, len(callNode.Arguments))
 	defer func() { c.lastArgContexts = argContexts }()
@@ -1619,10 +1647,10 @@ func (c *Checker) collectTypeParameterConstraints(sig *types.Signature, argTypes
 
 	if sig.RestParameterType != nil {
 		for i := len(sig.ParameterTypes); i < len(argTypes); i++ {
-			if i >= len(argTypes) || argTypes[i] == nil {
+			if argTypes[i] == nil {
 				continue
 			}
-			constraints = append(constraints, c.collectConstraintsFromType(sig.RestParameterType, argTypes[i])...)
+			constraints = append(constraints, c.collectRestArgConstraints(sig, i, argTypes[i])...)
 		}
 	}
 
@@ -2004,23 +2032,48 @@ func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConst
 	bestConfidence := make(map[*types.TypeParameter]int)
 	bestTypes := make(map[*types.TypeParameter][]types.Type)
 	bestCombine := make(map[*types.TypeParameter]bool)
+	// nullables holds the null and undefined candidates at the best
+	// confidence, which getCommonSupertype sets aside and adds back.
+	nullables := make(map[*types.TypeParameter][]types.Type)
+	isNullable := func(t types.Type) bool {
+		return c.strictNullChecks && (t == types.Null || t == types.Undefined)
+	}
 
 	for _, constraint := range constraints {
-		existing, exists := bestConfidence[constraint.TypeParameter]
-		if !exists || constraint.Confidence > existing {
-			bestConfidence[constraint.TypeParameter] = constraint.Confidence
-			bestTypes[constraint.TypeParameter] = []types.Type{constraint.InferredType}
-			bestCombine[constraint.TypeParameter] = constraint.Combine
-		} else if constraint.Confidence == existing {
-			if bestCombine[constraint.TypeParameter] && constraint.Combine {
-				bestTypes[constraint.TypeParameter] = appendUniqueType(bestTypes[constraint.TypeParameter], constraint.InferredType)
-			} else if cur := bestTypes[constraint.TypeParameter]; len(cur) == 1 && isObjectTypeCandidate(cur[0]) && isObjectTypeCandidate(constraint.InferredType) &&
-				// Among equally good object candidates keep the first unless a
-				// later one is a strict supertype of it (getCommonSupertype).
-				c.rel.IsAssignable(cur[0], constraint.InferredType) && !c.rel.IsAssignable(constraint.InferredType, cur[0]) {
-				bestTypes[constraint.TypeParameter] = []types.Type{constraint.InferredType}
-			}
+		tp := constraint.TypeParameter
+		existing, exists := bestConfidence[tp]
+		if exists && constraint.Confidence < existing {
+			continue
 		}
+		if !exists || constraint.Confidence > existing {
+			bestConfidence[tp] = constraint.Confidence
+			delete(bestTypes, tp)
+			delete(nullables, tp)
+		}
+		if isNullable(constraint.InferredType) {
+			nullables[tp] = appendUniqueType(nullables[tp], constraint.InferredType)
+			continue
+		}
+		cur, has := bestTypes[tp]
+		switch {
+		case !has:
+			bestTypes[tp] = []types.Type{constraint.InferredType}
+			bestCombine[tp] = constraint.Combine
+		case bestCombine[tp] && constraint.Combine:
+			// Literal candidates unite only when they share a base type
+			// (literalTypesWithSameBaseType); otherwise the first stays.
+			if c.sameLiteralBase(cur[0], constraint.InferredType) {
+				bestTypes[tp] = appendUniqueType(cur, constraint.InferredType)
+			}
+		case len(cur) == 1 && isObjectTypeCandidate(cur[0]) && isObjectTypeCandidate(constraint.InferredType) &&
+			// Among equally good object candidates keep the first unless a
+			// later one is a strict supertype of it (getCommonSupertype).
+			c.rel.IsAssignable(cur[0], constraint.InferredType) && !c.rel.IsAssignable(constraint.InferredType, cur[0]):
+			bestTypes[tp] = []types.Type{constraint.InferredType}
+		}
+	}
+	for tp, ns := range nullables {
+		bestTypes[tp] = append(bestTypes[tp], ns...)
 	}
 
 	// Convert best constraints to solution
@@ -2039,6 +2092,17 @@ func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConst
 	}
 
 	return solution
+}
+
+// sameLiteralBase reports whether two literal candidates widen to the same
+// primitive; other candidates (index signature values) always unite.
+func (c *Checker) sameLiteralBase(a, b types.Type) bool {
+	_, aLit := a.(*types.LiteralType)
+	_, bLit := b.(*types.LiteralType)
+	if !aLit || !bLit {
+		return true
+	}
+	return c.rel.GetWidenedType(a).Equals(c.rel.GetWidenedType(b))
 }
 
 func markConstraintsCombine(constraints []TypeParameterConstraint) {
