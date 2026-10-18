@@ -5,6 +5,7 @@ import (
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // isFreshLiteralExpression reports whether node is literal syntax written
@@ -331,4 +332,48 @@ func stripReadonlyArrays(t types.Type) types.Type {
 		}
 	}
 	return t
+}
+
+// isPrimitiveDestructuringSource reports whether t is a string, number,
+// boolean or bigint type (or a literal of one), destructured through its
+// apparent type.
+func isPrimitiveDestructuringSource(t types.Type) bool {
+	switch t {
+	case types.String, types.Number, types.Boolean, types.BigInt:
+		return true
+	}
+	if lt, ok := t.(*types.LiteralType); ok {
+		switch lt.Value.Type() {
+		case vm.TypeString, vm.TypeFloatNumber, vm.TypeIntegerNumber, vm.TypeBoolean, vm.TypeBigInt:
+			return true
+		}
+	}
+	return false
+}
+
+// primitiveApparentName is the name of a primitive's apparent type, as tsc
+// prints it in member errors.
+func primitiveApparentName(t types.Type) string {
+	base := t
+	if lt, ok := t.(*types.LiteralType); ok {
+		switch lt.Value.Type() {
+		case vm.TypeString:
+			base = types.String
+		case vm.TypeBoolean:
+			base = types.Boolean
+		case vm.TypeBigInt:
+			base = types.BigInt
+		default:
+			base = types.Number
+		}
+	}
+	switch base {
+	case types.String:
+		return "String"
+	case types.Boolean:
+		return "Boolean"
+	case types.BigInt:
+		return "BigInt"
+	}
+	return "Number"
 }

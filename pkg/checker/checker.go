@@ -4473,6 +4473,13 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 				if arrType, ok := destructureType.(*types.ArrayType); ok {
 					propType = arrType.ElementType
 				}
+			} else if isPrimitiveDestructuringSource(destructureType) {
+				// A primitive is destructured through its apparent type.
+				if pt := c.getPropertyTypeFromType(destructureType, propName, false); pt != nil && pt != types.Never {
+					propType = pt
+				} else {
+					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, primitiveApparentName(destructureType)))
+				}
 			} else if destructureType == types.Any {
 				propType = types.Any
 			}

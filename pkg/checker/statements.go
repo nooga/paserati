@@ -1556,7 +1556,14 @@ func (c *Checker) checkObjectDestructuringInForLoop(node *parser.ObjectDestructu
 		// Try to extract property type from source object
 		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
 			propKey := keyIdent.Value
-			if objType, ok := sourceType.(*types.ObjectType); ok {
+			if isPrimitiveDestructuringSource(sourceType) {
+				if pt := c.getPropertyTypeFromType(sourceType, propKey, false); pt != nil && pt != types.Never {
+					propType = pt
+				} else {
+					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propKey, primitiveApparentName(sourceType)))
+					propType = types.Any
+				}
+			} else if objType, ok := sourceType.(*types.ObjectType); ok {
 				if pt, exists := objType.Props()[propKey]; exists {
 					propType = pt
 				} else {
