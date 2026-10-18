@@ -331,6 +331,17 @@ func loopHasBreak(loop parser.Node) bool {
 	return found
 }
 
+// loopHasContinue reports whether a continue appears anywhere inside n.
+func loopHasContinue(n parser.Node) bool {
+	found := false
+	forEachDescendant(n, func(n parser.Node) {
+		if _, ok := n.(*parser.ContinueStatement); ok {
+			found = true
+		}
+	})
+	return found
+}
+
 // resetToDeclared makes the code after a construct we do not model see the
 // declared type of every reference it wrote.
 func (c *Checker) resetToDeclared(originalEnv *Environment, keys []string) {

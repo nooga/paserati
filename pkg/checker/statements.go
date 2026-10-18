@@ -1294,10 +1294,18 @@ func (c *Checker) checkForStatement(node *parser.ForStatement) {
 	// 2. Visit parts within the loop scope
 	c.visit(node.Initializer)
 	c.visit(node.Condition)
-	c.visit(node.Update)
+	// The update runs after the body, so it sees the body's assignments;
+	// a continue would join other states in, so keep the head order then.
+	updateLast := !loopHasContinue(node.Body)
+	if !updateLast {
+		c.visit(node.Update)
+	}
 	c.loopDepth++
 	c.visitNarrowedBy(node.Condition, node.Body)
 	c.loopDepth--
+	if updateLast {
+		c.visit(node.Update)
+	}
 
 	// 3. Restore the outer environment
 	c.env = originalEnv
@@ -1500,6 +1508,10 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 							c.addCannotFindNameError(ident, c.env, ident.Value)
 						} else if !c.rel.IsAssignable(elementType, varType) {
 							c.addErrorWithCode(ident, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", elementType.String(), varType.String()))
+						} else if reduced := c.assignmentReducedType(c.declaredTypeOfRef(ident.Value), elementType); reduced != nil {
+							// Each iteration assigns the element, so the body
+							// sees the declared type narrowed by it.
+							loopEnv.Define(ident.Value, reduced, false)
 						}
 						ident.SetComputedType(elementType)
 					} else {
