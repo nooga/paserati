@@ -134,6 +134,9 @@ func (r *Relation) isAssignable(source, target Type) bool {
 	}
 	source = simplifyKeyof(source)
 	target = simplifyKeyof(target)
+	if related, decided := homomorphicMappedRelated(source, target); decided {
+		return related
+	}
 
 	// Handle forward references - they should be treated as equivalent to each other
 	// This is a simple approach for now - in a full implementation, we'd resolve them properly
@@ -1720,4 +1723,189 @@ func IsFunctionLike(t Type) bool {
 		}
 	}
 	return false
+}
+
+// homomorphicMappedRelated relates generic homomorphic mapped types
+// ({ [P in keyof M]: M[P] }, where M is a type parameter T or another such
+// mapped type over T) to T and to each other, following tsc's
+// structuredTypeRelatedTo:
+//   - T is related to { [P in keyof T]: T[P] } unless the target removes
+//     optionality (-?);
+//   - a mapped type over T is related to T unless it makes properties
+//     optional (+?, also through a mapped type it wraps);
+//   - two mapped types over T relate when the source is no more optional
+//     than the target (getCombinedMappedTypeOptionality) and the target
+//     admits undefined wherever the source template adds it;
+//   - an empty object type is related to a mapped type that adds ?.
+//
+// A template counts as T[P] also as a conditional type whose branches are
+// each never or T[P] (NonNullable<T[P]>). Other shapes are left undecided.
+func homomorphicMappedRelated(source, target Type) (related, decided bool) {
+	if tm, ok := target.(*MappedType); ok {
+		x, tNarrowed, ok := mappedRoot(tm)
+		if !ok {
+			return false, false
+		}
+		if so, ok := source.(*ObjectType); ok && tm.OptionalModifier == "+" && isEmptyObject(so) {
+			return true, true
+		}
+		if sp, ok := source.(*TypeParameterType); ok && sameTypeParam(sp, x) && tm.OptionalModifier != "-" && !tNarrowed {
+			if inner, isMapped := mappedModifiersType(tm).(*MappedType); isMapped {
+				return homomorphicMappedRelated(source, inner)
+			}
+			return true, true
+		}
+		if sm, ok := source.(*MappedType); ok {
+			sx, sNarrowed, ok := mappedRoot(sm)
+			if !ok || !sameTypeParam(sx, x) {
+				return false, false
+			}
+			if tNarrowed && !sNarrowed {
+				// A narrowed target template (NonNullable<T[P]>) accepts
+				// only a source narrowed the same way.
+				return false, true
+			}
+			so, to := combinedOptionality(sm), combinedOptionality(tm)
+			sourceAddsUndefined := innerOptional(sm)
+			targetAdmitsUndefined := to == 1
+			return so <= to && (!sourceAddsUndefined || targetAdmitsUndefined), true
+		}
+		return false, false
+	}
+	if tp, ok := target.(*TypeParameterType); ok {
+		if sm, ok := source.(*MappedType); ok {
+			if sx, _, ok := mappedRoot(sm); ok && sameTypeParam(sx, tp) {
+				return combinedOptionality(sm) != 1, true
+			}
+		}
+	}
+	return false, false
+}
+
+// mappedModifiersType returns M when mt is { [P in keyof M]: ... }. An
+// instantiated wrapper such as Partial<Readonly<T>> may keep keyof T as its
+// constraint and index the wrapped mapped type in its template
+// ({ [P in keyof T]?: Readonly<T>[P] }); M is then that mapped type.
+func mappedModifiersType(mt *MappedType) Type {
+	k, ok := mt.ConstraintType.(*KeyofType)
+	if !ok {
+		return nil
+	}
+	if ia, ok := mt.ValueType.(*IndexedAccessType); ok {
+		if inner, ok := ia.ObjectType.(*MappedType); ok && inner != mt {
+			if innerKey, ok := mappedModifiersType(inner).(*TypeParameterType); ok {
+				if tp, ok := k.OperandType.(*TypeParameterType); ok && sameTypeParam(innerKey, tp) {
+					return inner
+				}
+			}
+			if ik, ok := inner.ConstraintType.(*KeyofType); ok && ik.OperandType == k.OperandType {
+				return inner
+			}
+		}
+	}
+	return k.OperandType
+}
+
+// mappedRoot follows a homomorphic mapped type down to the type parameter T
+// it maps over: each level must be { [P in keyof M]: M[P] }, where the
+// outermost template may also be narrowed (a conditional whose branches
+// are each never or M[P]).
+func mappedRoot(mt *MappedType) (root *TypeParameterType, narrowed bool, ok bool) {
+	for depth := 0; depth < 8; depth++ {
+		m := mappedModifiersType(mt)
+		if m == nil {
+			return nil, false, false
+		}
+		if !isIndexedBy(mt.ValueType, m, mt.TypeParameter) {
+			if depth > 0 || !isNarrowedIndex(mt.ValueType, m, mt.TypeParameter) {
+				return nil, false, false
+			}
+			narrowed = true
+		}
+		switch mm := m.(type) {
+		case *TypeParameterType:
+			return mm, narrowed, true
+		case *MappedType:
+			mt = mm
+		default:
+			return nil, false, false
+		}
+	}
+	return nil, false, false
+}
+
+// combinedOptionality is tsc's getCombinedMappedTypeOptionality: a mapped
+// type's own ?/-? modifier, else that of the mapped type it wraps.
+func combinedOptionality(mt *MappedType) int {
+	for depth := 0; depth < 8; depth++ {
+		if o := mappedOptionality(mt); o != 0 {
+			return o
+		}
+		inner, ok := mappedModifiersType(mt).(*MappedType)
+		if !ok {
+			return 0
+		}
+		mt = inner
+	}
+	return 0
+}
+
+// innerOptional reports whether the mapped type mt wraps makes properties
+// optional, so mt's template M[P] includes undefined.
+func innerOptional(mt *MappedType) bool {
+	inner, ok := mappedModifiersType(mt).(*MappedType)
+	return ok && combinedOptionality(inner) == 1
+}
+
+func sameTypeParam(a, b *TypeParameterType) bool {
+	if a == nil || b == nil || a.Parameter == nil || b.Parameter == nil {
+		return false
+	}
+	return a.Parameter == b.Parameter || (a.Parameter.Name == b.Parameter.Name && !a.Parameter.Canonical && !b.Parameter.Canonical)
+}
+
+// isIndexedBy reports whether t is m[P] for the mapped type's key P.
+func isIndexedBy(t Type, m Type, key string) bool {
+	ia, ok := t.(*IndexedAccessType)
+	if !ok {
+		return false
+	}
+	switch obj := ia.ObjectType.(type) {
+	case *TypeParameterType:
+		mp, ok := m.(*TypeParameterType)
+		if !ok || !sameTypeParam(obj, mp) {
+			return false
+		}
+	default:
+		if ia.ObjectType != m {
+			return false
+		}
+	}
+	idx, ok := ia.IndexType.(*TypeParameterType)
+	return ok && idx.Parameter != nil && idx.Parameter.Name == key
+}
+
+// isNarrowedIndex reports whether t is a conditional type whose branches
+// are each never or m[P].
+func isNarrowedIndex(t Type, m Type, key string) bool {
+	ct, ok := t.(*ConditionalType)
+	if !ok {
+		return false
+	}
+	branch := func(b Type) bool { return b == Never || isIndexedBy(b, m, key) }
+	return branch(ct.TrueType) && branch(ct.FalseType)
+}
+
+func mappedOptionality(mt *MappedType) int {
+	switch mt.OptionalModifier {
+	case "+":
+		return 1
+	case "-":
+		return -1
+	}
+	return 0
+}
+
+func isEmptyObject(o *ObjectType) bool {
+	return len(o.Props()) == 0 && len(o.CallSigs()) == 0 && len(o.ConstructSigs()) == 0 && len(o.IndexSigs()) == 0 && !o.IsClassInstance()
 }
