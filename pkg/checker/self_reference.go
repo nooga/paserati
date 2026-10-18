@@ -210,3 +210,20 @@ func (c *Checker) checkClassPropertyComputedName(key *parser.ComputedPropertyNam
 	}
 	c.addErrorAtStart(key, errors.TS1166, "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
 }
+
+// isNonBindableDynamicName reports a computed name in a type member that is
+// neither a literal nor an entity name (tsc's isNonBindableDynamicName),
+// which TS1169 and TS1170 reject.
+func isNonBindableDynamicName(expr parser.Expression) bool {
+	switch e := expr.(type) {
+	case *parser.StringLiteral, *parser.NumberLiteral:
+		return false
+	case *parser.TemplateLiteral:
+		return len(e.Parts) > 1
+	case *parser.PrefixExpression:
+		if _, num := e.Right.(*parser.NumberLiteral); num && (e.Operator == "-" || e.Operator == "+") {
+			return false
+		}
+	}
+	return entityNameText(expr) == ""
+}

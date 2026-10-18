@@ -168,6 +168,8 @@ const (
 	TS18013 = "TS18013" // Property 'X' is not accessible outside class 'Y'
 	TS1345  = "TS1345"  // void cannot be tested for truthiness
 	TS1166  = "TS1166"  // class property computed name must be a simple literal
+	TS1169  = "TS1169"  // interface computed name must be a literal or unique symbol
+	TS1170  = "TS1170"  // type literal computed name must be a literal or unique symbol
 	TS2302  = "TS2302"  // static members cannot reference class type parameters
 	TS2783  = "TS2783"  // property specified more than once (spread overwrites)
 	TS7008  = "TS7008"  // Member implicitly has an 'any' type

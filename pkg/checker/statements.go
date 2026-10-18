@@ -442,6 +442,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// This is a computed property: [expr]: Type
 			if prop.ComputedName != nil {
 				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: prop.ComputedName, env: c.env})
+				if isNonBindableDynamicName(prop.ComputedName) {
+					c.addErrorAtStart(prop.ComputedName, errors.TS1169, "A computed property name in an interface must refer to an expression whose type is a literal type or a 'unique symbol' type.")
+				}
 			}
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {

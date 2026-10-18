@@ -3128,6 +3128,9 @@ func (c *Checker) checkDuplicateTypeLiteralMembers(objectType *parser.ObjectType
 	seen := make(map[string]*parser.ObjectTypeProperty)
 	reported := make(map[string]bool)
 	for _, prop := range objectType.Properties {
+		if prop.IsComputedProperty && prop.ComputedName != nil && isNonBindableDynamicName(prop.ComputedName) {
+			c.addErrorAtStart(prop.ComputedName, errors.TS1170, "A computed property name in a type literal must refer to an expression whose type is a literal type or a 'unique symbol' type.")
+		}
 		if prop.Name == nil || prop.IsCallSignature || prop.IsConstructSignature || prop.IsIndexSignature {
 			continue
 		}
