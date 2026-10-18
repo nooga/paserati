@@ -844,6 +844,28 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	getters := make(map[string]*parser.MethodDefinition)
 	setters := make(map[string]*parser.MethodDefinition)
 
+	// Static members' computed keys are checked like instance ones.
+	deferStaticKey := func(key parser.Expression) {
+		if computedKey, isComputed := key.(*parser.ComputedPropertyName); isComputed {
+			c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+		}
+	}
+	for _, method := range body.Methods {
+		if method.IsStatic {
+			deferStaticKey(method.Key)
+		}
+	}
+	for _, sig := range body.MethodSigs {
+		if sig.IsStatic {
+			deferStaticKey(sig.Key)
+		}
+	}
+	for _, prop := range body.Properties {
+		if prop.IsStatic {
+			deferStaticKey(prop.Key)
+		}
+	}
+
 	// First pass: collect getters and setters (also visit computed keys)
 	for _, method := range body.Methods {
 		if method.Kind == "getter" && !method.IsStatic {

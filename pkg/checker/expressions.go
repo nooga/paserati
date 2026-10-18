@@ -26,6 +26,9 @@ func (c *Checker) isValidComputedPropertyNameType(t types.Type) bool {
 	if t == nil || t == types.Any {
 		return true
 	}
+	if t == types.Null || t == types.Undefined {
+		return false
+	}
 	return c.rel.IsAssignable(t, types.NewUnionType(types.String, types.Number, types.Symbol))
 }
 
@@ -3379,6 +3382,20 @@ func (c *Checker) instantiateGenericMethod(methodType types.Type, elementType ty
 }
 
 // checkYieldExpression handles type checking for yield expressions in generator functions
+// yieldResultType is the value a plain `yield` evaluates to: the TNext of
+// the generator's annotated return type, or any without one.
+func (c *Checker) yieldResultType() types.Type {
+	if inst, ok := c.currentExpectedReturnType.(*types.InstantiatedType); ok && inst.Generic != nil {
+		switch inst.Generic.Name {
+		case "Generator", "AsyncGenerator", "Iterator", "AsyncIterator":
+			if len(inst.TypeArguments) >= 3 && inst.TypeArguments[2] != nil {
+				return inst.TypeArguments[2]
+			}
+		}
+	}
+	return types.Any
+}
+
 func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 	if c.noImplicitAny && node.Value != nil {
 		c.markFunctionsUnder(node.Value, 0) // typed by the generator's contextual yield type
@@ -3509,7 +3526,11 @@ setYieldedType:
 	// 2. For now, set the computed type to the yielded value type
 	// In a full implementation, this would be IteratorResult<T, TReturn>
 	// but for basic functionality, we'll use the yielded type
-	node.SetComputedType(yieldedType)
+	if node.Delegate {
+		node.SetComputedType(yieldedType)
+	} else {
+		node.SetComputedType(c.yieldResultType())
+	}
 
 	// 3. Add validation that yield can only be used in generator functions
 	// TODO: Implement generator function context tracking
