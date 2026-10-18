@@ -88,23 +88,32 @@ func (cm *ClassMetadata) AddMember(memberName string, accessLevel AccessModifier
 // AddGetterMember adds a getter method with access control information
 func (cm *ClassMetadata) AddGetterMember(memberName string, accessLevel AccessModifier, isStatic bool) {
 	accessLevel = privateNameAccess(memberName, accessLevel)
+	// A setter of the same name already declared makes this a get/set pair.
+	hasSetter := false
+	if prev := cm.MemberAccess[memberName]; prev != nil && prev.IsSetter && prev.IsStatic == isStatic {
+		hasSetter = true
+	}
 	cm.MemberAccess[memberName] = &MemberAccessInfo{
 		AccessLevel: accessLevel,
 		IsStatic:    isStatic,
 		IsReadonly:  false, // Getters are not readonly in the traditional sense
 		IsGetter:    true,
-		IsSetter:    false,
+		IsSetter:    hasSetter,
 	}
 }
 
 // AddSetterMember adds a setter method with access control information
 func (cm *ClassMetadata) AddSetterMember(memberName string, accessLevel AccessModifier, isStatic bool) {
 	accessLevel = privateNameAccess(memberName, accessLevel)
+	hasGetter := false
+	if prev := cm.MemberAccess[memberName]; prev != nil && prev.IsGetter && prev.IsStatic == isStatic {
+		hasGetter = true
+	}
 	cm.MemberAccess[memberName] = &MemberAccessInfo{
 		AccessLevel: accessLevel,
 		IsStatic:    isStatic,
 		IsReadonly:  false,
-		IsGetter:    false,
+		IsGetter:    hasGetter,
 		IsSetter:    true,
 	}
 }

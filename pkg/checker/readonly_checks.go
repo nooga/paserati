@@ -63,10 +63,11 @@ func (c *Checker) checkReadonlyAssignmentTarget(target parser.Expression) bool {
 			}
 			return false
 		}
-		// A class's readonly fields are assignable in its own constructor.
+		// A class's readonly fields are assignable in its own constructor
+		// (not a derived class's).
 		if c.currentClassContext != nil &&
 			c.currentClassContext.ContextType == types.AccessContextConstructor &&
-			c.isThisExpression(objectExpr) {
+			c.isThisExpression(objectExpr) && c.declaredByCurrentClass(objectType, name) && !isGetterOnly(objectType, name) {
 			return false
 		}
 		c.addErrorWithCode(target, errors.TS2540, fmt.Sprintf("Cannot assign to '%s' because it is a read-only property.", name))
@@ -206,4 +207,26 @@ func hasMutableArrayLikeMember(t types.Type) bool {
 		}
 	}
 	return false
+}
+
+// declaredByCurrentClass reports whether the class being checked declares
+// property name itself, rather than inheriting it (unknown counts as own).
+func (c *Checker) declaredByCurrentClass(objectType types.Type, name string) bool {
+	obj, ok := objectType.(*types.ObjectType)
+	if !ok || obj.ClassMeta == nil || c.currentClassContext == nil {
+		return true
+	}
+	declarer := declaringClassName(obj, name)
+	return declarer == "" || declarer == c.currentClassContext.CurrentClassName
+}
+
+// isGetterOnly reports whether a class declares name as a get accessor with
+// no set accessor.
+func isGetterOnly(objectType types.Type, name string) bool {
+	obj, ok := objectType.(*types.ObjectType)
+	if !ok || obj.ClassMeta == nil {
+		return false
+	}
+	info := obj.GetMemberAccessInfo(name)
+	return info != nil && info.IsGetter && !info.IsSetter
 }

@@ -971,8 +971,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			// Add specific getter/setter metadata
 			if instanceType.ClassMeta != nil {
 				if getter != nil && setter != nil {
-					// Both getter and setter - for now, mark as getter (could be enhanced later)
 					instanceType.ClassMeta.AddGetterMember(propName, accessLevel, false)
+					instanceType.ClassMeta.AddSetterMember(propName, accessLevel, false)
 				} else if getter != nil {
 					// Only getter: a read-only property.
 					instanceType.ClassMeta.AddGetterMember(propName, accessLevel, false)
