@@ -424,6 +424,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	if !ambient && !c.skipValidation() {
 		c.validateClassMemberConstraints(node.Body)
 		c.checkSuperBeforeThis(node.SuperClass, node.Body)
+		c.checkThisInDecoratedStaticInitializers(node)
 	}
 	if ambient {
 		outerAmbient := c.ambientClassBody

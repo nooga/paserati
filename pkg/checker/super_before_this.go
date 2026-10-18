@@ -192,3 +192,33 @@ func (w *superFlow) loopBody(body parser.Node, called bool) bool {
 	w.breaks = w.breaks[:len(w.breaks)-1]
 	return end
 }
+
+// checkThisInDecoratedStaticInitializers reports TS2816 for `this` in a
+// static property initializer (arrow functions included) of a class with
+// --experimentalDecorators class decorators (tsc's
+// checkThisInStaticClassFieldInitializerInDecoratedClass).
+func (c *Checker) checkThisInDecoratedStaticInitializers(node *parser.ClassDeclaration) {
+	if !c.experimentalDecorators || len(node.Decorators) == 0 || node.Body == nil {
+		return
+	}
+	var walk func(n parser.Node)
+	walk = func(n parser.Node) {
+		if isNilNode(n) {
+			return
+		}
+		switch n.(type) {
+		case *parser.ThisExpression:
+			c.addErrorWithCode(n, errors.TS2816, "Cannot use 'this' in a static property initializer of a decorated class.")
+			return
+		case *parser.FunctionLiteral, *parser.ShorthandMethod, *parser.MethodDefinition,
+			*parser.ClassExpression, *parser.ClassDeclaration:
+			return
+		}
+		forEachChildInScope(n, walk)
+	}
+	for _, prop := range node.Body.Properties {
+		if prop != nil && prop.IsStatic {
+			walk(prop.Value)
+		}
+	}
+}
