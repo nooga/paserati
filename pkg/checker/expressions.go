@@ -2827,7 +2827,11 @@ func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpressio
 // FIXME: other parameters wait on inference matching tsc's.
 func (c *Checker) reportFirstUnassignableArgument(args []parser.Expression, generic, sig *types.Signature) {
 	for i, arg := range args {
-		if _, isSpread := arg.(*parser.SpreadElement); isSpread || i >= len(sig.ParameterTypes) || i >= len(generic.ParameterTypes) {
+		if i >= len(generic.ParameterTypes) {
+			c.reportFirstUnassignableRestArgument(args[i:], generic, sig)
+			return
+		}
+		if _, isSpread := arg.(*parser.SpreadElement); isSpread || i >= len(sig.ParameterTypes) {
 			return
 		}
 		if tp, ok := generic.ParameterTypes[i].(*types.TypeParameterType); !ok || tp.Parameter == nil || tp.Parameter.Constraint == nil {
@@ -2842,6 +2846,40 @@ func (c *Checker) reportFirstUnassignableArgument(args []parser.Expression, gene
 		}
 		if !c.isArgumentAssignableWithExpansion(argType, paramType) {
 			c.reportNotAssignable(arg, arg, argType, paramType, headArgument)
+			return
+		}
+	}
+}
+
+// reportFirstUnassignableRestArgument checks the arguments that fill a rest
+// parameter whose element is a bare type parameter (`...s: T[]`) against the
+// inferred element type; a spread argument contributes its element type.
+func (c *Checker) reportFirstUnassignableRestArgument(args []parser.Expression, generic, sig *types.Signature) {
+	genRest, ok := generic.RestParameterType.(*types.ArrayType)
+	if !ok {
+		return
+	}
+	if _, bare := genRest.ElementType.(*types.TypeParameterType); !bare {
+		return
+	}
+	rest, ok := sig.RestParameterType.(*types.ArrayType)
+	if !ok || rest.ElementType == nil {
+		return
+	}
+	for _, arg := range args {
+		var argType types.Type
+		if spread, isSpread := arg.(*parser.SpreadElement); isSpread {
+			if t := spread.Argument.GetComputedType(); t != nil {
+				argType = c.getSpreadElementType(t)
+			}
+		} else {
+			argType = arg.GetComputedType()
+		}
+		if argType == nil || argType == types.Any {
+			continue
+		}
+		if !c.isArgumentAssignableWithExpansion(argType, rest.ElementType) {
+			c.reportNotAssignable(arg, nil, argType, rest.ElementType, headArgument)
 			return
 		}
 	}
