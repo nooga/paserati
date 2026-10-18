@@ -346,7 +346,29 @@ func (w *eeWalker) declarators(decls []*VarDeclarator, name *Identifier, value E
 		if d.Name != nil {
 			w.binding(d.Name, c)
 		}
+		w.typeName(d.TypeAnnotation, c)
 		w.expr(d.Value, c)
+	}
+}
+
+// typeName reports a strict-mode reserved word written as a type reference
+// or a typeof query name (`var v: yield`, `var v: typeof yield`); in a type
+// position `yield` is an identifier even inside a generator.
+func (w *eeWalker) typeName(t Expression, c eeCtx) {
+	if !c.strict {
+		return
+	}
+	var id *Identifier
+	switch tt := t.(type) {
+	case *Identifier:
+		id = tt
+	case *TypeofTypeExpression:
+		if len(tt.Path) <= 1 && tt.Token != nil {
+			id = &Identifier{Token: tt.Token, Value: tt.Identifier}
+		}
+	}
+	if id != nil && id.Token != nil && (id.Value == "yield" || strictReservedWords[id.Value]) {
+		w.strictReserved(id, c)
 	}
 }
 

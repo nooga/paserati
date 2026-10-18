@@ -1427,6 +1427,15 @@ func (p *Parser) parseDeclareStatement() Statement {
 		return p.parseDeclareVarStatement()
 	case lexer.VAR:
 		return p.parseDeclareVarStatement()
+	case lexer.ASYNC:
+		if !p.peekTokenIs(lexer.FUNCTION) {
+			break
+		}
+		if p.tscDiagnostics {
+			p.addGrammarErrorWithCode(p.curToken, "TS1040", "'async' modifier cannot be used in an ambient context.")
+		}
+		p.nextToken()
+		fallthrough
 	case lexer.FUNCTION:
 		sig := p.parseFunctionSignatureAllowOmittedReturn()
 		if sig == nil {
