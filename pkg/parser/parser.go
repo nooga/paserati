@@ -49,9 +49,11 @@ type Parser struct {
 	source *source.SourceFile // cached from lexer
 	errors []errors.PaseratiError
 
-	// checkerReportsInvalidTargets leaves invalid assignment and ++/--
-	// targets to the type checker (TS2364/TS2357), as tsc's parser does.
-	checkerReportsInvalidTargets bool
+	// tscDiagnostics parses the way tsc does for a caller that only
+	// type-checks: invalid assignment and ++/-- targets are left to the
+	// checker (TS2364/TS2357), and malformed for-of/for-in heads are
+	// recovered with tsc's grammar errors.
+	tscDiagnostics bool
 
 	// JS redeclaration early errors, re-labelled by finishBinding.
 	redeclarationErrors []*errors.SyntaxError
@@ -545,12 +547,11 @@ func (p *Parser) Errors() []errors.PaseratiError {
 
 // SetDisallowSuper sets whether super expressions should be disallowed.
 // When true, parsing super will emit a SyntaxError (used for indirect eval).
-// SetCheckerReportsInvalidTargets makes the parser accept any expression as
-// the target of an assignment or ++/--, building the node and leaving the
-// diagnostic to the type checker as tsc does. Only for callers that type-check
-// and do not run the program: the early SyntaxError is not raised.
-func (p *Parser) SetCheckerReportsInvalidTargets(on bool) {
-	p.checkerReportsInvalidTargets = on
+// SetTscDiagnostics makes the parser report and recover from errors the way
+// tsc does (see Parser.tscDiagnostics). Only for callers that type-check and do
+// not run the program: some early SyntaxErrors are left to the checker.
+func (p *Parser) SetTscDiagnostics(on bool) {
+	p.tscDiagnostics = on
 }
 
 func (p *Parser) SetDisallowSuper(disallow bool) {
@@ -6164,7 +6165,7 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		p.addErrorWithCode(expr.Token, "TS1034", "'super' must be followed by an argument list or member access.")
 		return nil
 	}
-	if !p.isValidLValue(left) && (!p.checkerReportsInvalidTargets || !isSyntacticLHSExpression(left)) {
+	if !p.isValidLValue(left) && (!p.tscDiagnostics || !isSyntacticLHSExpression(left)) {
 		msg := fmt.Sprintf("invalid left-hand side in assignment: %s", left.String())
 		p.addError(expr.Token, msg)
 		return nil
@@ -7310,7 +7311,7 @@ func (p *Parser) parsePrefixUpdateExpression() Expression {
 	if expr.Argument == nil {
 		return nil
 	}
-	if !p.isValidLValue(expr.Argument) && !p.checkerReportsInvalidTargets {
+	if !p.isValidLValue(expr.Argument) && !p.tscDiagnostics {
 		msg := fmt.Sprintf("invalid argument for prefix %s: expected identifier, member expression, or index expression, got %T",
 			expr.Operator, expr.Argument)
 		p.addError(expr.Token, msg)
@@ -7329,7 +7330,7 @@ func (p *Parser) parsePostfixUpdateExpression(left Expression) Expression {
 	}
 
 	// Check if argument is assignable (Identifier, IndexExpression, or MemberExpression)
-	if !p.isValidLValue(expr.Argument) && !p.checkerReportsInvalidTargets {
+	if !p.isValidLValue(expr.Argument) && !p.tscDiagnostics {
 		msg := fmt.Sprintf("invalid argument for postfix %s: expected identifier, member expression, or index expression, got %T",
 			expr.Operator, expr.Argument)
 		p.addError(expr.Token, msg)
@@ -10533,7 +10534,7 @@ func (p *Parser) parseRegularForStatement(forToken *lexer.Token) *ForStatement {
 }
 
 // parseRegularForStatementWithVar parses regular for loop when we already parsed a variable
-func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt Statement, varName string) *ForStatement {
+func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt Statement, varName string) Statement {
 	stmt := &ForStatement{Token: forToken}
 	stmt.Initializer = varStmt
 
@@ -10614,6 +10615,14 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 		stmt.Initializer = initializer
 	}
 
+	// tsc parses any declaration list before `of`/`in` and reports the
+	// shapes a for-of/for-in head may not have as grammar errors.
+	if (p.peekTokenIs(lexer.OF) || p.peekTokenIs(lexer.IN)) && p.tscDiagnostics {
+		if _, _, isDecl := forInitDeclKind(stmt.Initializer); isDecl {
+			return p.finishForInOfWithDeclList(forToken, stmt.Initializer)
+		}
+	}
+
 	// Expect semicolon after initializer
 	if !p.expectPeek(lexer.SEMICOLON) {
 		return nil
@@ -10644,6 +10653,61 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 
 	stmt.Body = p.parseForBody()
 	return stmt
+}
+
+// finishForInOfWithDeclList finishes a for-of/for-in whose head declaration
+// list has more than one declarator, an initializer or a type annotation
+// (checkGrammarForInOrForOfStatement and checkForInStatement/ForOf in tsc).
+// curToken is the end of the list; `of` or `in` is next.
+func (p *Parser) finishForInOfWithDeclList(forToken *lexer.Token, head Statement) Statement {
+	isOf := p.peekTokenIs(lexer.OF)
+	var decls []*VarDeclarator
+	switch s := head.(type) {
+	case *VarStatement:
+		decls = s.Declarations
+	case *LetStatement:
+		decls = s.Declarations
+	case *ConstStatement:
+		decls = s.Declarations
+	}
+	if len(decls) > 1 && decls[1] != nil && decls[1].Name != nil {
+		if isOf {
+			p.addGrammarErrorWithCode(decls[1].Name.Token, "TS1188", "Only a single variable declaration is allowed in a 'for...of' statement.")
+		} else {
+			p.addGrammarErrorWithCode(decls[1].Name.Token, "TS1091", "Only a single variable declaration is allowed in a 'for...in' statement.")
+		}
+	} else if len(decls) == 1 && decls[0] != nil && decls[0].Name != nil {
+		d := decls[0]
+		if d.Value != nil {
+			if isOf {
+				p.addGrammarErrorWithCode(d.Name.Token, "TS1190", "The variable declaration of a 'for...of' statement cannot have an initializer.")
+			} else {
+				p.addGrammarErrorWithCode(d.Name.Token, "TS1189", "The variable declaration of a 'for...in' statement cannot have an initializer.")
+			}
+		} else if d.TypeAnnotation != nil {
+			if isOf {
+				p.addSemanticErrorWithCode(d.Name.Token, "TS2483", "The left-hand side of a 'for...of' statement cannot use a type annotation.")
+			} else {
+				p.addSemanticErrorWithCode(d.Name.Token, "TS2404", "The left-hand side of a 'for...in' statement cannot use a type annotation.")
+			}
+		}
+	}
+	p.nextToken() // cur = of/in
+	p.nextToken() // the iterated expression
+	var iter Expression
+	if isOf {
+		iter = p.parseExpression(COMMA)
+	} else {
+		iter = p.parseExpression(LOWEST)
+	}
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil
+	}
+	body := p.parseForBody()
+	if isOf {
+		return &ForOfStatement{Token: forToken, Variable: head, Iterable: iter, Body: body}
+	}
+	return &ForInStatement{Token: forToken, Variable: head, Object: iter, Body: body}
 }
 
 // parseForBody parses the body of any for loop

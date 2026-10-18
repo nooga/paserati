@@ -15,7 +15,7 @@ import (
 // (checkReferenceExpression) and refuses names that are not variables:
 // classes, enums and namespaces (checkIdentifier with an assignment target).
 // Paserati's parser rejects invalid targets itself unless the checker is told
-// to report them (parser.SetCheckerReportsInvalidTargets), as the conformance
+// to report them (parser.SetTscDiagnostics), as the conformance
 // harness does.
 
 // checkReferenceExpression reports code (or optCode for an optional chain) when

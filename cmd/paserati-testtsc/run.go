@@ -74,7 +74,7 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 		}()
 		lx := lexer.NewLexer(st.Source)
 		p := parser.NewParser(lx)
-		p.SetCheckerReportsInvalidTargets(true)
+		p.SetTscDiagnostics(true)
 		prog, parseErrs := p.ParseProgram()
 		for _, e := range parseErrs {
 			resp.Actual = append(resp.Actual, toDiag(e, "parse"))
