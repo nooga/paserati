@@ -74,6 +74,12 @@ func (c *Checker) checkInterfaceIndexConstraints(node *parser.InterfaceDeclarati
 		if prop.IsIndexSignature || prop.IsConstructorSignature {
 			continue
 		}
+		if prop.IsComputedProperty && prop.ComputedName != nil && isSymbolKey(prop.ComputedName, prop.ComputedName.GetComputedType()) {
+			if prop.Type != nil && !prop.IsMethod {
+				c.checkSymbolKeyedMember(prop.ComputedName, nil, prop.ComputedName, c.resolveTypeAnnotation(prop.Type), sigs)
+			}
+			continue
+		}
 		if prop.IsComputedProperty && prop.ComputedName != nil {
 			// String/number literal keys and other constant names.
 			if name := c.extractConstantPropertyName(prop.ComputedName); name != "" {
@@ -316,6 +322,9 @@ func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceTyp
 		}
 		name := ""
 		switch {
+		case isSymbolKey(cp.Expr, keyType):
+			c.checkSymbolKeyedMember(key, tok, cp.Expr, memberType, sigs)
+			return
 		case c.isAssignableWithExpansion(keyType, types.Number):
 			name = "0" // any numeric name
 		case c.isAssignableWithExpansion(keyType, types.String):
@@ -377,6 +386,41 @@ func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceTyp
 		}
 	}
 	c.checkInheritedAgainstOwnIndexSignatures(body, instanceType, declared)
+}
+
+// isSymbolKey reports whether a computed key is a symbol: typed symbol, or
+// a well-known Symbol.x.
+func isSymbolKey(expr parser.Expression, keyType types.Type) bool {
+	if keyType == types.Symbol {
+		return true
+	}
+	if m, ok := expr.(*parser.MemberExpression); ok {
+		if id, isIdent := m.Object.(*parser.Identifier); isIdent && id.Value == "Symbol" {
+			return true
+		}
+	}
+	return false
+}
+
+// checkSymbolKeyedMember reports TS2411 for a symbol-keyed member not
+// assignable to the symbol index signatures among sigs.
+func (c *Checker) checkSymbolKeyedMember(key parser.Node, tok *lexer.Token, expr parser.Expression, memberType types.Type, sigs []*types.IndexSignature) {
+	if memberType == nil {
+		return
+	}
+	for _, sig := range sigs {
+		if sig == nil || sig.KeyType != types.Symbol || sig.ValueType == nil || sig.IsMapped || sig.Synthetic ||
+			c.isAssignableWithExpansion(memberType, sig.ValueType) {
+			continue
+		}
+		at := key
+		if tok != nil && tok.Literal == "[" {
+			at = &parser.Identifier{Token: tok, Value: "["}
+		}
+		c.addErrorAtStart(at, errors.TS2411, fmt.Sprintf(
+			"Property '[%s]' of type '%s' is not assignable to 'symbol' index type '%s'.",
+			computedNameText(expr), memberType.String(), sig.ValueType.String()))
+	}
 }
 
 // numericLiteralKey is the property name a member name binds: a numeric
