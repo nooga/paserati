@@ -1480,7 +1480,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 	// A function argument's parameters fix the type parameters they mention:
 	// with no inference yet, a constrained one is its constraint.
 	ctxParams := genericSig.ParameterTypes
-	if fixedToConstraints := constrainedTypeParams(c.extractTypeParametersFromSignature(genericSig)); len(fixedToConstraints) > 0 {
+	if fixedToConstraints := constrainedTypeParams(genericSig.TypeParameters); len(fixedToConstraints) > 0 {
 		paramsOnly := *genericSig
 		paramsOnly.ReturnType = nil
 		ctxParams = c.substituteTypeParameters(&paramsOnly, fixedToConstraints).ParameterTypes
