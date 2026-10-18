@@ -267,6 +267,12 @@ func (r *Relation) isAssignable(source, target Type) bool {
 				}
 			}
 			return true
+		case *TypeParameterType:
+			// An unconstrained type parameter may be a primitive.
+			if c := typeParameterConstraint(src); c != nil {
+				return r.isAssignable(c, target)
+			}
+			return false
 		}
 		return true // ObjectTypes, arrays, functions, etc.
 	}
