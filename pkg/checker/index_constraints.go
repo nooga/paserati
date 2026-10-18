@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
@@ -85,8 +86,18 @@ func (c *Checker) checkInterfaceExtends(node *parser.InterfaceDeclaration, own *
 	if own == nil || node.Name == nil || c.skipValidation() {
 		return
 	}
+	name := node.Name.Value
+	if len(node.TypeParameters) > 0 {
+		params := make([]string, 0, len(node.TypeParameters))
+		for _, tp := range node.TypeParameters {
+			if tp != nil && tp.Name != nil {
+				params = append(params, tp.Name.Value)
+			}
+		}
+		name += "<" + strings.Join(params, ", ") + ">"
+	}
 	for i, ext := range extended {
-		if ext == nil || c.isAssignableWithExpansion(membersView(own), membersView(ext)) {
+		if ext == nil || (!redeclaresNonPublicMember(node, ext) && c.isAssignableWithExpansion(membersView(own), membersView(ext))) {
 			continue
 		}
 		baseName := ext.String()
@@ -100,8 +111,23 @@ func (c *Checker) checkInterfaceExtends(node *parser.InterfaceDeclaration, own *
 			}
 		}
 		c.addErrorAtStart(node.Name, errors.TS2430, fmt.Sprintf(
-			"Interface '%s' incorrectly extends interface '%s'.", node.Name.Value, baseName))
+			"Interface '%s' incorrectly extends interface '%s'.", name, baseName))
 	}
+}
+
+// redeclaresNonPublicMember reports whether the interface declares a member
+// that is private or protected in the class type ext: the member is then
+// not the one the class declares, so the interface is not assignable to it.
+func redeclaresNonPublicMember(node *parser.InterfaceDeclaration, ext *types.ObjectType) bool {
+	for _, p := range node.Properties {
+		if p == nil || p.Name == nil || p.IsComputedProperty || p.IsIndexSignature || p.IsConstructorSignature {
+			continue
+		}
+		if _, ok := types.NonPublicMemberOwner(ext, p.Name.Value); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // membersView is an object type holding only the property and index members

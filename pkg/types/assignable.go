@@ -1182,6 +1182,12 @@ func mergeIntersectionObjects(inter *IntersectionType) *ObjectType {
 	return merged
 }
 
+// NonPublicMemberOwner returns the name of the class that declares a private
+// or protected instance member name of obj, looking through base types.
+func NonPublicMemberOwner(obj *ObjectType, name string) (string, bool) {
+	return nonPublicMemberOwner(obj, name, 0)
+}
+
 // nonPublicMemberOwner returns the name of the class that declares a private
 // or protected instance member of obj (looking through base types).
 func nonPublicMemberOwner(obj *ObjectType, name string, depth int) (string, bool) {
