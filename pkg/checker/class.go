@@ -395,6 +395,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	// Handle generic classes
 	if len(node.TypeParameters) > 0 {
+		c.checkStaticTypeParameterRefs(node.TypeParameters, node.Body)
 		c.checkGenericClassDeclaration(node)
 		return
 	}
