@@ -2799,6 +2799,33 @@ func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpressio
 	}
 }
 
+// reportFirstUnassignableArgument reports the first argument that does not
+// fit its parameter in an inferred signature, where the parameter is a bare
+// constrained type parameter: an inference that violated the constraint has
+// fallen back to it. Arguments from a spread on are not checked.
+// FIXME: other parameters wait on inference matching tsc's.
+func (c *Checker) reportFirstUnassignableArgument(args []parser.Expression, generic, sig *types.Signature) {
+	for i, arg := range args {
+		if _, isSpread := arg.(*parser.SpreadElement); isSpread || i >= len(sig.ParameterTypes) || i >= len(generic.ParameterTypes) {
+			return
+		}
+		if tp, ok := generic.ParameterTypes[i].(*types.TypeParameterType); !ok || tp.Parameter == nil || tp.Parameter.Constraint == nil {
+			continue
+		}
+		argType, paramType := arg.GetComputedType(), sig.ParameterTypes[i]
+		if argType == nil || paramType == nil {
+			continue
+		}
+		if i < len(sig.OptionalParams) && sig.OptionalParams[i] {
+			paramType = types.NewUnionType(paramType, types.Undefined)
+		}
+		if !c.isArgumentAssignableWithExpansion(argType, paramType) {
+			c.reportNotAssignable(arg, arg, argType, paramType, headArgument)
+			return
+		}
+	}
+}
+
 func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	if checkerDebug {
 		debugPrintf("// [Checker NewExpression] Checking new expression with %d type arguments\n", len(node.TypeArguments))
@@ -2897,6 +2924,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 				inferredSig := c.inferGenericFunctionCall(pseudoCall, constructorSig)
 				if inferredSig != nil {
 					debugPrintf("// [Checker NewExpression] Type inference successful\n")
+					c.reportFirstUnassignableArgument(node.Arguments, constructorSig, inferredSig)
 
 					// Extract inferred type parameters from the signature
 					// For now, we'll use a simple approach: collect all TypeParameterType replacements

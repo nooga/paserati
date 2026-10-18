@@ -401,6 +401,8 @@ type Checker struct {
 	// used before being assigned (collectUnassignedReads).
 	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
 	daCollectOnly   bool
+	// everWritten holds every name the program writes anywhere.
+	everWritten map[string]bool
 	// fixInScopeTypeParams makes isGenericSignature treat type parameters
 	// in scope as fixed (a call's callee signature).
 	fixInScopeTypeParams bool

@@ -58,6 +58,8 @@ func (c *Checker) collectUnassignedReads(program *parser.Program) {
 		return
 	}
 	c.unassignedReads = map[*parser.Identifier]*parser.VarDeclarator{}
+	c.everWritten = map[string]bool{}
+	collectAnyWrites(c.everWritten, program)
 	c.daCollectOnly = true
 	c.analyzeDefiniteAssignmentScope(program.Statements)
 	c.daCollectOnly = false
@@ -69,6 +71,11 @@ func (c *Checker) readDeclaredTypeIfUnassigned(id *parser.Identifier) (types.Typ
 	d := c.unassignedReads[id]
 	if d == nil {
 		return nil, false
+	}
+	if d.TypeAnnotation == nil {
+		// An auto-typed variable nothing ever writes is undefined at
+		// every read in its own flow (tsc's evolving any).
+		return types.Undefined, true
 	}
 	t := declaredVarType(d)
 	if t == nil || d.TypeAnnotation == nil || strictInitTypePermits(t) {
@@ -180,6 +187,12 @@ func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarato
 			// Types are not known yet; only annotated declarations can
 			// read as their declared type.
 			a.candidates[name] = !ambient && d.TypeAnnotation != nil && !d.DefiniteAssignment && (d.Value == nil || isVar)
+			// FIXME: tsc's evolving any also types reads after writes (the
+			// union of the assigned types); only never-written ones are modelled.
+			if !ambient && d.TypeAnnotation == nil && d.Value == nil && !d.DefiniteAssignment &&
+				!a.loopHeadVars[d] && a.c.strictNullChecks && !a.c.everWritten[name] {
+				a.candidates[name] = true
+			}
 			continue
 		}
 		if a.loopHeadVars[d] && d.TypeAnnotation == nil {
@@ -758,6 +771,25 @@ func unionSyntacticWrites(assigned map[string]bool, node parser.Node) {
 			markLoopVariableWrite(assigned, w.Variable)
 		case *parser.ForInStatement:
 			markLoopVariableWrite(assigned, w.Variable)
+		}
+	})
+}
+
+// collectAnyWrites records every name anything in node may write: plain,
+// compound and logical assignment, ++/--, destructuring and loop heads,
+// nested functions included.
+func collectAnyWrites(written map[string]bool, node parser.Node) {
+	unionSyntacticWrites(written, node)
+	forEachDescendant(node, func(n parser.Node) {
+		switch w := n.(type) {
+		case *parser.AssignmentExpression:
+			if id, ok := w.Left.(*parser.Identifier); ok {
+				written[id.Value] = true
+			}
+		case *parser.UpdateExpression:
+			if id, ok := w.Argument.(*parser.Identifier); ok {
+				written[id.Value] = true
+			}
 		}
 	})
 }
