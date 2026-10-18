@@ -2988,7 +2988,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		// Invalid constructor type. Only types we can judge are reported:
 		// intersections of constructor types (mixins) and other deferred types
 		// are given the benefit of the doubt.
-		if c.isDefinitelyNotConstructor(constructorType) {
+		if c.isDefinitelyNotConstructor(constructorType) && !c.isUntypedCallTarget(constructorType) {
 			c.addErrorWithCode(leftmostExpression(node.Constructor), errors.TS2351, "This expression is not constructable.")
 		}
 		resultType = types.Any

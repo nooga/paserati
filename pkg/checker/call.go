@@ -711,6 +711,14 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	}
 
 	if !objType.IsCallable() {
+		if c.isUntypedCallTarget(objType) {
+			// tsc's untyped call: a Function value takes any arguments.
+			for _, argNode := range node.Arguments {
+				c.visit(argNode)
+			}
+			node.SetComputedType(types.Any)
+			return
+		}
 		c.reportNotCallable(node, funcNodeType)
 		for _, argNode := range node.Arguments {
 			c.visit(argNode)
@@ -2856,4 +2864,19 @@ func (c *Checker) strictCallApplyType(fn *types.ObjectType, name string) types.T
 		OptionalParams: []bool{false, allOptional},
 		ReturnType:     ret,
 	})
+}
+
+// isUntypedCallTarget reports whether a value without signatures may still be
+// called or constructed, untyped: tsc allows it when the type is assignable
+// to the global Function interface.
+func (c *Checker) isUntypedCallTarget(t types.Type) bool {
+	obj, ok := t.(*types.ObjectType)
+	if !ok || len(obj.CallSigs()) > 0 || len(obj.ConstructSigs()) > 0 {
+		return false
+	}
+	if obj.IsFunctionInterface {
+		return true
+	}
+	fn, ok := c.env.ResolveType("Function")
+	return ok && fn != nil && c.rel.IsAssignable(obj, fn)
 }

@@ -287,6 +287,10 @@ type ObjectType struct {
 	// by substitution do not carry it, so instantiations print structurally.
 	DisplayName string
 
+	// IsFunctionInterface marks the global Function interface, to which
+	// every function type is assignable.
+	IsFunctionInterface bool
+
 	// GenericName and GenericArgs name an instance of a declared generic
 	// class: `Box<string>`. The declared type carries the class's own type
 	// parameters as arguments; substitution maps them to the instantiation's.

@@ -51,6 +51,15 @@ func (f *FunctionInitializer) InitTypes(ctx *TypeContext) error {
 	// Store the prototype type for primitive "function"
 	ctx.SetPrimitivePrototype("function", functionProtoType)
 
+	// The Function interface: the members every function has.
+	functionProtoType.DisplayName = "Function"
+	functionProtoType.IsFunctionInterface = true
+	if ctx.DefineTypeAlias != nil {
+		if err := ctx.DefineTypeAlias("Function", functionProtoType); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

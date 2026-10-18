@@ -277,6 +277,11 @@ func (r *Relation) isAssignable(source, target Type) bool {
 		return true // ObjectTypes, arrays, functions, etc.
 	}
 
+	// Every function and constructor has the Function interface's members.
+	if tgt, ok := target.(*ObjectType); ok && tgt.IsFunctionInterface && IsFunctionLike(source) {
+		return true
+	}
+
 	// boolean is true | false.
 	if source == Boolean {
 		if u, ok := target.(*UnionType); ok && unionHasBooleanLiteral(u, true) && unionHasBooleanLiteral(u, false) {
@@ -1432,6 +1437,23 @@ func unionHasBooleanLiteral(u *UnionType, v bool) bool {
 	for _, m := range u.Types {
 		if lt, ok := m.(*LiteralType); ok && lt.Value.Type() == vm.TypeBoolean && lt.Value.AsBoolean() == v {
 			return true
+		}
+	}
+	return false
+}
+
+// IsFunctionLike reports whether t has call or construct signatures.
+func IsFunctionLike(t Type) bool {
+	switch tt := t.(type) {
+	case *ObjectType:
+		return len(tt.CallSigs()) > 0 || len(tt.ConstructSigs()) > 0
+	case *GenericType:
+		return IsFunctionLike(tt.Body)
+	case *IntersectionType:
+		for _, m := range tt.Types {
+			if IsFunctionLike(m) {
+				return true
+			}
 		}
 	}
 	return false
