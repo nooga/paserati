@@ -1618,7 +1618,26 @@ func (c *Checker) createConstructorSignatures(body *parser.ClassBody, instanceTy
 	// Base class: constructor() {}
 	// Derived class: constructor(...args) { super(...args); }
 	if isDerived {
-		// Derived class default constructor accepts any arguments
+		// The implicit constructor passes its arguments to the base's, so it
+		// takes the base's construct signatures.
+		if instanceType.ClassMeta != nil {
+			if base, ok := c.resolveStructural(instanceType.ClassMeta.SuperConstructorType).(*types.ObjectType); ok && len(base.ConstructSigs()) > 0 {
+				var sigs []*types.Signature
+				for _, sig := range base.ConstructSigs() {
+					if len(sig.TypeParameters) > 0 {
+						sigs = nil
+						break
+					}
+					inherited := *sig
+					inherited.ReturnType = instanceType
+					sigs = append(sigs, &inherited)
+				}
+				if len(sigs) > 0 {
+					return sigs
+				}
+			}
+		}
+		// Otherwise the default constructor accepts any arguments
 		return []*types.Signature{{
 			ParameterTypes:    []types.Type{},
 			ReturnType:        instanceType,

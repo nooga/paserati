@@ -2776,6 +2776,9 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		// Get the constructor signature from the generic type's body
 		if bodyObjType, ok := genericType.Body.(*types.ObjectType); ok && len(bodyObjType.ConstructSigs()) > 0 {
 			constructorSig := bodyObjType.ConstructSigs()[0]
+			if len(bodyObjType.ConstructSigs()) == 1 {
+				c.reportConstructArity(node, constructorSig)
+			}
 
 			// Check if this is a generic signature
 			if c.isGenericSignature(constructorSig) {
@@ -2934,9 +2937,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 
 					if !skipArityCheck && actualArgCount < minRequiredArgs {
 						c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
-					} else if !skipArityCheck && actualArgCount > expectedArgCount && expectedArgCount > 0 {
-						// Only enforce max args if constructor has declared parameters
-						// (allow extra args for constructors with no params - they may use 'arguments')
+					} else if !skipArityCheck && actualArgCount > expectedArgCount {
 						c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 					} else {
 						c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic, constructorSig.OptionalParams)
@@ -4049,4 +4050,26 @@ func (c *Checker) templateExpressionType(node *parser.TemplateLiteral) types.Typ
 		return computed
 	}
 	return tlt
+}
+
+// reportConstructArity reports TS2554 when a new expression passes a number
+// of arguments a non-variadic construct signature does not take.
+func (c *Checker) reportConstructArity(node *parser.NewExpression, sig *types.Signature) {
+	if sig.IsVariadic || sig.RestParameterType != nil {
+		return
+	}
+	actual := c.calculateEffectiveArgCount(node.Arguments)
+	if actual < 0 {
+		return
+	}
+	max := len(sig.ParameterTypes)
+	min := max
+	if len(sig.OptionalParams) == max {
+		for min > 0 && sig.OptionalParams[min-1] {
+			min--
+		}
+	}
+	if actual < min || actual > max {
+		c.addErrorWithCode(node, errors.TS2554, formatArityError(min, max, actual))
+	}
 }
