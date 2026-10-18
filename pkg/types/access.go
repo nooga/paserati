@@ -74,6 +74,7 @@ func NewClassMetadata(className string, isInstance bool) *ClassMetadata {
 
 // AddMember adds access control information for a class member
 func (cm *ClassMetadata) AddMember(memberName string, accessLevel AccessModifier, isStatic, isReadonly bool) {
+	accessLevel = privateNameAccess(memberName, accessLevel)
 	cm.MemberAccess[memberName] = &MemberAccessInfo{
 		AccessLevel: accessLevel,
 		IsStatic:    isStatic,
@@ -85,6 +86,7 @@ func (cm *ClassMetadata) AddMember(memberName string, accessLevel AccessModifier
 
 // AddGetterMember adds a getter method with access control information
 func (cm *ClassMetadata) AddGetterMember(memberName string, accessLevel AccessModifier, isStatic bool) {
+	accessLevel = privateNameAccess(memberName, accessLevel)
 	cm.MemberAccess[memberName] = &MemberAccessInfo{
 		AccessLevel: accessLevel,
 		IsStatic:    isStatic,
@@ -96,6 +98,7 @@ func (cm *ClassMetadata) AddGetterMember(memberName string, accessLevel AccessMo
 
 // AddSetterMember adds a setter method with access control information
 func (cm *ClassMetadata) AddSetterMember(memberName string, accessLevel AccessModifier, isStatic bool) {
+	accessLevel = privateNameAccess(memberName, accessLevel)
 	cm.MemberAccess[memberName] = &MemberAccessInfo{
 		AccessLevel: accessLevel,
 		IsStatic:    isStatic,
@@ -274,4 +277,12 @@ func (ac *AccessContext) Within(className string) bool {
 		}
 	}
 	return false
+}
+
+// privateNameAccess makes a #name member private whatever its modifiers.
+func privateNameAccess(memberName string, accessLevel AccessModifier) AccessModifier {
+	if len(memberName) > 0 && memberName[0] == '#' {
+		return AccessPrivate
+	}
+	return accessLevel
 }
