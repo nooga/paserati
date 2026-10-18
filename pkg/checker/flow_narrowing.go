@@ -171,15 +171,16 @@ func (f *flowNarrowState) observeExpressionStatement(c *Checker, node *parser.Ex
 	}
 	f.dropAssignedIn(assign.Value)
 
-	// Forget before visiting: checkAssignmentExpression reads the LHS to
-	// validate the new value against it, and that must see the declared
-	// type, not a narrow type left over from a previous statement.
-	f.forget(ident.Value)
+	// The value is read with the narrowing still in place (`x = x.length`
+	// after `x = ""`); checkAssignmentExpression validates it against the
+	// declared type. The old narrowing ends with the assignment.
 	c.visit(node.Expression)
+	f.forget(ident.Value)
 
 	rhsType := assign.Value.GetComputedType()
 	if narrowType, isLiteral := rhsType.(*types.LiteralType); isLiteral {
-		if narrowsOnAssignment(c.env.ResolveDeclaredType(ident.Value)) {
+		// A value the declared type rejects leaves the declared type.
+		if declared := c.env.ResolveDeclaredType(ident.Value); narrowsOnAssignment(declared) && c.rel.IsAssignable(narrowType, declared) {
 			f.track(ident.Value, narrowType)
 		}
 		return
