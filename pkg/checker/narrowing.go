@@ -20,6 +20,7 @@ type TypeGuard struct {
 	OptionalChainingBaseExpr parser.Expression // For optional chaining guards: the base object expression (e.g., "opts" in "opts?.prop")
 	Instanceof               bool              // an instanceof guard: members narrow by derivation, not assignability
 	Predicate                bool              // a type predicate call: the false branch drops members assignable to NarrowedType
+	Also                     *TypeGuard        // a second narrowing the same condition implies (`x.p === undefined` also discriminates x)
 }
 
 type typePredicateSignature struct {
@@ -327,6 +328,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 								NarrowedType:             narrowedType,
 								IsNegated:                isNegative,
 								OptionalChainingBaseExpr: extractOptionalChainingBase(infix.Left),
+								Also:                     c.nullishDiscriminantGuard(infix.Left, narrowedType, isNegative),
 							}
 						}
 					}
@@ -347,6 +349,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 								NarrowedType:             narrowedType,
 								IsNegated:                isNegative,
 								OptionalChainingBaseExpr: extractOptionalChainingBase(infix.Right),
+								Also:                     c.nullishDiscriminantGuard(infix.Right, narrowedType, isNegative),
 							}
 						}
 					}
@@ -570,6 +573,9 @@ func staticStringLiteralValue(expr parser.Expression) (string, bool) {
 func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 	if guard == nil {
 		return nil
+	}
+	if guard.Also != nil {
+		return c.applyGuardPair(guard, c.applyTypeNarrowing)
 	}
 
 	// If the guard is negated (e.g., x !== undefined), we need complement narrowing:
@@ -1083,6 +1089,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 	if guard == nil {
 		return nil
+	}
+	if guard.Also != nil {
+		return c.applyGuardPair(guard, c.applyInvertedTypeNarrowing)
 	}
 
 	// If the guard is negated (e.g., x !== undefined), the else branch means
@@ -2321,6 +2330,9 @@ func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName stri
 	if !exists {
 		return false
 	}
+	if expectedValue == types.Undefined && objType.IsPropertyOptional(propName) {
+		return true
+	}
 
 	// Check if the property type matches the expected value
 	// For literal types, we need to compare the literal values using StrictlyEquals
@@ -3139,4 +3151,81 @@ func (c *Checker) instanceofDerivedMembers(u *types.UnionType, guard *TypeGuard)
 		return kept[0]
 	}
 	return types.NewUnionType(kept...)
+}
+
+// applyGuardPair applies a guard and then, in the environment it gives, the
+// guard it implies (guard.Also), the same way round.
+func (c *Checker) applyGuardPair(guard *TypeGuard, apply func(*TypeGuard) *Environment) *Environment {
+	main := *guard
+	main.Also = nil
+	env := apply(&main)
+	saved := c.env
+	if env != nil {
+		c.env = env
+	}
+	also := apply(guard.Also)
+	c.env = saved
+	if also != nil {
+		return also
+	}
+	return env
+}
+
+// nullishDiscriminantGuard is the discriminant guard `x.p === undefined` (or
+// null) implies for x when x is a union whose members all declare p and p
+// has a unit type in at least one of them (tsc narrows both the reference
+// and, by discriminant, its object). nil otherwise.
+func (c *Checker) nullishDiscriminantGuard(member parser.Expression, value types.Type, negated bool) *TypeGuard {
+	if value != types.Undefined && value != types.Null {
+		return nil
+	}
+	me, ok := member.(*parser.MemberExpression)
+	if !ok {
+		return nil
+	}
+	prop, ok := me.Property.(*parser.Identifier)
+	if !ok {
+		return nil
+	}
+	baseKey := expressionToNarrowingKey(me.Object)
+	if baseKey == "" {
+		return nil
+	}
+	var baseType types.Type
+	if id, isIdent := me.Object.(*parser.Identifier); isIdent {
+		baseType, _, _ = c.env.Resolve(id.Value)
+	} else {
+		baseType = c.memberRefType(baseKey)
+	}
+	u, ok := baseType.(*types.UnionType)
+	if !ok {
+		return nil
+	}
+	unit := false
+	for _, m := range u.Types {
+		obj, ok := c.resolveObjectTypeForNarrowing(m)
+		if !ok {
+			return nil
+		}
+		pt, has := obj.Props()[prop.Value]
+		if !has {
+			return nil
+		}
+		switch pt.(type) {
+		case *types.LiteralType:
+			unit = true
+		}
+		if pt == types.Undefined || pt == types.Null {
+			unit = true
+		}
+	}
+	if !unit {
+		return nil
+	}
+	return &TypeGuard{
+		VariableName:      baseKey,
+		IsNegated:         negated,
+		DiscriminantProp:  prop.Value,
+		DiscriminantValue: value,
+	}
 }
