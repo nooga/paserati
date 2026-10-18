@@ -344,6 +344,27 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 	if body == nil {
 		return
 	}
+	if c.target() < 2015 {
+		isPrivateName := func(key parser.Expression) bool {
+			id, ok := key.(*parser.Identifier)
+			return ok && strings.HasPrefix(id.Value, "#")
+		}
+		for _, prop := range body.Properties {
+			if prop == nil || prop.Key == nil {
+				continue
+			}
+			if isPrivateName(prop.Key) {
+				c.addErrorWithCode(prop.Key, errors.TS18028, "Private identifiers are only available when targeting ECMAScript 2015 and higher.")
+			} else if prop.IsAccessor && !prop.IsDeclare {
+				c.addErrorWithCode(prop.Key, errors.TS18045, "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher.")
+			}
+		}
+		for _, m := range body.Methods {
+			if m != nil && isPrivateName(m.Key) {
+				c.addErrorWithCode(m.Key, errors.TS18028, "Private identifiers are only available when targeting ECMAScript 2015 and higher.")
+			}
+		}
+	}
 	for _, method := range body.Methods {
 		if method.Value != nil {
 			c.validateParamListBasic(method.Value.Parameters)
