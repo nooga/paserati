@@ -1918,3 +1918,8 @@ func mappedOptionality(mt *MappedType) int {
 func isEmptyObject(o *ObjectType) bool {
 	return len(o.Props()) == 0 && len(o.CallSigs()) == 0 && len(o.ConstructSigs()) == 0 && len(o.IndexSigs()) == 0 && !o.IsClassInstance()
 }
+
+// IsEmptyObjectType reports whether o is the empty object type `{}`.
+func IsEmptyObjectType(o *ObjectType) bool {
+	return isEmptyObject(o) && len(o.Bases()) == 0
+}

@@ -401,6 +401,9 @@ type Checker struct {
 	// used before being assigned (collectUnassignedReads).
 	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
 	daCollectOnly   bool
+	// blockEndEnvs holds, for the if arms being joined, the scope each
+	// block ended in (with its early-exit narrowings).
+	blockEndEnvs map[*parser.BlockStatement]*Environment
 	// presetCallee is a `new` expression's constructor, checked as the
 	// callee of a call whose type is presetCalleeType.
 	presetCallee     parser.Expression
@@ -3366,6 +3369,9 @@ func (c *Checker) visit(node parser.Node) {
 			}
 		}
 		c.blockDepth--
+		if _, wanted := c.blockEndEnvs[node]; wanted {
+			c.blockEndEnvs[node] = c.env
+		}
 		c.env = originalEnv
 
 	// --- Literal Expressions ---
@@ -3858,11 +3864,36 @@ func (c *Checker) visit(node parser.Node) {
 		// Each arm is checked in a scope seeded with the references it writes,
 		// so its assignments neither leak out of it nor get lost at the join.
 		refKeys := writtenRefs(node.Consequence, node.Alternative)
+		// A reference an arm narrows by leaving early (`if (!x) return;`)
+		// joins like a written one, from where each arm ends.
+		exitKeys := earlyExitRefKeys(c, node.Consequence, node.Alternative)
+		for _, key := range exitKeys {
+			refKeys = appendUnique(refKeys, key)
+		}
 		if len(refKeys) > 0 {
 			for _, key := range conditionRefKeys(condition, typeGuard) {
 				refKeys = appendUnique(refKeys, key)
 			}
 		}
+		armEnd := func(arm parser.Statement) func(*Environment) *Environment {
+			block, ok := arm.(*parser.BlockStatement)
+			if !ok || block == nil || len(exitKeys) == 0 {
+				return func(env *Environment) *Environment { return env }
+			}
+			if c.blockEndEnvs == nil {
+				c.blockEndEnvs = map[*parser.BlockStatement]*Environment{}
+			}
+			c.blockEndEnvs[block] = nil
+			return func(env *Environment) *Environment {
+				end := c.blockEndEnvs[block]
+				delete(c.blockEndEnvs, block)
+				if end == nil {
+					return env
+				}
+				return end
+			}
+		}
+		thenEnd := armEnd(node.Consequence)
 		consequenceTerminates := blockAlwaysTerminates(node.Consequence)
 		alternativeTerminates := node.Alternative != nil && blockAlwaysTerminates(node.Alternative)
 		joinPossible := !(consequenceTerminates && node.Alternative == nil)
@@ -3876,6 +3907,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		c.visit(node.Consequence)
+		thenEnv = thenEnd(thenEnv)
 
 		// Restore original environment before checking alternative
 		c.env = originalEnv
@@ -3901,7 +3933,11 @@ func (c *Checker) visit(node parser.Node) {
 				c.env = elseEnv // Use inverted narrowed environment for alternative
 			}
 
+			elseEnd := armEnd(node.Alternative)
 			c.visit(node.Alternative)
+			if end := elseEnd(nil); end != nil {
+				c.env = end
+			}
 
 			// The alternative may itself have joined into a deeper scope.
 			if c.env != nil && (elseEnv == nil || c.env != elseEnv) && elseEnv != nil {

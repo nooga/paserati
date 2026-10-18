@@ -806,6 +806,10 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		// `typeof x === "object"` on `unknown` is `object | null`.
 		canNarrow = true
 		narrowedType = types.NewUnionType(types.NonPrimitive, types.Null)
+	} else if obj, isObj := originalType.(*types.ObjectType); isObj && types.IsEmptyObjectType(obj) && isObjectMarker(guard.NarrowedType) {
+		// `typeof x === "object"` on `{}` is `object`.
+		canNarrow = true
+		narrowedType = types.NonPrimitive
 	} else if originalType == types.Unknown && guard.NarrowedType != nil {
 		// Unknown can be narrowed to any specific type
 		canNarrow = true
@@ -823,7 +827,11 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				// typeof === "object" - keep only object-like types (objects, arrays, but not primitives)
 				var objectMembers []types.Type
 				for _, memberType := range unionType.Types {
-					if c.isObjectLikeType(memberType) {
+					if obj, isObj := memberType.(*types.ObjectType); isObj && types.IsEmptyObjectType(obj) {
+						// `{}` (an unknown narrowed by truthiness or a
+						// null check) narrows to `object`.
+						objectMembers = append(objectMembers, types.NonPrimitive)
+					} else if c.isObjectLikeType(memberType) {
 						objectMembers = append(objectMembers, memberType)
 					}
 				}
@@ -1440,6 +1448,14 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 	// (if x is string and we check x === "foo", in the else branch x is still string, just not "foo")
 	// But for typeof narrowing on unknown, the else branch is still useful
 	if originalType == types.Unknown {
+		// unknown narrows as `{} | null | undefined` (tsc's
+		// unknownUnionType): `x !== null` leaves `{} | undefined`.
+		if rest := c.unknownWithoutNullish(guard.NarrowedType); rest != nil {
+			narrowedEnv := NewEnclosedEnvironment(c.env)
+			if narrowedEnv.Define(guard.VariableName, rest, isConst) {
+				return narrowedEnv
+			}
+		}
 		narrowedTypeStr := "<nil>"
 		if guard.NarrowedType != nil {
 			narrowedTypeStr = guard.NarrowedType.String()
@@ -1936,6 +1952,13 @@ func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 	originalType, isConst, found := c.env.Resolve(varName)
 	if !found {
 		return nil
+	}
+	if originalType == types.Unknown && c.strictNullChecks {
+		// A truthy unknown is `{}` (tsc narrows unknown as {} | null | undefined).
+		narrowedEnv := NewEnclosedEnvironment(c.env)
+		if narrowedEnv.Define(varName, types.NewObjectType(), isConst) {
+			return narrowedEnv
+		}
 	}
 
 	// If it's a union type, remove null and undefined
@@ -2911,4 +2934,41 @@ func (c *Checker) invertedConditionEnv(cond parser.Expression) *Environment {
 		return c.applyInvertedTypeNarrowing(guard)
 	}
 	return nil
+}
+
+// unknownWithoutNullish is unknown, seen as `{} | null | undefined`, without
+// the null and undefined members of removed; nil unless removed is made of
+// null and undefined only.
+func (c *Checker) unknownWithoutNullish(removed types.Type) types.Type {
+	if !c.strictNullChecks || removed == nil {
+		return nil
+	}
+	members := []types.Type{removed}
+	if u, ok := removed.(*types.UnionType); ok {
+		members = u.Types
+	}
+	dropNull, dropUndefined := false, false
+	for _, m := range members {
+		switch m {
+		case types.Null:
+			dropNull = true
+		case types.Undefined:
+			dropUndefined = true
+		default:
+			return nil
+		}
+	}
+	rest := []types.Type{types.NewObjectType()}
+	if !dropNull {
+		rest = append(rest, types.Null)
+	}
+	if !dropUndefined {
+		rest = append(rest, types.Undefined)
+	}
+	return types.NewUnionType(rest...)
+}
+
+func isObjectMarker(t types.Type) bool {
+	_, ok := t.(*types.ObjectTypeMarker)
+	return ok
 }

@@ -400,7 +400,7 @@ func (ot *ObjectType) String() string {
 	}
 
 	if len(parts) == 0 {
-		return "{ }"
+		return "{}"
 	}
 
 	return fmt.Sprintf("{ %s }", strings.Join(parts, "; "))

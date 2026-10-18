@@ -447,3 +447,30 @@ func (c *Checker) visitNarrowedBy(cond parser.Expression, body parser.Node) {
 	c.visit(body)
 	c.env = outer
 }
+
+// earlyExitRefKeys lists the references the statements directly inside the
+// arms narrow by leaving early: `if (cond) return;` narrows what cond tests
+// for the rest of the arm.
+func earlyExitRefKeys(c *Checker, arms ...parser.Statement) []string {
+	var keys []string
+	for _, arm := range arms {
+		block, ok := arm.(*parser.BlockStatement)
+		if !ok || block == nil {
+			continue
+		}
+		for _, st := range block.Statements {
+			ifs, ok := st.(*parser.IfStatement)
+			if !ok || ifs == nil || !isNilNode(ifs.Alternative) || !blockAlwaysTerminates(ifs.Consequence) {
+				continue
+			}
+			for _, key := range conditionRefKeys(ifs.Condition, c.detectTypeGuard(ifs.Condition)) {
+				// FIXME: member chains are left out; seeding them disturbs
+				// sibling member narrowings in the arm.
+				if !strings.Contains(key, ".") {
+					keys = appendUnique(keys, key)
+				}
+			}
+		}
+	}
+	return keys
+}
