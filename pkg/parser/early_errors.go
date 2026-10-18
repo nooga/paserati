@@ -602,6 +602,7 @@ func (w *eeWalker) expr(e Expression, c eeCtx) {
 			}
 			w.propKey(prop.Key, c)
 			if md, ok := prop.Value.(*MethodDefinition); ok {
+				w.accessorThisParam(md)
 				if md.Value != nil {
 					w.function(md.Value, c, false, true)
 				}
@@ -801,6 +802,19 @@ func reportDuplicateParams(p *Parser, names []*Identifier) {
 	}
 }
 
+// accessorThisParam reports TS2784: an accessor's this is the object it is
+// read from, so it cannot declare a this parameter.
+func (w *eeWalker) accessorThisParam(m *MethodDefinition) {
+	if !w.p.tscDiagnostics || m == nil || m.Value == nil || (m.Kind != "getter" && m.Kind != "setter") {
+		return
+	}
+	for _, prm := range m.Value.Parameters {
+		if prm != nil && prm.IsThis && prm.Token != nil {
+			w.p.addSemanticErrorWithCode(prm.Token, "TS2784", "'get' and 'set' accessors cannot declare 'this' parameters.")
+		}
+	}
+}
+
 func (w *eeWalker) class(super Expression, body *ClassBody, outer eeCtx) {
 	c := outer
 	c.strict = true
@@ -814,6 +828,7 @@ func (w *eeWalker) class(super Expression, body *ClassBody, outer eeCtx) {
 			continue
 		}
 		w.propKey(m.Key, c)
+		w.accessorThisParam(m)
 		if m.Value != nil {
 			w.function(m.Value, c, false, true)
 		}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 var nodeInterface = reflect.TypeOf((*parser.Node)(nil)).Elem()
@@ -185,4 +186,27 @@ func (c *Checker) checkForOfSelfReference(node *parser.ForOfStatement) {
 		return
 	}
 	c.addErrorWithCode(name, errors.TS7022, fmt.Sprintf("'%s' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.", name.Value))
+}
+
+// checkClassPropertyComputedName reports TS1166: a class property's computed
+// name must be a literal, or an entity name whose type is a literal or
+// unique symbol type, so the property can be bound statically. (unique
+// symbol is not modelled: symbol-typed names pass.)
+func (c *Checker) checkClassPropertyComputedName(key *parser.ComputedPropertyName) {
+	expr := key.Expr
+	switch e := expr.(type) {
+	case *parser.StringLiteral, *parser.NumberLiteral, *parser.BigIntLiteral, *parser.TemplateLiteral:
+		return
+	case *parser.PrefixExpression:
+		if _, num := e.Right.(*parser.NumberLiteral); num && (e.Operator == "-" || e.Operator == "+") {
+			return
+		}
+	}
+	if entityNameText(expr) != "" {
+		t := expr.GetComputedType()
+		if t != types.String && t != types.Number {
+			return
+		}
+	}
+	c.addErrorAtStart(key, errors.TS1166, "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
 }

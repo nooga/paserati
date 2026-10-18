@@ -166,6 +166,7 @@ const (
 	TS4117  = "TS4117"  // This member cannot have an 'override' modifier because it is not declared in the base class 'X'. Did you mean 'Y'?
 	TS17005 = "TS17005" // A constructor cannot contain a 'super' call when its class extends 'null'
 	TS18013 = "TS18013" // Property 'X' is not accessible outside class 'Y'
+	TS1166  = "TS1166"  // class property computed name must be a simple literal
 	TS2783  = "TS2783"  // property specified more than once (spread overwrites)
 	TS7008  = "TS7008"  // Member implicitly has an 'any' type
 	TS7022  = "TS7022"  // implicitly any: referenced in its own initializer

@@ -602,6 +602,8 @@ type deferredComputedKeyCheck struct {
 	// classCtx sees the private names of the class whose member key this
 	// is, and of the classes around it.
 	classCtx *types.AccessContext
+	// propertyKey is set for a class property's key, which TS1166 limits.
+	propertyKey *parser.ComputedPropertyName
 }
 
 // computedKeyClassContext is the access context of a computed member key of
@@ -2251,6 +2253,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.markContextualYield(check.expr)
 			c.visit(check.expr)
 			c.validateComputedPropertyNameType(check.expr, check.expr)
+			if check.propertyKey != nil {
+				c.checkClassPropertyComputedName(check.propertyKey)
+			}
 			c.reportThisInComputedName(check.expr)
 		}
 		c.currentClassContext = savedCtx

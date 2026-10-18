@@ -879,7 +879,9 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	}
 	for _, prop := range body.Properties {
 		if prop.IsStatic {
-			deferStaticKey(prop.Key)
+			if computedKey, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), propertyKey: computedKey})
+			}
 		}
 	}
 
@@ -1094,7 +1096,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 			// Check if this is a computed property
 			if computedKey, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), propertyKey: computedKey})
 				// Try to extract constant property name
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific property
