@@ -11,6 +11,10 @@ type TypeParameter struct {
 	Constraint Type   // Optional constraint (e.g., T extends string), nil if unconstrained
 	Default    Type   // Optional default type (e.g., T = string), nil if no default
 	Index      int    // Position in the type parameter list (0-based)
+	// Canonical marks a fresh copy standing for a generic target
+	// signature's own parameter while relating it (tsc's canonical
+	// signature): it is related only to itself, never matched by name.
+	Canonical bool
 }
 
 func (tp *TypeParameter) String() string {

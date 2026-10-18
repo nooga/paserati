@@ -659,7 +659,7 @@ func (r *Relation) isAssignable(source, target Type) bool {
 		// Fallback: compare by name if they're different instances
 		sourceName := sourceTypeParam.Parameter.Name
 		targetName := targetTypeParam.Parameter.Name
-		if sourceName == targetName {
+		if sourceName == targetName && !sourceTypeParam.Parameter.Canonical && !targetTypeParam.Parameter.Canonical {
 			// fmt.Printf("// [TypeParam Debug] Allowing name-based match: '%s'\n", sourceName)
 			return true
 		}
@@ -955,6 +955,24 @@ func (r *Relation) instantiateSignatureInContextOf(source, target *Signature) *S
 	return out
 }
 
+// canonicalSignature replaces a generic signature's type parameters with
+// fresh canonical ones, which relate only to themselves.
+func canonicalSignature(sig *Signature) *Signature {
+	if sig == nil || len(sig.TypeParameters) == 0 {
+		return sig
+	}
+	subs := make(map[*TypeParameter]Type, len(sig.TypeParameters))
+	fresh := make([]*TypeParameter, len(sig.TypeParameters))
+	for i, tp := range sig.TypeParameters {
+		fresh[i] = &TypeParameter{Name: tp.Name, Constraint: tp.Constraint, Default: tp.Default, Index: tp.Index, Canonical: true}
+		subs[tp] = &TypeParameterType{Parameter: fresh[i]}
+	}
+	out := substituteSignature(sig, subs)
+	out.ParameterNames = sig.ParameterNames
+	out.TypeParameters = fresh
+	return out
+}
+
 func eraseSignatureTypeParams(sig *Signature) *Signature {
 	if sig == nil || len(sig.TypeParameters) == 0 {
 		return sig
@@ -992,6 +1010,7 @@ func (r *Relation) signatureRelated(source, target *Signature, tolerateVoidSourc
 		// either way can expand without end, so the signatures are related
 		// as written (type parameters of one name relate).
 	case !callbackParams && (len(target.TypeParameters) == 0 || !sigMentionsGenericInstance(source)):
+		target = canonicalSignature(target)
 		source = r.instantiateSignatureInContextOf(source, target)
 	default:
 		source = eraseSignatureTypeParams(source)
