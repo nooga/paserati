@@ -146,6 +146,14 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			}
 		}
 
+		// An element access without a narrowing keeps its declared type,
+		// literal or not (`[n: number]: 42` accepts only 42).
+		if indexLHS, isIndex := node.Left.(*parser.IndexExpression); isIndex {
+			if key := expressionToNarrowingKey(indexLHS); key == "" || c.resolveMemberExpressionOriginalType(key) == nil {
+				targetType = lhsType
+			}
+		}
+
 		// For member expressions, if the property has been narrowed (e.g., this._tools
 		// narrowed from string[] | null to null), check assignment against the original
 		// declared property type, not the narrowed type.
