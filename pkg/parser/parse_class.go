@@ -480,6 +480,8 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else if p.curTokenIs(lexer.STATIC) && !isStatic && !isFieldName() {
 				if seenOverride {
 					p.addError(p.curToken, "'static' modifier must precede 'override' modifier.")
+				} else if seenAsync {
+					p.addError(p.curToken, "'static' modifier must precede 'async' modifier.")
 				}
 				isStatic = true
 				p.nextToken()
@@ -504,6 +506,8 @@ func (p *Parser) parseClassBody() *ClassBody {
 				}
 				if seenOverride {
 					p.addError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'override' modifier.", p.curToken.Literal))
+				} else if seenAsync {
+					p.addError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'async' modifier.", p.curToken.Literal))
 				}
 				hasAccessibility = true
 				if p.curTokenIs(lexer.PUBLIC) {

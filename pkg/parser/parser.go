@@ -3569,6 +3569,7 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 	// They are only meaningful in a constructor; elsewhere tsc's checker reports
 	// TS2369, which we raise as a semantic diagnostic.
 	var modTok *lexer.Token
+	sawOverride := false
 	for p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.READONLY) || p.curTokenIs(lexer.OVERRIDE) {
 		// A modifier keyword that is itself the parameter name (`(public)`, `(readonly: T)`)
 		if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) || p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) || p.peekTokenIs(lexer.ASSIGN) {
@@ -3578,16 +3579,31 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 			modTok = p.curToken
 		}
 		switch p.curToken.Type {
-		case lexer.PUBLIC:
-			param.IsPublic = true
-		case lexer.PRIVATE:
-			param.IsPrivate = true
-		case lexer.PROTECTED:
-			param.IsProtected = true
+		case lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED:
+			// checkGrammarModifiers: accessibility comes first.
+			if p.tscDiagnostics {
+				if sawOverride {
+					p.addGrammarErrorWithCode(p.curToken, "TS1029", fmt.Sprintf("'%s' modifier must precede 'override' modifier.", p.curToken.Literal))
+				} else if param.IsReadonly {
+					p.addGrammarErrorWithCode(p.curToken, "TS1029", fmt.Sprintf("'%s' modifier must precede 'readonly' modifier.", p.curToken.Literal))
+				}
+			}
+			switch p.curToken.Type {
+			case lexer.PUBLIC:
+				param.IsPublic = true
+			case lexer.PRIVATE:
+				param.IsPrivate = true
+			default:
+				param.IsProtected = true
+			}
 		case lexer.READONLY:
 			param.IsReadonly = true
 		case lexer.OVERRIDE:
 			// `override` on a parameter property: accepted, not tracked
+			if p.tscDiagnostics && param.IsReadonly {
+				p.addGrammarErrorWithCode(p.curToken, "TS1029", "'override' modifier must precede 'readonly' modifier.")
+			}
+			sawOverride = true
 		}
 		p.nextToken() // Consume the modifier and move to the next token
 	}
