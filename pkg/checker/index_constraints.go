@@ -2,9 +2,11 @@ package checker
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -283,14 +285,155 @@ func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceTyp
 		}
 		c.checkPropertyAgainstIndexSignatures(owner, key, name, propType, sigs)
 	}
+	// A computed name that is not a literal binds no property; tsc checks
+	// the member against the index signatures its key type selects.
+	checkUnbound := func(key parser.Expression, tok *lexer.Token, static bool, memberType types.Type) {
+		cp, ok := key.(*parser.ComputedPropertyName)
+		if !ok || cp.Expr == nil || memberType == nil || c.extractConstantPropertyName(cp.Expr) != "" {
+			return
+		}
+		if _, isStr := cp.Expr.(*parser.StringLiteral); isStr {
+			return
+		}
+		sigs := instanceSigs
+		if static {
+			sigs = staticSigs
+		}
+		keyType := cp.Expr.GetComputedType()
+		if keyType == nil || len(sigs) == 0 {
+			return
+		}
+		name := ""
+		switch {
+		case c.isAssignableWithExpansion(keyType, types.Number):
+			name = "0" // any numeric name
+		case c.isAssignableWithExpansion(keyType, types.String):
+		default:
+			return
+		}
+		applicable := make([]*types.IndexSignature, 0, len(sigs))
+		for _, sig := range sigs {
+			if sig != nil && indexSignatureApplies(sig.KeyType, name) {
+				applicable = append(applicable, sig)
+			}
+		}
+		for _, sig := range applicable {
+			if sig.ValueType == nil || sig.IsMapped || sig.Synthetic || c.isAssignableWithExpansion(memberType, sig.ValueType) {
+				continue
+			}
+			var at parser.Node = key
+			if tok != nil && tok.Literal == "[" {
+				at = &parser.Identifier{Token: tok, Value: "["}
+			}
+			c.addErrorAtStart(at, errors.TS2411, fmt.Sprintf(
+				"Property '[%s]' of type '%s' is not assignable to '%s' index type '%s'.",
+				computedNameText(cp.Expr), memberType.String(), sig.KeyType.String(), sig.ValueType.String()))
+		}
+	}
+	declared := map[string]bool{}
 	for _, prop := range body.Properties {
 		if prop != nil && !isPrivateNameKey(prop.Key) {
 			check(prop.Key, prop.IsStatic)
+			if !prop.IsStatic {
+				declared[c.classMemberKeyName(prop.Key)] = true
+			}
+			if prop.TypeAnnotation != nil {
+				checkUnbound(prop.Key, prop.Token, prop.IsStatic, c.resolveTypeAnnotation(prop.TypeAnnotation))
+			}
 		}
 	}
 	for _, m := range body.Methods {
 		if m != nil && m.Kind != "constructor" && !isPrivateNameKey(m.Key) {
 			check(m.Key, m.IsStatic)
+			if !m.IsStatic {
+				declared[c.classMemberKeyName(m.Key)] = true
+			}
+			if m.Value != nil {
+				if fn, ok := m.Value.GetComputedType().(*types.ObjectType); ok && len(fn.CallSigs()) > 0 {
+					sig := fn.CallSigs()[0]
+					switch m.Kind {
+					case "getter":
+						checkUnbound(m.Key, m.Token, m.IsStatic, sig.ReturnType)
+					case "setter":
+						if len(sig.ParameterTypes) > 0 {
+							checkUnbound(m.Key, m.Token, m.IsStatic, sig.ParameterTypes[0])
+						}
+					default:
+						checkUnbound(m.Key, m.Token, m.IsStatic, fn)
+					}
+				}
+			}
+		}
+	}
+	c.checkInheritedAgainstOwnIndexSignatures(body, instanceType, declared)
+}
+
+// computedNameText spells a computed name's expression roughly as written.
+func computedNameText(e parser.Expression) string {
+	switch x := e.(type) {
+	case *parser.InfixExpression:
+		return computedNameText(x.Left) + " " + x.Operator + " " + computedNameText(x.Right)
+	case *parser.Identifier:
+		return x.Value
+	}
+	if text := entityNameText(e); text != "" {
+		return text
+	}
+	if n, ok := e.(*parser.NumberLiteral); ok && n.Token != nil {
+		return n.Token.Literal
+	}
+	return e.String()
+}
+
+// classMemberKeyName is the property name a class member key binds, or "".
+func (c *Checker) classMemberKeyName(key parser.Expression) string {
+	if cp, ok := key.(*parser.ComputedPropertyName); ok {
+		return c.extractConstantPropertyName(cp.Expr)
+	}
+	return c.extractPropertyName(key)
+}
+
+// checkInheritedAgainstOwnIndexSignatures checks the instance properties a
+// class inherits, and does not redeclare, against the index signatures it
+// declares itself, reporting at the index signature (tsc's
+// checkIndexConstraintForProperty).
+func (c *Checker) checkInheritedAgainstOwnIndexSignatures(body *parser.ClassBody, instanceType *types.ObjectType, declared map[string]bool) {
+	if instanceType == nil || len(body.IndexSignatures) == 0 {
+		return
+	}
+	for _, decl := range body.IndexSignatures {
+		if decl == nil || decl.IsStatic || decl.Token == nil {
+			continue
+		}
+		keyType := c.resolveTypeAnnotation(decl.KeyType)
+		valueType := c.resolveTypeAnnotation(decl.ValueType)
+		if keyType == nil || valueType == nil {
+			continue
+		}
+		for _, base := range instanceType.Bases() {
+			bo, ok := base.(*types.ObjectType)
+			if !ok {
+				continue
+			}
+			props := bo.GetEffectiveProperties()
+			names := make([]string, 0, len(props))
+			for name := range props {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				propType := props[name]
+				if declared[name] || propType == nil || strings.HasPrefix(name, "#") || name == "__COMPUTED_PROPERTY__" ||
+					!indexSignatureApplies(keyType, name) || c.isAssignableWithExpansion(propType, valueType) {
+					continue
+				}
+				if _, nonPublic := types.NonPublicMemberOwner(bo, name); nonPublic {
+					continue
+				}
+				c.addErrorAtStart(&parser.Identifier{Token: decl.Token, Value: "["}, errors.TS2411, fmt.Sprintf(
+					"Property '%s' of type '%s' is not assignable to '%s' index type '%s'.",
+					name, propType.String(), keyType.String(), valueType.String()))
+			}
 		}
 	}
 }
