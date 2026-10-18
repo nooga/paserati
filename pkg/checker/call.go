@@ -1476,11 +1476,22 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		}
 	}
 
-	// Fallback: If phase 1 didn't infer anything, try the original approach
+	// Fallback: If phase 1 didn't infer anything, try the original approach.
+	// A function argument's parameters fix the type parameters they mention:
+	// with no inference yet, a constrained one is its constraint.
+	ctxParams := genericSig.ParameterTypes
+	if fixedToConstraints := constrainedTypeParams(c.extractTypeParametersFromSignature(genericSig)); len(fixedToConstraints) > 0 {
+		paramsOnly := *genericSig
+		paramsOnly.ReturnType = nil
+		ctxParams = c.substituteTypeParameters(&paramsOnly, fixedToConstraints).ParameterTypes
+	}
 	for i, argNode := range callNode.Arguments {
 		if argTypes[i] == nil {
 			if i < len(genericSig.ParameterTypes) {
 				paramType := genericSig.ParameterTypes[i]
+				if _, isFn := argNode.(*parser.ArrowFunctionLiteral); isFn && i < len(ctxParams) {
+					paramType = ctxParams[i]
+				}
 				argContexts[argNode] = paramType
 				c.visitWithContext(argNode, &ContextualType{
 					ExpectedType: paramType,
@@ -1910,6 +1921,36 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		}
 
 	case *types.UnionType:
+		// T | undefined (one naked type parameter beside fixed members): the
+		// argument's members matching a fixed member are left out, and the
+		// rest infers T, as tsc's inferFromMatchingTypes does.
+		if tp, fixed := c.nakedTypeParamUnion(pType); tp != nil {
+			var rest []types.Type
+			argMembers := []types.Type{argType}
+			if au, ok := argType.(*types.UnionType); ok {
+				argMembers = au.Types
+			}
+			for _, m := range argMembers {
+				matched := false
+				for _, f := range fixed {
+					if c.typesEqual(m, f) {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					rest = append(rest, m)
+				}
+			}
+			if len(rest) > 0 {
+				var src types.Type = rest[0]
+				if len(rest) > 1 {
+					src = types.NewUnionType(rest...)
+				}
+				constraints = append(constraints, c.collectConstraintsFromTypeSeen(tp, src, seen)...)
+			}
+			break
+		}
 		// For union parameter types like T | Getter<T> | Node<T>,
 		// try matching argType against each union member and collect constraints from the best match.
 		// The member that produces the most constraints (deepest structural match) wins.
@@ -2712,4 +2753,40 @@ func (c *Checker) keepsLiteralCandidate(tp *types.TypeParameter, paramType types
 		}
 	}
 	return true
+}
+
+// nakedTypeParamUnion returns the one naked type parameter of u and its other
+// members, when those mention no type parameter.
+func (c *Checker) nakedTypeParamUnion(u *types.UnionType) (*types.TypeParameterType, []types.Type) {
+	var tp *types.TypeParameterType
+	var fixed []types.Type
+	for _, m := range u.Types {
+		if t, ok := m.(*types.TypeParameterType); ok {
+			if tp != nil {
+				return nil, nil
+			}
+			tp = t
+			continue
+		}
+		if c.typeContainsTypeParameter(m) {
+			return nil, nil
+		}
+		fixed = append(fixed, m)
+	}
+	if len(fixed) == 0 {
+		return nil, nil
+	}
+	return tp, fixed
+}
+
+// constrainedTypeParams maps each type parameter with a literal-like
+// constraint to that constraint.
+func constrainedTypeParams(tps []*types.TypeParameter) map[*types.TypeParameter]types.Type {
+	m := map[*types.TypeParameter]types.Type{}
+	for _, tp := range tps {
+		if tp != nil && tp.Constraint != nil && hasPrimitiveConstraint(tp.Constraint) {
+			m[tp] = tp.Constraint
+		}
+	}
+	return m
 }
