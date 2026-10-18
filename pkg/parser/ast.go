@@ -3658,6 +3658,19 @@ type ClassBody struct {
 	ConstructorSigs    []*ConstructorSignature // Constructor overload signatures
 	MethodSigs         []*MethodSignature      // Method overload signatures
 	StaticInitializers []*BlockStatement       // Static initializer blocks: static { ... }
+	IndexSignatures    []*ClassIndexSignature  // Index signatures: [key: K]: V
+}
+
+// ClassIndexSignature is an index signature member of a class body,
+// `[key: K]: V`, optionally static and/or readonly. It declares no runtime
+// member; it only shapes the instance (or constructor) type.
+type ClassIndexSignature struct {
+	Token     *lexer.Token // The '[' token
+	KeyName   *Identifier
+	KeyType   Expression
+	ValueType Expression
+	IsStatic  bool
+	Readonly  bool
 }
 
 func (cb *ClassBody) TokenLiteral() string { return cb.Token.Literal }

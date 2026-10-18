@@ -183,3 +183,86 @@ func typeArgsReference(args []parser.Expression, name string) bool {
 	}
 	return false
 }
+
+// addClassIndexSignatures adds a class body's declared index signatures, the
+// static ones to the constructor type and the others to the instance type.
+func (c *Checker) addClassIndexSignatures(body *parser.ClassBody, target *types.ObjectType, static bool) {
+	if body == nil || target == nil {
+		return
+	}
+	var declared []*types.IndexSignature
+	for _, sig := range body.IndexSignatures {
+		if sig == nil || sig.IsStatic != static {
+			continue
+		}
+		keyType := c.resolveTypeAnnotation(sig.KeyType)
+		if keyType == nil {
+			keyType = types.Any
+		}
+		valueType := c.resolveTypeAnnotation(sig.ValueType)
+		if valueType == nil {
+			valueType = types.Any
+		}
+		c.reportDuplicateIndexSignature(sig.KeyName, declared, keyType)
+		declared = append(declared, &types.IndexSignature{KeyType: keyType, ValueType: valueType, Readonly: sig.Readonly})
+	}
+	if len(declared) == 0 {
+		return
+	}
+	target.Materialize()
+	target.IndexSignatures = append(target.IndexSigs(), declared...)
+}
+
+func hasDeclaredStringIndex(t *types.ObjectType) bool {
+	for _, sig := range t.IndexSigs() {
+		if !sig.Synthetic && sig.KeyType == types.String {
+			return true
+		}
+	}
+	return false
+}
+
+// checkClassIndexConstraints checks a class's own members against its index
+// signatures (checkIndexConstraints): instance members against the instance
+// type's, static members against the constructor's.
+func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceType, ctorType *types.ObjectType) {
+	if body == nil || len(body.IndexSignatures) == 0 {
+		return
+	}
+	check := func(key parser.Expression, static bool) {
+		owner := instanceType
+		if static {
+			owner = ctorType
+		}
+		if owner == nil || key == nil {
+			return
+		}
+		name := c.extractPropertyName(key)
+		if cp, ok := key.(*parser.ComputedPropertyName); ok {
+			name = c.extractConstantPropertyName(cp.Expr)
+		}
+		if name == "" {
+			return
+		}
+		propType := owner.Props()[name]
+		if propType == nil {
+			return
+		}
+		c.checkPropertyAgainstIndexSignatures(owner, key, name, propType, owner.IndexSigs())
+	}
+	for _, prop := range body.Properties {
+		if prop != nil && !isPrivateNameKey(prop.Key) {
+			check(prop.Key, prop.IsStatic)
+		}
+	}
+	for _, m := range body.Methods {
+		if m != nil && m.Kind != "constructor" && !isPrivateNameKey(m.Key) {
+			check(m.Key, m.IsStatic)
+		}
+	}
+}
+
+func isPrivateNameKey(key parser.Expression) bool {
+	id, ok := key.(*parser.Identifier)
+	return ok && len(id.Value) > 0 && id.Value[0] == '#'
+}

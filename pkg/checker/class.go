@@ -388,6 +388,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
+	c.checkClassIndexConstraints(node.Body, instanceType, constructorType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
 	instanceType.DisplayName, constructorType.DisplayName = node.Name.Value, "typeof "+node.Name.Value
@@ -609,6 +610,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		constructorType.WithConstructSignature(sig)
 	}
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
+	c.checkClassIndexConstraints(node.Body, instanceType, constructorType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
 	instanceType.GenericName = node.Name.Value
@@ -999,9 +1001,10 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	}
 
 	c.orderInstanceMembersBySource(instanceType, body)
+	c.addClassIndexSignatures(body, instanceType, false)
 
 	// If class has computed properties, create index signatures
-	if hasComputedProperties {
+	if hasComputedProperties && !hasDeclaredStringIndex(instanceType) {
 		// Create a union type of all computed property value types
 		var indexValueType types.Type
 		if len(computedValueTypes) == 1 {
@@ -1014,12 +1017,11 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 		// Add index signature: [key: string]: ComputedValueType
 		instanceType.Materialize()
-		instanceType.IndexSignatures = []*types.IndexSignature{
-			{
-				KeyType:   types.String,
-				ValueType: indexValueType,
-			},
-		}
+		instanceType.IndexSignatures = append(instanceType.IndexSigs(), &types.IndexSignature{
+			KeyType:   types.String,
+			ValueType: indexValueType,
+			Synthetic: true,
+		})
 
 		if checkerDebug {
 			debugPrintf("// [Checker Class] Added index signature for computed properties: [key: string]: %s\n", indexValueType.String())
@@ -1701,6 +1703,7 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 		}
 	}
 
+	c.addClassIndexSignatures(body, constructorType, true)
 	c.deferStaticMethodBodies(className, body, constructorType, classInstanceType)
 
 	return constructorType

@@ -367,6 +367,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 	var constructorSigs []*ConstructorSignature
 	var methodSigs []*MethodSignature
 	var staticInitializers []*BlockStatement
+	var indexSignatures []*ClassIndexSignature
 
 	scope := &privateNameScope{}
 	p.privateScopes = append(p.privateScopes, scope)
@@ -663,6 +664,8 @@ func (p *Parser) parseClassBody() *ClassBody {
 				} else if property, ok := result.(*PropertyDefinition); ok {
 					attachDecorators(property)
 					properties = append(properties, property)
+				} else if sig, ok := result.(*ClassIndexSignature); ok && sig != nil {
+					indexSignatures = append(indexSignatures, sig)
 				}
 			}
 		} else if p.curTokenIs(lexer.PRIVATE_IDENT) {
@@ -799,6 +802,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		ConstructorSigs:    constructorSigs,
 		MethodSigs:         methodSigs,
 		StaticInitializers: staticInitializers,
+		IndexSignatures:    indexSignatures,
 	}
 	popScope()
 	p.checkClassBodyEarlyErrors(body, scope)
@@ -1511,10 +1515,11 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 				}
 				p.addError(bracketToken, fmt.Sprintf("'%s' modifier cannot appear on an index signature.", modifier))
 			}
-			// This looks like an index signature — skip the key type, ]: valueType
+			// An index signature: [key: KeyType]: ValueType
+			sig := &ClassIndexSignature{Token: bracketToken, KeyName: keyExpr.(*Identifier), IsStatic: isStatic, Readonly: isReadonly}
 			p.nextToken() // consume ':'
 			p.nextToken() // move to key type
-			_ = p.parseTypeExpression()
+			sig.KeyType = p.parseTypeExpression()
 			if !p.expectPeek(lexer.RBRACKET) {
 				return nil
 			}
@@ -1522,7 +1527,7 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 			if p.peekTokenIs(lexer.COLON) {
 				p.nextToken() // consume ':'
 				p.nextToken() // move to value type
-				_ = p.parseTypeExpression()
+				sig.ValueType = p.parseTypeExpression()
 			}
 			// Index signature must be followed by ';', '}', or newline (ASI)
 			if !p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) &&
@@ -1533,8 +1538,10 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 			if p.peekTokenIs(lexer.SEMICOLON) {
 				p.nextToken()
 			}
-			// Index signatures in classes are just type declarations; skip for now
-			return nil
+			if sig.KeyType == nil || sig.ValueType == nil {
+				return nil
+			}
+			return sig
 		}
 	}
 
