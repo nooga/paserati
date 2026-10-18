@@ -419,6 +419,22 @@ func (r *Relation) isAssignable(source, target Type) bool {
 					return true
 				}
 			}
+			// A type parameter relates through its whole constraint:
+			// T extends 1 | 2 is assignable to 1 | 2.
+			if tp, ok := source.(*TypeParameterType); ok {
+				if c := typeParameterConstraint(tp); c != nil && c != source && r.isAssignable(c, target) {
+					return true
+				}
+			}
+			// An intersection is assignable to the union when one of its
+			// type parameter constituents is.
+			if si, ok := source.(*IntersectionType); ok {
+				for _, part := range si.Types {
+					if _, isParam := part.(*TypeParameterType); isParam && r.isAssignable(part, target) {
+						return true
+					}
+				}
+			}
 			return false
 		}
 	} else if sourceIsUnion {
