@@ -161,6 +161,22 @@ func (c *Checker) paramsRequireScopeChange(params []*parser.Parameter) bool {
 				found = true
 				return
 			}
+			for _, prop := range x.Properties {
+				if prop != nil {
+					walk(prop.Key)
+					walk(prop.Target)
+					walk(prop.Default)
+				}
+			}
+			return
+		case *parser.ArrayParameterPattern:
+			for _, el := range x.Elements {
+				if el != nil {
+					walk(el.Target)
+					walk(el.Default)
+				}
+			}
+			return
 		}
 		forEachChildInScope(n, walk)
 	}
