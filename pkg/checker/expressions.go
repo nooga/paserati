@@ -3303,7 +3303,7 @@ func (c *Checker) checkInstanceofOperator(leftType, rightType types.Type, node *
 	}
 
 	// Right operand must be a constructor function
-	if rightType != types.Any && c.isDefinitelyNotConstructor(rightType) {
+	if rightType != types.Any && c.isDefinitelyNotConstructor(rightType) && !c.isUntypedCallTarget(rightType) {
 		c.addErrorWithCode(node.Right, errors.TS2359, "The right-hand side of an 'instanceof' expression must be either of type 'any', a class, function, or other type assignable to the 'Function' interface type, or an object type with a 'Symbol.hasInstance' method.")
 	}
 }

@@ -55,7 +55,7 @@ func (c *Checker) checkCallTypeArguments(node *parser.CallExpression, funcType t
 	if len(typeArgs) == 0 {
 		return false
 	}
-	if funcType == types.Any {
+	if funcType == types.Any || c.isUntypedCallTarget(funcType) {
 		c.addErrorWithCode(leftmostExpression(node), errors.TS2347, "Untyped function calls may not accept type arguments.")
 		return false
 	}
