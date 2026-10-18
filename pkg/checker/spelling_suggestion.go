@@ -269,6 +269,14 @@ func (c *Checker) addCannotFindTypeNameError(node parser.Node, env *Environment,
 	var inScope []string
 	if c.wantsSpellingSuggestion() {
 		inScope = collectScopeNamesFor(env, false, true)
+		// Lib generics such as Awaited are modelled outside the scope maps
+		// but are global types in tsc, so they are candidates too.
+		var libNames []string
+		for n := range libGenericTypeNames {
+			libNames = append(libNames, n)
+		}
+		sort.Strings(libNames)
+		inScope = append(inScope, libNames...)
 	}
 	for _, cand := range inScope {
 		switch cand {

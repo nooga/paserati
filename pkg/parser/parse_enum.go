@@ -77,6 +77,15 @@ func (p *Parser) parseEnumDeclaration(isConst bool) *EnumDeclaration {
 		p.nextToken() // Move to first member
 
 		for {
+			if p.tscDiagnostics && p.curTokenIs(lexer.COMMA) {
+				// tsc reports the missing member and skips the comma.
+				p.addErrorWithCode(p.curToken, "TS1132", "Enum member expected.")
+				if p.peekTokenIs(lexer.RBRACE) {
+					break
+				}
+				p.nextToken()
+				continue
+			}
 			memberStart := p.curToken.StartPos
 			member := p.parseEnumMember()
 			if member == nil {
@@ -129,6 +138,31 @@ func (p *Parser) parseEnumMember() *EnumMember {
 		// Identifier or keyword used as member name: enum E { interface, delete }
 		memberToken = p.curToken
 		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.tscDiagnostics && (p.curTokenIs(lexer.NUMBER) || p.curTokenIs(lexer.BIGINT)) {
+		// tsc parses any property name and refuses the wrong kinds later.
+		memberToken = p.curToken
+		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		p.addErrorWithCode(p.curToken, "TS2452", "An enum member cannot have a numeric name.")
+	} else if p.tscDiagnostics && p.curTokenIs(lexer.PRIVATE_IDENT) {
+		memberToken = p.curToken
+		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		p.addErrorWithCode(p.curToken, "TS18024", "An enum member cannot be named with a private identifier.")
+	} else if p.tscDiagnostics && p.curTokenIs(lexer.LBRACKET) {
+		memberToken = p.curToken
+		p.nextToken()
+		keyExpr := p.parseExpression(COMMA)
+		if keyExpr == nil || !p.expectPeek(lexer.RBRACKET) {
+			return nil
+		}
+		if lit, ok := keyExpr.(*StringLiteral); ok {
+			name = &Identifier{Token: memberToken, Value: lit.Value}
+		} else {
+			p.addErrorWithCode(memberToken, "TS1164", "Computed property names are not allowed in enums.")
+			name = &Identifier{Token: memberToken, Value: keyExpr.String()}
+		}
+	} else if p.tscDiagnostics {
+		p.addErrorWithCode(p.curToken, "TS1132", "Enum member expected.")
+		return nil
 	} else {
 		p.addError(p.curToken, "expected enum member name")
 		return nil

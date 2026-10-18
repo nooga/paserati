@@ -115,6 +115,23 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 			return res, true
 		}
 
+		if p.tscDiagnostics {
+			// tsc parses parameter-property modifiers here too and refuses
+			// them in the checker.
+			var modTok *lexer.Token
+			// Only before a plain name: `(readonly [K, V])` is a parenthesized
+			// readonly tuple type, not a parameter.
+			for (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.READONLY) || p.curTokenIs(lexer.OVERRIDE)) &&
+				(p.peekTokenIs(lexer.IDENT) || p.isTypeParamNameToken(p.peekToken)) {
+				if modTok == nil {
+					modTok = p.curToken
+				}
+				p.nextToken()
+			}
+			if modTok != nil && p.canRecover() {
+				p.addSemanticErrorWithCode(modTok, "TS2369", "A parameter property is only allowed in a constructor implementation.")
+			}
+		}
 		bare := false
 		optional := false
 		switch {

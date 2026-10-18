@@ -1791,6 +1791,15 @@ func (p *Parser) parseTypeExpression() Expression {
 	return p.parseTypeExpressionRecursive(TYPE_LOWEST)
 }
 
+// contextualTypeNameKeywords are keywords tsc's scanner treats as
+// identifiers, so they can name a type.
+var contextualTypeNameKeywords = map[lexer.TokenType]bool{
+	lexer.AWAIT: true, lexer.YIELD: true, lexer.ASYNC: true, lexer.GET: true, lexer.SET: true,
+	lexer.OF: true, lexer.FROM: true, lexer.AS: true, lexer.SATISFIES: true, lexer.IS: true,
+	lexer.TYPE: true, lexer.ABSTRACT: true, lexer.OVERRIDE: true, lexer.STATIC: true,
+	lexer.LET: true, lexer.INTERFACE: true, lexer.IMPLEMENTS: true,
+}
+
 // parseTypeExpressionRecursive handles precedence for type operators.
 // Uses typePrefixParseFns and typeInfixParseFns.
 func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
@@ -1798,6 +1807,14 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 
 	// --- MODIFIED: Use typePrefixParseFns ---
 	prefix := p.typePrefixParseFns[p.curToken.Type]
+	if prefix == nil && p.tscDiagnostics && contextualTypeNameKeywords[p.curToken.Type] {
+		// A contextual keyword names a type like any identifier (tsc then
+		// fails to resolve it, e.g. `var v: await`).
+		tok := *p.curToken
+		tok.Type = lexer.IDENT
+		p.curToken = &tok
+		prefix = p.parseTypeIdentifier
+	}
 	if prefix == nil {
 		// Error: No function found to start parsing this token as a type
 		msg := fmt.Sprintf("unexpected token %s (%q) at start of type annotation",
