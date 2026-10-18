@@ -2880,6 +2880,8 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			constructorSig := bodyObjType.ConstructSigs()[0]
 			if len(bodyObjType.ConstructSigs()) == 1 {
 				c.reportConstructArity(node, constructorSig)
+			} else {
+				c.checkOverloadedConstructArity(node, bodyObjType.ConstructSigs())
 			}
 
 			// Check if this is a generic signature
@@ -2922,6 +2924,8 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			// TODO: Implement overload resolution for constructors
 			if len(objType.ConstructSigs()) == 1 {
 				constructorSig = objType.ConstructSigs()[0]
+			} else {
+				c.checkOverloadedConstructArity(node, objType.ConstructSigs())
 			}
 		}
 

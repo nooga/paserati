@@ -34,7 +34,7 @@ func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []
 	}
 
 	if len(withArity) == 0 {
-		c.reportOverloadArityError(node, n, sigs)
+		c.reportOverloadArityError(node, node.Arguments, n, sigs)
 		return
 	}
 
@@ -78,7 +78,7 @@ func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []
 
 // reportOverloadArityError mirrors TypeScript's getArgumentArityError for a set
 // of overloads none of which accepts n arguments.
-func (c *Checker) reportOverloadArityError(node *parser.CallExpression, n int, sigs []*types.Signature) {
+func (c *Checker) reportOverloadArityError(node parser.Node, args []parser.Expression, n int, sigs []*types.Signature) {
 	min, max := -1, -1
 	hasRest := false
 	for _, sig := range sigs {
@@ -118,8 +118,8 @@ func (c *Checker) reportOverloadArityError(node *parser.CallExpression, n int, s
 		c.addErrorWithCode(node, errors.TS2555, message)
 		return
 	}
-	if n > max && max < len(node.Arguments) {
-		c.addErrorWithCode(node.Arguments[max], errors.TS2554, message)
+	if n > max && max < len(args) {
+		c.addErrorWithCode(args[max], errors.TS2554, message)
 		return
 	}
 	c.addErrorWithCode(node, errors.TS2554, message)
@@ -240,4 +240,22 @@ func overloadSignatureText(sig *types.Signature) string {
 		b.WriteString("void")
 	}
 	return b.String()
+}
+
+// checkOverloadedConstructArity reports a `new` whose argument count no
+// construct signature accepts. FIXME: argument types are not checked
+// against overloaded construct signatures.
+func (c *Checker) checkOverloadedConstructArity(node *parser.NewExpression, sigs []*types.Signature) {
+	for _, arg := range node.Arguments {
+		if _, isSpread := arg.(*parser.SpreadElement); isSpread {
+			return
+		}
+	}
+	n := len(node.Arguments)
+	for _, sig := range sigs {
+		if n >= requiredParameterCount(sig) && (sig.IsVariadic || sig.RestParameterType != nil || n <= len(sig.ParameterTypes)) {
+			return
+		}
+	}
+	c.reportOverloadArityError(node, node.Arguments, n, sigs)
 }
