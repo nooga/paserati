@@ -1588,7 +1588,11 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 
 	widenedType1 := c.rel.GetWidenedType(type1)
 	widenedType2 := c.rel.GetWidenedType(type2)
-	return widenedType1 == widenedType2
+	if widenedType1 == widenedType2 {
+		return true
+	}
+	// tsc's isTypeEqualityComparableTo, in either direction.
+	return c.rel.IsComparable(type1, type2) || c.rel.IsComparable(type2, type1)
 }
 
 // isLiteralAssignableToType checks if a literal type is assignable to another type
