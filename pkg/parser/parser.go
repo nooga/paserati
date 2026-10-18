@@ -3070,7 +3070,18 @@ func (p *Parser) parseNewExpression() Expression {
 
 	// Check for tagged template: new tag`template` -> new (tag`template`)
 	// Tagged templates should be part of the constructor, not the arguments
-	for p.peekTokenIs(lexer.TEMPLATE_START) {
+	for p.peekTokenIs(lexer.TEMPLATE_START) || (ne.Constructor != nil && isTaggedTemplate(ne.Constructor) && (p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET))) {
+		if !p.peekTokenIs(lexer.TEMPLATE_START) {
+			// Member accesses after the template still belong to the callee:
+			// new tag`x`.member() is new (tag`x`.member)().
+			infix := p.infixParseFns[p.peekToken.Type]
+			p.nextToken()
+			ne.Constructor = infix(ne.Constructor)
+			if ne.Constructor == nil {
+				return nil
+			}
+			continue
+		}
 		p.nextToken() // Move to template start (curToken is now TEMPLATE_START)
 		template := p.parseTemplateLiteral()
 		if template == nil {
@@ -3098,6 +3109,23 @@ func (p *Parser) parseNewExpression() Expression {
 	}
 
 	return ne
+}
+
+// isTaggedTemplate reports whether a new expression's callee so far ends in
+// a tagged template, possibly followed by member accesses.
+func isTaggedTemplate(e Expression) bool {
+	for {
+		switch x := e.(type) {
+		case *TaggedTemplateExpression:
+			return true
+		case *MemberExpression:
+			e = x.Object
+		case *IndexExpression:
+			e = x.Left
+		default:
+			return false
+		}
+	}
 }
 
 func (p *Parser) parseImportMetaExpression() Expression {

@@ -20,12 +20,12 @@ func TestNewKeyword(t *testing.T) {
 		},
 		{
 			name:     "Constructor with primitive return",
-			code:     `function Test() { if (true) { return 42; } } new Test()`,
+			code:     `function Test() { if (true) { return 42; } } new (Test as any)()`,
 			expected: "{}", // Should return instance, not primitive
 		},
 		{
 			name:     "Constructor with object return",
-			code:     `function Test() { if (true) { return {}; } } new Test()`,
+			code:     `function Test() { if (true) { return {}; } } new (Test as any)()`,
 			expected: "{}", // Should return the explicit object
 		},
 		{

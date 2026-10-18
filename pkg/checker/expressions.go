@@ -2971,6 +2971,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		} else {
 			// Callable object but no constructor signatures - return any (matches TypeScript behavior)
 			resultType = types.Any
+			c.checkNewOnCallSignature(node, objType)
 		}
 	} else if genericType, ok := constructorType.(*types.GenericType); ok {
 		// Handle GenericType constructors by checking their body for constructor signatures
@@ -4097,5 +4098,28 @@ func (c *Checker) reportConstructArity(node *parser.NewExpression, sig *types.Si
 	}
 	if actual < min || actual > max {
 		c.addErrorWithCode(node, errors.TS2554, formatArityError(min, max, actual))
+	}
+}
+
+// checkNewOnCallSignature reports `new` applied to a type with call but no
+// construct signatures: under noImplicitAny the result is an implicit any
+// (TS7009); otherwise only a void function may be called that way (TS2350).
+// An any return is often an inference fallback and is not judged. Built-in
+// constructors are modelled as callable types with a prototype, so
+// only types without one are judged.
+func (c *Checker) checkNewOnCallSignature(node *parser.NewExpression, obj *types.ObjectType) {
+	sigs := obj.CallSigs()
+	if len(sigs) == 0 {
+		return
+	}
+	if _, hasProto := obj.EffectiveProperty("prototype"); hasProto {
+		return
+	}
+	if c.noImplicitAny {
+		c.addErrorWithCode(node, errors.TS7009, "'new' expression, whose target lacks a construct signature, implicitly has an 'any' type.")
+		return
+	}
+	if rt := sigs[0].ReturnType; rt != nil && rt != types.Void && rt != types.Undefined && rt != types.Any {
+		c.addErrorWithCode(node, errors.TS2350, "Only a void function can be called with the 'new' keyword.")
 	}
 }
