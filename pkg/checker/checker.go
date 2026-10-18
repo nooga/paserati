@@ -502,6 +502,10 @@ type Checker struct {
 	// object types into one object, where tsc distributes the spread into a
 	// union of objects.
 	flattenedSpreads map[parser.Node]bool
+	// classBodiesInInstanceInit holds class expressions written inside an
+	// instance property initializer, whose base may be the class still being
+	// assembled.
+	classBodiesInInstanceInit map[*parser.ClassBody]bool
 	// spreadFlattened is set by mergeSpread when it flattens such a union.
 	spreadFlattened   bool
 	contextualParams  map[parser.Node]bool             // parameters of function arguments that a callee types
@@ -4401,6 +4405,12 @@ func (c *Checker) visit(node parser.Node) {
 			className = node.Name
 		}
 
+		if c.deferredContextDepth > 0 && node.Body != nil {
+			if c.classBodiesInInstanceInit == nil {
+				c.classBodiesInInstanceInit = map[*parser.ClassBody]bool{}
+			}
+			c.classBodiesInInstanceInit[node.Body] = true
+		}
 		classDecl := &parser.ClassDeclaration{
 			Token:          node.Token,
 			Name:           className,

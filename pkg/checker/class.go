@@ -1252,6 +1252,55 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 		}
 	}
 
+	// Instance property initializers were checked with `this` as any while
+	// the instance type was being assembled. Those that read `this` are
+	// checked again against the instance; diagnostics already reported are
+	// not repeated. A class inside another class's instance initializer
+	// may extend a class whose instance type is still incomplete, so it is
+	// left alone.
+	if c.deferredContextDepth > 0 || c.classBodiesInInstanceInit[body] {
+		return
+	}
+	c.setClassContext(className, types.AccessContextInstanceMethod)
+	for _, prop := range body.Properties {
+		if prop == nil || prop.IsStatic || prop.Value == nil || !initializerReadsThis(prop.Value) {
+			continue
+		}
+		c.deferredContextDepth++
+		if prop.TypeAnnotation != nil {
+			if name, ok := getMethodKeyString(prop.Key); ok {
+				if declared := instanceType.Props()[name]; declared != nil {
+					c.visitWithContext(prop.Value, &ContextualType{ExpectedType: declared, IsContextual: true})
+				}
+			}
+		} else {
+			c.visit(prop.Value)
+		}
+		c.deferredContextDepth--
+	}
+}
+
+// initializerReadsThis reports whether an expression reads `this` outside
+// any nested function or class (an arrow function shares it).
+func initializerReadsThis(e parser.Expression) bool {
+	found := false
+	var walk func(n parser.Node)
+	walk = func(n parser.Node) {
+		if found || isNilNode(n) {
+			return
+		}
+		switch n.(type) {
+		case *parser.ThisExpression:
+			found = true
+			return
+		case *parser.FunctionLiteral, *parser.ShorthandMethod, *parser.MethodDefinition,
+			*parser.ClassExpression, *parser.ClassDeclaration:
+			return
+		}
+		forEachChildInScope(n, walk)
+	}
+	walk(e)
+	return found
 }
 
 // refineMethodReturnType gives a method without a return type annotation the
