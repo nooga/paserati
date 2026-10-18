@@ -125,6 +125,7 @@ type functionContext struct {
 	activeLabels          map[string]bool
 	nestingDepth          int
 	nonArrowFunctionDepth int
+	innermostArrow        bool
 	crossFunctionTargets  bool
 	flowNarrowOverlay     map[string]types.Type
 }
@@ -143,6 +144,7 @@ func (c *Checker) saveFunctionContext() functionContext {
 		activeLabels:          c.activeLabels,
 		nestingDepth:          c.functionNestingDepth,
 		nonArrowFunctionDepth: c.nonArrowFunctionDepth,
+		innermostArrow:        c.innermostFunctionIsArrow,
 		crossFunctionTargets:  c.crossFunctionTargets,
 		flowNarrowOverlay:     c.flowNarrowOverlay,
 	}
@@ -157,6 +159,7 @@ func (c *Checker) saveFunctionContext() functionContext {
 	c.activeLabels = map[string]bool{}
 	c.functionNestingDepth = 0
 	c.nonArrowFunctionDepth = 0
+	c.innermostFunctionIsArrow = false
 	c.crossFunctionTargets = false
 	c.flowNarrowOverlay = nil
 	return s
@@ -175,6 +178,7 @@ func (c *Checker) restoreFunctionContext(s functionContext) {
 	c.activeLabels = s.activeLabels
 	c.functionNestingDepth = s.nestingDepth
 	c.nonArrowFunctionDepth = s.nonArrowFunctionDepth
+	c.innermostFunctionIsArrow = s.innermostArrow
 	c.crossFunctionTargets = s.crossFunctionTargets
 	c.flowNarrowOverlay = s.flowNarrowOverlay
 }

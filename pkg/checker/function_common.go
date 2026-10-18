@@ -550,6 +550,8 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	if !ctx.IsArrow {
 		c.nonArrowFunctionDepth++
 	}
+	outerInArrow := c.innermostFunctionIsArrow
+	c.innermostFunctionIsArrow = ctx.IsArrow
 
 	// Set up 'this' context - check for explicit 'this' parameter
 	outerThisType := c.currentThisType
@@ -661,6 +663,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	if !ctx.IsArrow {
 		c.nonArrowFunctionDepth--
 	}
+	c.innermostFunctionIsArrow = outerInArrow
 
 	return finalReturnType
 }

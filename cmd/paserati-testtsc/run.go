@@ -76,6 +76,7 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 		lx := lexer.NewLexer(st.Source)
 		p := parser.NewParser(lx)
 		p.SetTscDiagnostics(true)
+		p.SetStrictMode(alwaysStrictEnabled(opts))
 		prog, parseErrs := p.ParseProgram()
 		for _, e := range parseErrs {
 			resp.Actual = append(resp.Actual, toDiag(e, "parse"))
@@ -118,8 +119,30 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 			}
 			resp.Actual = append(resp.Actual, toDiag(e, phase))
 		}
+		resp.Actual = dedupeDiags(resp.Actual)
 	}()
 	return
+}
+
+// dedupeDiags drops diagnostics identical to an earlier one (same position,
+// code and message), as tsc's sortAndDeduplicateDiagnostics does. The parser
+// and checker can both report the same strict-mode error.
+func dedupeDiags(ds []Diag) []Diag {
+	type key struct {
+		line, col int
+		code, msg string
+	}
+	seen := make(map[key]bool, len(ds))
+	out := ds[:0]
+	for _, d := range ds {
+		k := key{d.Line, d.Col, d.Code, d.Msg}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, d)
+	}
+	return out
 }
 
 func programIsModule(prog *parser.Program) bool {
@@ -152,6 +175,7 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	pas.SetTscCompatibleDiagnostics(true)
 	pas.SetAlwaysStrict(alwaysStrictEnabled(opts))
 	pas.SetUseDefineForClassFields(useDefineForClassFieldsEnabled(opts))
+	pas.SetTarget(targetLevel(opts))
 	pas.SetEmitStandardClassFields(useDefineForClassFieldsEnabled(opts) && targetLevel(opts) >= 2022)
 	return pas
 }

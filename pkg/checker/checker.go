@@ -390,17 +390,20 @@ type Checker struct {
 
 	// --- NEW: Current function context ---
 	// Track if we're currently inside an async or generator function
-	inAsyncFunction        bool
-	inGeneratorFunction    bool
-	functionNestingDepth   int  // 0 = top level, >0 = inside function(s)
-	nonArrowFunctionDepth  int  // >0 = inside a non-arrow function, where `arguments` exists
-	crossFunctionTargets   bool // a loop, switch or label encloses the current function, so jumps there cross a function boundary
-	allowTopLevelReturn    bool
-	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
-	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
-	allowUnreachableCode   bool // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
-	tscCompat              bool // Suppress diagnostics beyond what tsc reports; see SetTscCompatibleDiagnostics
-	alwaysStrict           bool // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
+	inAsyncFunction       bool
+	inGeneratorFunction   bool
+	functionNestingDepth  int // 0 = top level, >0 = inside function(s)
+	nonArrowFunctionDepth int // >0 = inside a non-arrow function, where `arguments` exists
+	// innermostFunctionIsArrow is set while the nearest enclosing function is
+	// an arrow function.
+	innermostFunctionIsArrow bool
+	crossFunctionTargets     bool // a loop, switch or label encloses the current function, so jumps there cross a function boundary
+	allowTopLevelReturn      bool
+	skipStrictPropertyInit   bool // When true, TS2564 is not emitted (strict-init opt-out)
+	skipDefiniteAssignment   bool // When true, TS2454 is not emitted (definite-assignment opt-out)
+	allowUnreachableCode     bool // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
+	tscCompat                bool // Suppress diagnostics beyond what tsc reports; see SetTscCompatibleDiagnostics
+	alwaysStrict             bool // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
 	// noDefineForClassFields mirrors --useDefineForClassFields false (the
 	// default for targets before ES2022); TS2729 depends on it.
 	noDefineForClassFields bool
@@ -408,8 +411,11 @@ type Checker struct {
 	// fields (useDefineForClassFields off, or a target before ES2022): a
 	// parameter property then exists before field initializers run.
 	noStandardClassFields bool
-	classNameNode         *parser.Identifier // class being declared, for diagnostics reported on its name
-	strictNullChecks      bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
+	// targetYear mirrors --target as a year (5 for ES5); 0 means the default,
+	// ES2025.
+	targetYear       int
+	classNameNode    *parser.Identifier // class being declared, for diagnostics reported on its name
+	strictNullChecks bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
 	// reportedRelationDiagnostics dedupes relation diagnostics reported at the
 	// same position more than once (see addErrorAtStart).
 	reportedRelationDiagnostics map[string]bool
@@ -681,6 +687,40 @@ func (c *Checker) SetAlwaysStrict(strict bool) {
 // as for TypeScript's default target).
 func (c *Checker) SetUseDefineForClassFields(on bool) {
 	c.noDefineForClassFields = !on
+}
+
+// SetTarget mirrors --target, given as a year (3 and 5 for ES3 and ES5,
+// 2015 for ES6, 9999 for ESNext).
+func (c *Checker) SetTarget(year int) {
+	c.targetYear = year
+}
+
+// target returns the --target year.
+func (c *Checker) target() int {
+	if c.targetYear == 0 {
+		return 2025
+	}
+	return c.targetYear
+}
+
+// declaredInInnermostFunction reports whether name is declared in the scopes
+// of the nearest enclosing function, up to and including its parameters.
+func (c *Checker) declaredInInnermostFunction(name string) bool {
+	for e := c.env; e != nil; e = e.outer {
+		if e.HasLocalSymbol(name) {
+			return true
+		}
+		if e.isFunctionScope || e.outer == nil {
+			return false
+		}
+	}
+	return false
+}
+
+// inStrictMode reports whether code at the current position is strict: a
+// module, a class body, or any code under --alwaysStrict.
+func (c *Checker) inStrictMode() bool {
+	return c.alwaysStrict || c.isModule || c.getCurrentClassName() != ""
 }
 
 // SetEmitStandardClassFields mirrors tsc's emitStandardClassFields
@@ -1663,6 +1703,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.activeLabels = make(map[string]bool)
 		c.functionNestingDepth++
 		c.nonArrowFunctionDepth++
+		outerInArrow := c.innermostFunctionIsArrow
+		c.innermostFunctionIsArrow = false
 
 		if c.currentExpectedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{} // Allocate only if inference needed
@@ -1944,6 +1986,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.activeLabels = outerActiveLabels
 		c.functionNestingDepth--
 		c.nonArrowFunctionDepth--
+		c.innermostFunctionIsArrow = outerInArrow
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
 
@@ -3159,6 +3202,11 @@ func (c *Checker) visit(node parser.Node) {
 		// First try regular resolution, then check with objects
 		c.inferPendingInit(node.Value)
 		typ, isConst, found := c.env.Resolve(node.Value) // Use node.Value directly; UPDATED TO 3 VARS
+		if found && node.Value == "arguments" && c.target() < 2015 && c.innermostFunctionIsArrow && !c.declaredInInnermostFunction(node.Value) {
+			// Below ES2015 the arrow's own `arguments` is found before any
+			// outer declaration of that name.
+			c.addErrorWithCode(node, errors.TS2496, "The 'arguments' object cannot be referenced in an arrow function in ES5. Consider using a standard function expression.")
+		}
 		isFromWith := false
 		if found {
 			c.checkBlockScopedUse(node)
@@ -3174,8 +3222,18 @@ func (c *Checker) visit(node parser.Node) {
 		if !found {
 			// Special handling for 'arguments' identifier - only available in function scope
 			if node.Value == "arguments" {
+				// Below ES2015 an arrow function has `arguments` of its own
+				// (as emitted), which tsc refuses (TS2496); likewise in an
+				// async function (TS2522).
+				if c.target() < 2015 && c.functionNestingDepth > 0 {
+					if c.innermostFunctionIsArrow {
+						c.addErrorWithCode(node, errors.TS2496, "The 'arguments' object cannot be referenced in an arrow function in ES5. Consider using a standard function expression.")
+					} else if c.inAsyncFunction {
+						c.addErrorWithCode(node, errors.TS2522, "The 'arguments' object cannot be referenced in an async function or method in ES5. Consider using a standard function or method.")
+					}
+				}
 				// Check if we're inside a function (not global scope)
-				if c.nonArrowFunctionDepth > 0 {
+				if c.nonArrowFunctionDepth > 0 || (c.target() < 2015 && c.functionNestingDepth > 0) {
 					// Get IArguments type that was defined by the builtin initializer
 					// Walk up to the global environment to find IArguments
 					globalEnv := c.env
@@ -3845,6 +3903,8 @@ func (c *Checker) visit(node parser.Node) {
 		c.activeLabels = make(map[string]bool)
 		c.functionNestingDepth++
 		c.nonArrowFunctionDepth++
+		outerInArrow := c.innermostFunctionIsArrow
+		c.innermostFunctionIsArrow = false
 		if resolvedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{}
 		}
@@ -3946,6 +4006,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.activeLabels = outerActiveLabelsSM
 		c.functionNestingDepth--
 		c.nonArrowFunctionDepth--
+		c.innermostFunctionIsArrow = outerInArrow
 
 	// --- NEW: Handle SpreadElement ---
 	case *parser.SpreadElement:
@@ -4013,6 +4074,7 @@ func (c *Checker) visit(node parser.Node) {
 			// duplicate labels are reported by the parser (TS1114)
 		}
 		c.activeLabels[labelName] = true
+		c.checkStrictModeLabeledStatement(node)
 		c.visit(node.Statement)
 		delete(c.activeLabels, labelName)
 

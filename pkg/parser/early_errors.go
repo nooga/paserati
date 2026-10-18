@@ -141,11 +141,15 @@ func (w *eeWalker) binding(id *Identifier, c eeCtx) {
 	}
 	w.ident(id, c)
 	if c.strict && (id.Value == "eval" || id.Value == "arguments") {
-		w.evalOrArguments(id)
+		w.evalOrArguments(id, c)
 	}
 }
 
-func (w *eeWalker) evalOrArguments(id *Identifier) {
+func (w *eeWalker) evalOrArguments(id *Identifier, c eeCtx) {
+	if c.inClass {
+		w.p.addErrorWithCode(id.Token, errors.TS1210, "Code contained in a class is evaluated in JavaScript's strict mode which does not allow this use of '"+id.Value+"'. For more information, see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode.")
+		return
+	}
 	w.p.addErrorWithCode(id.Token, errors.TS1100, "Invalid use of '"+id.Value+"' in strict mode.")
 }
 
@@ -153,7 +157,7 @@ func (w *eeWalker) evalOrArguments(id *Identifier) {
 func (w *eeWalker) simpleTarget(id *Identifier, c eeCtx) {
 	w.ident(id, c)
 	if c.strict && (id.Value == "eval" || id.Value == "arguments") {
-		w.evalOrArguments(id)
+		w.evalOrArguments(id, c)
 	}
 }
 

@@ -63,3 +63,25 @@ func (c *Checker) checkStrictModeIdentifier(node *parser.Identifier) {
 	c.addErrorWithCode(node, code,
 		"Identifier expected. '"+node.Value+"' is a reserved word in strict mode."+why)
 }
+
+// checkStrictModeLabeledStatement reports TS1344 for a label on a declaration
+// in strict mode (tsc's binder, for targets from ES2015 on).
+func (c *Checker) checkStrictModeLabeledStatement(node *parser.LabeledStatement) {
+	if !c.inStrictMode() || c.target() < 2015 || node.Label == nil {
+		return
+	}
+	switch st := node.Statement.(type) {
+	case *parser.VarStatement, *parser.LetStatement, *parser.ConstStatement,
+		*parser.ArrayDestructuringDeclaration, *parser.ObjectDestructuringDeclaration,
+		*parser.ClassDeclaration, *parser.InterfaceDeclaration, *parser.TypeAliasStatement,
+		*parser.EnumDeclaration, *parser.NamespaceDeclaration, *parser.ImportDeclaration,
+		*parser.ImportEqualsDeclaration, *parser.ExportNamedDeclaration, *parser.ExportDefaultDeclaration:
+	case *parser.ExpressionStatement:
+		if fl, ok := st.Expression.(*parser.FunctionLiteral); !ok || fl.Parenthesized || fl.Name == nil {
+			return
+		}
+	default:
+		return
+	}
+	c.addErrorWithCode(node.Label, errors.TS1344, "'A label is not allowed here.")
+}

@@ -130,6 +130,12 @@ func (p *Paserati) SetUseDefineForClassFields(on bool) {
 	p.checker.SetUseDefineForClassFields(on)
 }
 
+// SetTarget mirrors --target, given as a year (5 for ES5, 2015 for ES6,
+// 9999 for ESNext).
+func (p *Paserati) SetTarget(year int) {
+	p.checker.SetTarget(year)
+}
+
 // SetEmitStandardClassFields mirrors tsc's emitStandardClassFields
 // (useDefineForClassFields with a target of ES2022 or later).
 func (p *Paserati) SetEmitStandardClassFields(on bool) {

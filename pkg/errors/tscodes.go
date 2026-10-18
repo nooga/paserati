@@ -13,6 +13,7 @@ const (
 	TS1015  = "TS1015"  // Parameter cannot have question mark and initializer
 	TS1016  = "TS1016"  // A required parameter cannot follow an optional parameter
 	TS1100  = "TS1100"  // Invalid use of 'X' in strict mode
+	TS1210  = "TS1210"  // Code contained in a class is evaluated in JavaScript's strict mode which does not allow this use of 'X'
 	TS1109  = "TS1109"  // Expression expected
 	TS1128  = "TS1128"  // Declaration or statement expected
 	TS1155  = "TS1155"  // 'const' declarations must be initialized
@@ -124,6 +125,9 @@ const (
 	TS2629  = "TS2629"  // Cannot assign to 'X' because it is a class
 	TS2631  = "TS2631"  // Cannot assign to 'X' because it is a namespace
 	TS2729  = "TS2729"  // Property 'X' is used before its initialization
+	TS1344  = "TS1344"  // 'A label is not allowed here.
+	TS2496  = "TS2496"  // The 'arguments' object cannot be referenced in an arrow function in ES5
+	TS2522  = "TS2522"  // The 'arguments' object cannot be referenced in an async function or method in ES5
 	TS2777  = "TS2777"  // The operand of an increment or decrement operator may not be an optional property access
 	TS2779  = "TS2779"  // The left-hand side of an assignment expression may not be an optional property access
 	TS2630  = "TS2630"  // Cannot assign to 'X' because it is a function
