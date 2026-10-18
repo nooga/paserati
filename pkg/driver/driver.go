@@ -122,6 +122,7 @@ func (p *Paserati) SetStrictFunctionTypes(strict bool) {
 // strict family, so on by default as of TypeScript 6.0.
 func (p *Paserati) SetAlwaysStrict(strict bool) {
 	p.checker.SetAlwaysStrict(strict)
+	p.compiler.SetAlwaysStrict(strict)
 }
 
 // SetIsModule tells the checker the source is a module, which selects TS1214

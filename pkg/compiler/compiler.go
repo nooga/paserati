@@ -473,6 +473,9 @@ type Compiler struct {
 
 	// --- Type Error Handling ---
 	ignoreTypeErrors bool // When true, compilation continues despite type errors
+	// notAlwaysStrict turns off TypeScript mode's implicit strictness
+	// (--alwaysStrict false): a script is then strict only by directive.
+	notAlwaysStrict bool
 	skipTypeCheck    bool // When true, type checker is not run at all (for pure JS mode)
 
 	// --- NEW: Class Context for super() support ---
@@ -601,6 +604,11 @@ func (c *Compiler) SetChecker(checker *checker.Checker) {
 }
 
 // SetIgnoreTypeErrors sets whether to continue compilation despite type errors
+// SetAlwaysStrict mirrors --alwaysStrict for type-checked code (default on).
+func (c *Compiler) SetAlwaysStrict(strict bool) {
+	c.notAlwaysStrict = !strict
+}
+
 func (c *Compiler) SetIgnoreTypeErrors(ignore bool) {
 	c.ignoreTypeErrors = ignore
 }
@@ -1144,7 +1152,7 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 	// TypeScript mode (type checking enabled): default to strict mode
 	// JavaScript mode (type checking disabled or skipped): respect "use strict" directive or inherited strict mode
 	c.chunk.IsModule = moduleGoal
-	if !c.ignoreTypeErrors && !c.skipTypeCheck {
+	if !c.ignoreTypeErrors && !c.skipTypeCheck && !c.notAlwaysStrict {
 		// TypeScript mode - always strict
 		c.chunk.IsStrict = true
 		debugPrintf("[Compile] TypeScript mode - enabling strict mode by default\n")
