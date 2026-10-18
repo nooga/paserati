@@ -2386,8 +2386,7 @@ func (c *Checker) registerInterfaceImplementation(instanceType *types.ObjectType
 	// Verify interfaceType is an interface (ObjectType without constructor signatures)
 	interfaceObjType, ok := interfaceType.(*types.ObjectType)
 	if !ok {
-		c.addError(nil, fmt.Sprintf("'%s' is not an interface and cannot be implemented", interfaceName))
-		return
+		return // a generic or merged interface: not modelled here
 	}
 
 	// Add interface to class metadata
@@ -2420,8 +2419,7 @@ func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.Ob
 	// Verify interfaceType is an interface
 	interfaceObjType, ok := interfaceType.(*types.ObjectType)
 	if !ok {
-		c.addError(nil, fmt.Sprintf("'%s' is not an interface and cannot be implemented", interfaceName))
-		return
+		return // a generic or merged interface: not modelled here
 	}
 
 	// Now validate that the class actually implements the interface

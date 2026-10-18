@@ -363,6 +363,15 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 				propName = keyIdent.Value
 			} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
 				propName = numLit.Token.Literal
+			} else if str, ok := prop.Key.(*parser.StringLiteral); ok {
+				propName = str.Value
+			} else if ck, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+				c.visit(ck.Expr)
+				if propName = c.extractConstantPropertyName(ck.Expr); propName == "" {
+					// A key known only at run time: the target is any.
+					c.checkDestructuringTargetForProperty(prop.Value, types.Any, "")
+					continue
+				}
 			} else {
 				if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
 					// A rest element nested inside an object pattern
@@ -586,6 +595,15 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 				propName = keyIdent.Value
 			} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
 				propName = numLit.Token.Literal
+			} else if str, ok := prop.Key.(*parser.StringLiteral); ok {
+				propName = str.Value
+			} else if ck, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+				c.visit(ck.Expr)
+				if propName = c.extractConstantPropertyName(ck.Expr); propName == "" {
+					// A key known only at run time: the target is any.
+					c.checkDestructuringTargetForDeclaration(prop.Value, types.Any, isConst, isVar)
+					continue
+				}
 			} else {
 				if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
 					// A rest element nested inside an object pattern

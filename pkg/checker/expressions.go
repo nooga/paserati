@@ -1498,6 +1498,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		}
 		break
 	}
+	// An enum member reads the members of its value's primitive.
+	if em, ok := widenedObjectType.(*types.EnumMemberType); ok {
+		if _, isStr := em.Value.(string); isStr {
+			widenedObjectType = types.String
+		} else {
+			widenedObjectType = types.Number
+		}
+	}
 
 	var resultType types.Type = types.Never // Default to Never if property not found/invalid access
 
