@@ -1832,6 +1832,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 			// Convert signature to ObjectType for storage
 			initialObjectType := types.NewFunctionType(initialSignature)
+			globalEnv.MarkBindingKind(name, BindingFunction)
 			if !globalEnv.Define(name, initialObjectType, false) { // Define with initial (maybe incomplete) signature
 				if existingType, found := globalEnv.ResolveType(name); found {
 					if _, isNamespace := existingType.(*types.NamespaceType); isNamespace {
@@ -3307,6 +3308,7 @@ func (c *Checker) visit(node parser.Node) {
 
 				// Convert signature to ObjectType and define the function in the block environment
 				funcObjectType := types.NewFunctionType(funcSig)
+				c.env.MarkBindingKind(name, BindingFunction)
 				if !c.env.Define(name, funcObjectType, false) {
 					// Duplicate definition error
 					c.redeclarationReportedByBinder()

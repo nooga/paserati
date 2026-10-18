@@ -88,6 +88,13 @@ func (c *Checker) exactInitializer(init parser.Expression) bool {
 		}
 		return ok && !c.preexistingGlobals[id.Value]
 	case *parser.Identifier, *parser.MemberExpression:
+		if id, isIdent := init.(*parser.Identifier); isIdent {
+			// A function or namespace declaration's value has its exact type.
+			switch c.env.ResolveBindingKind(id.Value) {
+			case BindingFunction, BindingNamespace:
+				return true
+			}
+		}
 		// A class or namespace value: `typeof X`.
 		obj, ok := init.GetComputedType().(*types.ObjectType)
 		return ok && strings.HasPrefix(obj.DisplayName, "typeof ")
@@ -161,6 +168,20 @@ func (c *Checker) varTypesClearlyDiffer(a, b types.Type, bothAnnotated bool) boo
 				return !c.rel.IsAssignable(a, b) || !c.rel.IsAssignable(b, a)
 			}
 		}
+	}
+	if fa, fb := plainFunctionSignature(a), plainFunctionSignature(b); fa != nil && fb != nil {
+		// Function types differ when their arity, a parameter or the return
+		// type clearly does.
+		if len(fa.ParameterTypes) != len(fb.ParameterTypes) || fa.IsVariadic != fb.IsVariadic {
+			return true
+		}
+		for i := range fa.ParameterTypes {
+			if c.varTypesClearlyDiffer(fa.ParameterTypes[i], fb.ParameterTypes[i], true) {
+				return true
+			}
+		}
+		// A function expression's inferred return type widens.
+		return c.varTypesClearlyDiffer(c.rel.GetWidenedType(fa.ReturnType), c.rel.GetWidenedType(fb.ReturnType), true)
 	}
 	if objectUnionVersusObject(a, b) || objectUnionVersusObject(b, a) {
 		// Identity never reduces a union: `A | B` is not `A`, even when B is
@@ -452,4 +473,18 @@ func containsAny(t types.Type, depth int) bool {
 func isAnyKeyword(annotation parser.Expression) bool {
 	id, ok := annotation.(*parser.Identifier)
 	return ok && id.Value == "any"
+}
+
+// plainFunctionSignature is the one non-generic call signature of a function
+// type with no other members, or nil.
+func plainFunctionSignature(t types.Type) *types.Signature {
+	obj, ok := t.(*types.ObjectType)
+	if !ok || len(obj.CallSigs()) != 1 || len(obj.ConstructSigs()) > 0 || len(obj.Props()) > 0 || len(obj.IndexSigs()) > 0 {
+		return nil
+	}
+	sig := obj.CallSigs()[0]
+	if len(sig.TypeParameters) > 0 || sig.ThisType != nil {
+		return nil
+	}
+	return sig
 }
