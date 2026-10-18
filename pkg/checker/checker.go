@@ -394,6 +394,9 @@ type Checker struct {
 	// used before being assigned (collectUnassignedReads).
 	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
 	daCollectOnly   bool
+	// varOnlyDecls maps names declared by a single `var` and nothing else
+	// to that declarator.
+	varOnlyDecls map[string]*parser.VarDeclarator
 	// hoistedSignatures holds the exported ambient function signatures
 	// Pass 2 already defined.
 	hoistedSignatures map[*parser.FunctionSignature]bool
@@ -1342,6 +1345,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	}
 
 	c.collectUnassignedReads(program)
+	c.varOnlyDecls = collectVarOnlyDecls(program)
 
 	// --- Pass 0: Pre-register all interface names as forward references ---
 	// This allows mutually recursive interfaces like:
@@ -3370,6 +3374,13 @@ func (c *Checker) visit(node parser.Node) {
 			// priority over the declared type from a straight-line read.
 			if narrowType, ok := c.flowNarrowOverlay[node.Value]; ok {
 				typ = narrowType
+			}
+			// A `var`'s narrowing does not reach into a function created
+			// inside the narrowed region (tsc's isParameterOrMutableLocalVariable).
+			if d := c.varOnlyDecls[node.Value]; d != nil && c.functionNestingDepth > 0 && d.TypeAnnotation != nil {
+				if t := declaredVarType(d); t != nil && c.env.narrowedOutsideFunction(node.Value) {
+					typ = t
+				}
 			}
 			// A read that may see the variable unassigned has its declared
 			// type, not a narrowed one.

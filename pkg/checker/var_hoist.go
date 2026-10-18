@@ -36,3 +36,63 @@ func (c *Checker) hoistFunctionBodyVars(body parser.Node) {
 	}
 	c.hoistVarNames(c.env.GetFunctionScope(), block.Statements)
 }
+
+// collectVarOnlyDecls returns, for each name a single `var` declarator
+// declares and nothing else in program does (no let, const, parameter,
+// function or class), that declarator.
+func collectVarOnlyDecls(program *parser.Program) map[string]*parser.VarDeclarator {
+	decls := map[string]*parser.VarDeclarator{}
+	other := map[string]bool{}
+	forEachDescendant(program, func(n parser.Node) {
+		switch x := n.(type) {
+		case *parser.VarStatement:
+			for _, d := range x.Declarations {
+				if d != nil && d.Name != nil {
+					if _, seen := decls[d.Name.Value]; seen {
+						other[d.Name.Value] = true
+					}
+					decls[d.Name.Value] = d
+				}
+			}
+		case *parser.LetStatement:
+			for _, d := range x.Declarations {
+				if d != nil && d.Name != nil {
+					other[d.Name.Value] = true
+				}
+			}
+		case *parser.ConstStatement:
+			for _, d := range x.Declarations {
+				if d != nil && d.Name != nil {
+					other[d.Name.Value] = true
+				}
+			}
+		case *parser.Parameter:
+			if x.Name != nil {
+				other[x.Name.Value] = true
+			}
+		case *parser.FunctionLiteral:
+			if x.Name != nil {
+				other[x.Name.Value] = true
+			}
+			for _, p := range x.Parameters {
+				if p != nil && p.Name != nil {
+					other[p.Name.Value] = true
+				}
+			}
+		case *parser.ArrowFunctionLiteral:
+			for _, p := range x.Parameters {
+				if p != nil && p.Name != nil {
+					other[p.Name.Value] = true
+				}
+			}
+		case *parser.ClassDeclaration:
+			if x.Name != nil {
+				other[x.Name.Value] = true
+			}
+		}
+	})
+	for name := range other {
+		delete(decls, name)
+	}
+	return decls
+}

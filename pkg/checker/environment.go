@@ -375,6 +375,26 @@ func (e *Environment) Resolve(name string) (typ types.Type, isConst bool, found 
 	return nil, false, false                                                       // Return nil type, isConst=false, found=false
 }
 
+// narrowedOutsideFunction reports whether name resolves to a narrowing
+// shadow (a non-function scope binding with another binding further out)
+// that lies outside the innermost enclosing function scope.
+func (e *Environment) narrowedOutsideFunction(name string) bool {
+	crossed := false
+	for cur := e; cur != nil; cur = cur.outer {
+		if _, ok := cur.symbols[name]; ok {
+			if !crossed || cur.isFunctionScope || cur.outer == nil {
+				return false
+			}
+			_, _, outer := cur.outer.Resolve(name)
+			return outer
+		}
+		if cur.isFunctionScope {
+			crossed = true
+		}
+	}
+	return false
+}
+
 // ResolveDeclaredType walks the scope chain to find the outermost (declared) type for a variable,
 // skipping narrowed redefinitions in enclosed scopes. This is used for assignment targets where
 // TypeScript checks against the declared type, not the narrowed type.
