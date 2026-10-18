@@ -410,6 +410,9 @@ type Checker struct {
 	// blockEndEnvs holds, for the if arms being joined, the scope each
 	// block ended in (with its early-exit narrowings).
 	blockEndEnvs map[*parser.BlockStatement]*Environment
+	// indexSigNodes maps a declared index signature to its declaration, for
+	// reporting the first of a duplicate pair.
+	indexSigNodes map[*types.IndexSignature]parser.Node
 	// presetCallee is a `new` expression's constructor, checked as the
 	// callee of a call whose type is presetCalleeType.
 	presetCallee     parser.Expression

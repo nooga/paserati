@@ -1262,7 +1262,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			}
 
 			// Add to our collected index signatures
-			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, keyType)
+			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, indexSig)
 			indexSignatures = append(indexSignatures, indexSig)
 
 		} else if prop.IsComputedProperty {

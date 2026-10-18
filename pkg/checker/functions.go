@@ -250,14 +250,24 @@ func requiredParameterCount(sig *types.Signature) int {
 	return count
 }
 
-func (c *Checker) reportDuplicateIndexSignature(node parser.Node, indexSignatures []*types.IndexSignature, keyType types.Type) {
-	if keyType == nil {
+// reportDuplicateIndexSignature reports TS2374 on sig's declaration and on
+// the earlier declaration with the same key type (tsc reports every one).
+func (c *Checker) reportDuplicateIndexSignature(node parser.Node, indexSignatures []*types.IndexSignature, sig *types.IndexSignature) {
+	if sig == nil || sig.KeyType == nil {
 		return
 	}
+	if c.indexSigNodes == nil {
+		c.indexSigNodes = map[*types.IndexSignature]parser.Node{}
+	}
+	c.indexSigNodes[sig] = node
+	keyType := sig.KeyType
 	for _, existing := range indexSignatures {
 		if existing != nil && existing.KeyType != nil && existing.KeyType.String() == keyType.String() {
-			c.addErrorWithCode(node, errors.TS2374, fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String()))
-			c.addErrorWithCode(node, errors.TS2374, fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String()))
+			msg := fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String())
+			if first := c.indexSigNodes[existing]; first != nil {
+				c.addErrorWithCode(first, errors.TS2374, msg)
+			}
+			c.addErrorWithCode(node, errors.TS2374, msg)
 			return
 		}
 	}

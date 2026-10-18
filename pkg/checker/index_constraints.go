@@ -244,8 +244,9 @@ func (c *Checker) addClassIndexSignatures(body *parser.ClassBody, target *types.
 		if valueType == nil {
 			valueType = types.Any
 		}
-		c.reportDuplicateIndexSignature(sig.KeyName, declared, keyType)
-		declared = append(declared, &types.IndexSignature{KeyType: keyType, ValueType: valueType, Readonly: sig.Readonly})
+		indexSig := &types.IndexSignature{KeyType: keyType, ValueType: valueType, Readonly: sig.Readonly}
+		c.reportDuplicateIndexSignature(sig.KeyName, declared, indexSig)
+		declared = append(declared, indexSig)
 	}
 	if len(declared) == 0 {
 		return

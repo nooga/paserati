@@ -415,7 +415,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				ValueType: valueType,
 				Readonly:  prop.Readonly,
 			}
-			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, keyType)
+			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, indexSignature)
 			indexSignatures = append(indexSignatures, indexSignature)
 
 			if checkerDebug {
@@ -763,7 +763,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 				KeyType:   keyType,
 				ValueType: valueType,
 			}
-			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, keyType)
+			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, indexSignature)
 			indexSignatures = append(indexSignatures, indexSignature)
 		} else if prop.IsConstructorSignature {
 			constructorType := c.resolveTypeAnnotation(prop.Type)
