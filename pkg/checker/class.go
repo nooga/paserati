@@ -1143,7 +1143,11 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	}
 
 	// Members must be assignable to the same members of the base class (TS2416).
-	c.deferRelationCheck(func() { c.checkClassMembersAgainstBase(className, body, instanceType) })
+	c.recordClassMemberKinds(body, instanceType)
+	c.deferRelationCheck(func() {
+		c.checkClassMembersAgainstBase(className, body, instanceType)
+		c.checkPropertyAccessorOverrides(className, body, instanceType)
+	})
 
 	return instanceType
 }

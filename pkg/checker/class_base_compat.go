@@ -244,3 +244,112 @@ func (c *Checker) checkClassHeritageAccessibility(node *parser.ClassDeclaration,
 		}
 	}
 }
+
+// classMemberKind is how a class declares an instance member: as a property
+// or as an accessor (get/set or `accessor`), and whether it is abstract.
+type classMemberKind struct {
+	accessor bool
+	abstract bool
+	name     *parser.Identifier
+}
+
+func classMemberName(key parser.Expression) (string, *parser.Identifier) {
+	switch k := key.(type) {
+	case *parser.Identifier:
+		if len(k.Value) > 0 && k.Value[0] == '#' {
+			return "", nil
+		}
+		return k.Value, k
+	case *parser.StringLiteral:
+		return k.Value, nil
+	}
+	return "", nil
+}
+
+// recordClassMemberKinds notes the kind of each public or protected
+// instance member body declares, for checkPropertyAccessorOverrides.
+func (c *Checker) recordClassMemberKinds(body *parser.ClassBody, instanceType *types.ObjectType) {
+	if body == nil || instanceType == nil || instanceType.ClassMeta == nil {
+		return
+	}
+	kinds := map[string]classMemberKind{}
+	add := func(key parser.Expression, k classMemberKind) {
+		name, ident := classMemberName(key)
+		if name == "" {
+			return
+		}
+		if _, seen := kinds[name]; seen {
+			return
+		}
+		k.name = ident
+		kinds[name] = k
+	}
+	for _, prop := range body.Properties {
+		if prop != nil && !prop.IsStatic && !prop.IsPrivate {
+			add(prop.Key, classMemberKind{accessor: prop.IsAccessor, abstract: prop.IsAbstract})
+		}
+	}
+	for _, m := range body.Methods {
+		if m != nil && !m.IsStatic && !m.IsPrivate && (m.Kind == "getter" || m.Kind == "setter") {
+			add(m.Key, classMemberKind{accessor: true})
+		}
+	}
+	for _, m := range body.MethodSigs {
+		if m != nil && !m.IsStatic && !m.IsPrivate && (m.Kind == "getter" || m.Kind == "setter") {
+			add(m.Key, classMemberKind{accessor: true, abstract: m.IsAbstract})
+		}
+	}
+	if c.classMemberKinds == nil {
+		c.classMemberKinds = map[*types.ClassMetadata]map[string]classMemberKind{}
+	}
+	c.classMemberKinds[instanceType.ClassMeta] = kinds
+}
+
+// checkPropertyAccessorOverrides reports a property overriding a base
+// accessor (TS2610) and an accessor overriding a base property (TS2611);
+// abstract base members may be overridden either way.
+func (c *Checker) checkPropertyAccessorOverrides(className string, body *parser.ClassBody, instanceType *types.ObjectType) {
+	if body == nil || instanceType == nil || instanceType.ClassMeta == nil || len(instanceType.Bases()) == 0 {
+		return
+	}
+	own := c.classMemberKinds[instanceType.ClassMeta]
+	baseObj, ok := c.resolveStructural(instanceType.Bases()[0]).(*types.ObjectType)
+	if !ok || baseObj.ClassMeta == nil {
+		return
+	}
+	baseName := baseObj.ClassMeta.ClassName
+	if baseName == "" {
+		return
+	}
+	lookup := func(name string) (classMemberKind, bool) {
+		obj := baseObj
+		for depth := 0; obj != nil && obj.ClassMeta != nil && depth < 32; depth++ {
+			if k, ok := c.classMemberKinds[obj.ClassMeta][name]; ok {
+				return k, true
+			}
+			if obj.ClassMeta.GetMemberAccess(name) != nil || len(obj.Bases()) == 0 {
+				return classMemberKind{}, false
+			}
+			obj, _ = c.resolveStructural(obj.Bases()[0]).(*types.ObjectType)
+		}
+		return classMemberKind{}, false
+	}
+	for name, k := range own {
+		if k.name == nil || k.abstract {
+			continue
+		}
+		base, ok := lookup(name)
+		if !ok || base.abstract || base.accessor == k.accessor {
+			continue
+		}
+		if !k.accessor {
+			c.addErrorAtStart(k.name, errors.TS2610, fmt.Sprintf(
+				"'%s' is defined as an accessor in class '%s', but is overridden here in '%s' as an instance property.",
+				name, baseName, className))
+		} else {
+			c.addErrorAtStart(k.name, errors.TS2611, fmt.Sprintf(
+				"'%s' is defined as a property in class '%s', but is overridden here in '%s' as an accessor.",
+				name, baseName, className))
+		}
+	}
+}

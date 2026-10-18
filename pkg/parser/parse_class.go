@@ -572,6 +572,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 			if m, ok := node.(*MethodDefinition); ok && m.Value != nil {
 				m.Value.SourceStart = memberStart + 1
 			}
+			if prop, ok := node.(*PropertyDefinition); ok {
+				prop.IsAbstract = isAbstract
+			}
 			if len(memberDecorators) == 0 {
 				return
 			}

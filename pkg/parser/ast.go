@@ -3936,6 +3936,7 @@ type PropertyDefinition struct {
 	IsProtected        bool         // For private access modifier
 	IsOverride         bool         // For override keyword
 	IsDeclare          bool         // For declare keyword
+	IsAbstract         bool         // For abstract keyword
 	IsAccessor         bool         // For the auto-accessor `accessor` keyword
 	Decorators         []*Decorator // Decorators applied to this property
 }

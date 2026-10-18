@@ -358,6 +358,9 @@ type Checker struct {
 	abstractClasses map[string]bool
 	// Track abstract method names per class: className → set of abstract method names
 	abstractMethods map[string]map[string]bool
+	// classMemberKinds records how each class declares its instance
+	// members; see recordClassMemberKinds.
+	classMemberKinds map[*types.ClassMetadata]map[string]classMemberKind
 
 	// --- NEW: Current generic class tracking ---
 	// Track the current generic class being processed to allow forward references
