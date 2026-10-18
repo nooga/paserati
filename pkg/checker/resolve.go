@@ -3621,6 +3621,14 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		}
 		return true
 
+	case *types.GenericType:
+		// A generic method in the pattern (Obs<infer V>'s map<U>) matches a
+		// generic method of the same arity through its body.
+		if ct, ok := checkType.(*types.GenericType); ok && len(ct.TypeParameters) == len(et.TypeParameters) {
+			return c.tryInferTypes(ct.Body, et.Body, inferences)
+		}
+		return c.rel.IsAssignable(checkType, extendsType)
+
 	case *types.ObjectType:
 		// Handle function type inference like (...args: any[]) => infer R
 		debugPrintf("// [TryInfer] Both are ObjectType\n")

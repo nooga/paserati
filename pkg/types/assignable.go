@@ -371,6 +371,9 @@ func (r *Relation) isAssignable(source, target Type) bool {
 				r.isAssignable(sourceGeneric.Body, targetGeneric.Body) {
 				return true
 			}
+			if sigsDeclareTypeParams(sourceGeneric.Body) && sigsDeclareTypeParams(targetGeneric.Body) {
+				return r.isAssignable(sourceGeneric.Body, targetGeneric.Body)
+			}
 			return r.isAssignable(eraseGenericType(sourceGeneric), targetGeneric.Body)
 		}
 	}
@@ -378,6 +381,11 @@ func (r *Relation) isAssignable(source, target Type) bool {
 	if sourceGeneric, ok := source.(*GenericType); ok {
 		if targetObj, ok := target.(*ObjectType); ok {
 			if targetObj.IsCallable() {
+				// Signatures that declare the type parameters themselves are
+				// instantiated in the context of the target's.
+				if sigsDeclareTypeParams(sourceGeneric.Body) && targetSigsAreNonGeneric(targetObj) {
+					return r.isAssignable(sourceGeneric.Body, targetObj)
+				}
 				return r.isAssignable(sourceGeneric.Body, targetObj) || r.isAssignable(eraseGenericType(sourceGeneric), targetObj)
 			}
 			return r.isAssignable(eraseGenericType(sourceGeneric), targetObj)
@@ -726,6 +734,65 @@ func sigRestElement(sig *Signature) Type {
 	return Any
 }
 
+// sigMentionsGenericInstance reports whether a signature's parameter or
+// return types (shallowly) instantiate a generic type: substituting into
+// those can expand recursive generics without end.
+func sigMentionsGenericInstance(sig *Signature) bool {
+	var mentions func(t Type, depth int) bool
+	mentions = func(t Type, depth int) bool {
+		if t == nil || depth > 2 {
+			return false
+		}
+		switch tt := t.(type) {
+		case *InstantiatedType:
+			return true
+		case *ArrayType:
+			return mentions(tt.ElementType, depth+1)
+		case *UnionType:
+			for _, m := range tt.Types {
+				if mentions(m, depth+1) {
+					return true
+				}
+			}
+		case *ObjectType:
+			if tt.Instantiates != nil || len(tt.GenericArgs) > 0 || tt.GenericName != "" || tt.lazySource != nil {
+				return true
+			}
+			for _, name := range tt.PropertyNames() {
+				if mentions(tt.Props()[name], depth+1) {
+					return true
+				}
+			}
+			for _, cs := range tt.CallSigs() {
+				for _, p := range cs.ParameterTypes {
+					if mentions(p, depth+1) {
+						return true
+					}
+				}
+				if mentions(cs.ReturnType, depth+1) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, p := range sig.ParameterTypes {
+		if mentions(p, 0) {
+			return true
+		}
+	}
+	return mentions(sig.RestParameterType, 0) || mentions(sig.ReturnType, 0)
+}
+
+// rawTypeAtPosition is the declared type of the i-th argument position (an
+// optional parameter's undefined is not added), for inference.
+func rawTypeAtPosition(sig *Signature, i int) Type {
+	if i < len(sig.ParameterTypes) {
+		return sig.ParameterTypes[i]
+	}
+	return sigRestElement(sig)
+}
+
 // sigTypeAtPosition mirrors tryGetTypeAtPosition: the type of the i-th
 // argument position, falling back to the rest element type.
 func (r *Relation) sigTypeAtPosition(sig *Signature, i int) Type {
@@ -744,6 +811,117 @@ func (r *Relation) sigTypeAtPosition(sig *Signature, i int) Type {
 // any (a permissive stand-in for TypeScript's instantiateSignatureInContextOf).
 func EraseSignatureTypeParams(sig *Signature) *Signature {
 	return eraseSignatureTypeParams(sig)
+}
+
+// instantiateSignatureInContextOf instantiates a generic source signature
+// for relating it to target, like tsc (a generic target's own parameters
+// stay opaque, as in its canonical signature): each type parameter is
+// inferred from the target parameter at a position where the source
+// parameter mentions it directly, as an array element or as a plain
+// object member. An inference that
+// violates the constraint, or none at all, falls back to the constraint, or
+// to unknown when there is none.
+func (r *Relation) instantiateSignatureInContextOf(source, target *Signature) *Signature {
+	if source == nil || len(source.TypeParameters) == 0 {
+		return source
+	}
+	inferred := make(map[*TypeParameter]Type, len(source.TypeParameters))
+	var infer func(sp, tp Type, depth int)
+	infer = func(sp, tp Type, depth int) {
+		if sp == nil || tp == nil || depth > 3 {
+			return
+		}
+		switch s := sp.(type) {
+		case *TypeParameterType:
+			if _, seen := inferred[s.Parameter]; !seen {
+				inferred[s.Parameter] = tp
+			}
+		case *ArrayType:
+			if ta, ok := tp.(*ArrayType); ok {
+				infer(s.ElementType, ta.ElementType, depth+1)
+			}
+		case *InstantiatedType:
+			if ti, ok := tp.(*InstantiatedType); ok && ti.Generic == s.Generic && len(ti.TypeArguments) == len(s.TypeArguments) {
+				for i := range s.TypeArguments {
+					infer(s.TypeArguments[i], ti.TypeArguments[i], depth+1)
+				}
+			}
+		case *ObjectType:
+			to, ok := tp.(*ObjectType)
+			if !ok {
+				return
+			}
+			// Instantiations of one generic: infer from the type arguments
+			// (walking their members can expand without end).
+			if s.Instantiates != nil || to.Instantiates != nil {
+				if s.Instantiates == to.Instantiates && len(s.GenericArgs) == len(to.GenericArgs) {
+					for i := range s.GenericArgs {
+						infer(s.GenericArgs[i], to.GenericArgs[i], depth+1)
+					}
+				}
+				return
+			}
+			// Function types: parameters and return, (arg: T) => U from
+			// (arg: string) => number, matched against the target's last
+			// signature as tsc does for overloads.
+			inferSigs := func(sourceSigs, targetSigs []*Signature) bool {
+				if len(sourceSigs) != 1 || len(targetSigs) == 0 {
+					return false
+				}
+				ss, ts := sourceSigs[0], targetSigs[len(targetSigs)-1]
+				for i := range ss.ParameterTypes {
+					infer(ss.ParameterTypes[i], rawTypeAtPosition(ts, i), depth+1)
+				}
+				infer(ss.ReturnType, ts.ReturnType, depth+1)
+				return true
+			}
+			if inferSigs(s.CallSigs(), to.CallSigs()) || inferSigs(s.ConstructSigs(), to.ConstructSigs()) {
+				return
+			}
+			// Plain object members: { a: T } from { a: string }.
+			if len(s.CallSigs()) > 0 || len(s.ConstructSigs()) > 0 {
+				return
+			}
+			for _, name := range s.PropertyNames() {
+				if tpt, has := to.Props()[name]; has {
+					infer(s.Props()[name], tpt, depth+1)
+				}
+			}
+		}
+	}
+	n := len(source.ParameterTypes)
+	if len(target.ParameterTypes) > n {
+		n = len(target.ParameterTypes)
+	}
+	for i := 0; i < n; i++ {
+		var sp Type
+		if i < len(source.ParameterTypes) {
+			sp = source.ParameterTypes[i]
+		} else {
+			sp = sigRestElement(source)
+		}
+		infer(sp, rawTypeAtPosition(target, i), 0)
+	}
+	if source.RestParameterType != nil && target.RestParameterType != nil {
+		infer(source.RestParameterType, target.RestParameterType, 0)
+	}
+	subs := make(map[*TypeParameter]Type, len(source.TypeParameters))
+	for _, tp := range source.TypeParameters {
+		if tp == nil {
+			continue
+		}
+		t, ok := inferred[tp]
+		if ok && t != nil && (tp.Constraint == nil || r.isAssignable(t, tp.Constraint)) {
+			subs[tp] = t
+		} else if tp.Constraint != nil {
+			subs[tp] = tp.Constraint
+		} else {
+			subs[tp] = Unknown
+		}
+	}
+	out := substituteSignature(source, subs)
+	out.ParameterNames = source.ParameterNames
+	return out
 }
 
 func eraseSignatureTypeParams(sig *Signature) *Signature {
@@ -777,7 +955,16 @@ func (r *Relation) signatureRelated(source, target *Signature, tolerateVoidSourc
 		return true
 	}
 
-	source = eraseSignatureTypeParams(source)
+	switch {
+	case len(source.TypeParameters) > 0 && len(source.TypeParameters) == len(target.TypeParameters) && sigMentionsGenericInstance(source):
+		// Both generic over recursive generic instances: substituting
+		// either way can expand without end, so the signatures are related
+		// as written (type parameters of one name relate).
+	case !callbackParams && (len(target.TypeParameters) == 0 || !sigMentionsGenericInstance(source)):
+		source = r.instantiateSignatureInContextOf(source, target)
+	default:
+		source = eraseSignatureTypeParams(source)
+	}
 	strict := r.StrictFunctionTypes && target.StrictVariance && !callbackParams
 
 	targetHasRest := target.RestParameterType != nil
@@ -1036,6 +1223,32 @@ func numericEnumMembers(t Type) []*EnumMemberType {
 		return out
 	}
 	return nil
+}
+
+// sigsDeclareTypeParams reports whether t is a plain function type whose
+// call signatures all declare their own type parameters.
+func sigsDeclareTypeParams(t Type) bool {
+	bo, ok := t.(*ObjectType)
+	if !ok || len(bo.Props()) > 0 || len(bo.IndexSigs()) > 0 || len(bo.ConstructSigs()) > 0 || len(bo.CallSigs()) == 0 {
+		return false
+	}
+	for _, sig := range bo.CallSigs() {
+		if len(sig.TypeParameters) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// targetSigsAreNonGeneric reports whether none of t's call signatures is
+// generic.
+func targetSigsAreNonGeneric(t *ObjectType) bool {
+	for _, sig := range t.CallSigs() {
+		if len(sig.TypeParameters) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // eraseGenericType replaces a generic type's own parameters with any in its

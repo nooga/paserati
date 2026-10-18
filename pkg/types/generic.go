@@ -69,7 +69,15 @@ func (g *GenericType) String() string {
 
 func (g *GenericType) Equals(other Type) bool {
 	if o, ok := other.(*GenericType); ok {
+		if g == o {
+			return true
+		}
 		if g.Name != o.Name || len(g.TypeParameters) != len(o.TypeParameters) {
+			return false
+		}
+		// Anonymous generic function types (`<T>(x: T) => T[]`) all share
+		// the name "Function"; they are related structurally instead.
+		if g.Name == "Function" {
 			return false
 		}
 		// For now, just compare names and arity

@@ -703,6 +703,9 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	callSignatures := bodyType.CallSigs()
 	var extendedObjs []*types.ObjectType
 	c.currentThisType = bodyType
+	// Members copied from the bases are overridden, not overloaded, by a
+	// redeclaration here.
+	inheritedNames := make(map[string]bool)
 
 	// Handle extends clause with generic environment
 	for _, extendedInterfaceExpr := range node.Extends {
@@ -731,6 +734,9 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			rb := newThisRebind(extendedObjectType, bodyType)
 			for _, propName := range extendedObjectType.PropertyNames() {
 				propType := extendedObjectType.Props()[propName]
+				if _, own := properties[propName]; !own {
+					inheritedNames[propName] = true
+				}
 				bodyType.SetProperty(propName, c.rebindThisType(propType, rb))
 				if extendedObjectType.OptionalProps() != nil && extendedObjectType.OptionalProps()[propName] {
 					optionalProperties[propName] = true
@@ -785,11 +791,12 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			if propType == nil {
 				propType = types.Any
 			}
-			if existingType, exists := properties[prop.Name.Value]; exists {
+			if existingType, exists := properties[prop.Name.Value]; exists && !inheritedNames[prop.Name.Value] {
 				if mergedType, merged := mergeInterfaceFunctionMemberTypes(existingType, propType); merged {
 					propType = mergedType
 				}
 			}
+			delete(inheritedNames, prop.Name.Value)
 			bodyType.SetProperty(prop.Name.Value, propType)
 			bodyType.SetPropertyDoc(prop.Name.Value, prop.Doc)
 			if prop.Optional {
