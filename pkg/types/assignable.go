@@ -445,10 +445,10 @@ func (r *Relation) isAssignable(source, target Type) bool {
 				}
 			}
 			// An intersection is assignable to the union when one of its
-			// type parameter constituents is.
+			// constituents is: (A | B) & (C | D) to A | B.
 			if si, ok := source.(*IntersectionType); ok {
 				for _, part := range si.Types {
-					if _, isParam := part.(*TypeParameterType); isParam && r.isAssignable(part, target) {
+					if r.isAssignable(part, target) {
 						return true
 					}
 				}
