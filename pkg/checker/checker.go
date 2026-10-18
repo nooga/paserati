@@ -390,6 +390,9 @@ type Checker struct {
 
 	// Names of the program's top-level var and function declarations.
 	programHoistedNames map[string]bool
+	// hoistedSignatures holds the exported ambient function signatures
+	// Pass 2 already defined.
+	hoistedSignatures map[*parser.FunctionSignature]bool
 
 	// Constant values of enum members, per enum (see enum.go).
 	enumConsts map[*types.EnumType]enumMemberConsts
@@ -1668,6 +1671,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// though the identical, non-exported declaration works fine. Pass 5
 			// finishes the job (see the ExportNamedDeclaration handling there):
 			// it checks the initializer and registers the export.
+			// `export declare function f(...)` is ambient and exists from the
+			// start, like the unexported form handled above.
+			if sig := exportedAmbientSignature(node); sig != nil {
+				c.processFunctionSignature(sig)
+				if c.hoistedSignatures == nil {
+					c.hoistedSignatures = map[*parser.FunctionSignature]bool{}
+				}
+				c.hoistedSignatures[sig] = true
+			}
 			if node.Declaration != nil {
 				declarations, stmtType, isConst := varLikeDeclarationParts(node.Declaration)
 				if stmtType != "" {
@@ -2398,7 +2410,9 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.FunctionSignature:
 		// Process function overload signatures
-		c.processFunctionSignature(node)
+		if !c.hoistedSignatures[node] {
+			c.processFunctionSignature(node)
+		}
 
 	case *parser.ExpressionStatement:
 		c.visit(node.Expression)
@@ -5979,4 +5993,16 @@ func (c *Checker) valueScope() func(name string) (types.Type, bool) {
 		t, _, found := env.Resolve(name)
 		return t, found
 	}
+}
+
+// exportedAmbientSignature returns the signature of `export declare function`.
+func exportedAmbientSignature(node *parser.ExportNamedDeclaration) *parser.FunctionSignature {
+	var decl parser.Node = node.Declaration
+	if es, ok := decl.(*parser.ExpressionStatement); ok {
+		decl = es.Expression
+	}
+	if sig, ok := decl.(*parser.FunctionSignature); ok && sig.Declare && sig.Name != nil {
+		return sig
+	}
+	return nil
 }
