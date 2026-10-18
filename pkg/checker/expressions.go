@@ -594,8 +594,18 @@ func spreadableProps(obj *types.ObjectType) map[string]types.Type {
 			props["prototype"] = sigs[0].ReturnType
 		}
 	}
-	for name, t := range obj.Props() {
+	all := obj.Props()
+	for name, t := range all {
+		if strings.HasPrefix(name, "__get__") || strings.HasPrefix(name, "__set__") {
+			continue // an object literal accessor's implementation
+		}
 		if isSpreadableMember(obj, name) {
+			// A set-only accessor reads as undefined.
+			_, hasSetter := all["__set__"+name]
+			_, hasGetter := all["__get__"+name]
+			if hasSetter && !hasGetter {
+				t = types.Undefined
+			}
 			props[name] = t
 		}
 	}
