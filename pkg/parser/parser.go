@@ -7792,7 +7792,14 @@ func (p *Parser) parseSwitchCase() *SwitchCase {
 			if ls, ok := stmt.(*LetStatement); ok && (ls.IsUsing || ls.IsAwaitUsing) {
 				// A case clause's StatementList may not directly contain a
 				// using declaration: it has no scope boundary of its own.
-				p.addError(ls.Token, "'using' declarations are not allowed directly in a case or default clause")
+				switch {
+				case p.tscDiagnostics && ls.IsAwaitUsing:
+					p.addErrorWithCode(ls.Token, "TS1548", "'await using' declarations are not allowed in 'case' or 'default' clauses unless contained within a block.")
+				case p.tscDiagnostics:
+					p.addErrorWithCode(ls.Token, "TS1547", "'using' declarations are not allowed in 'case' or 'default' clauses unless contained within a block.")
+				default:
+					p.addError(ls.Token, "'using' declarations are not allowed directly in a case or default clause")
+				}
 			}
 			caseClause.Body.Statements = appendFlatteningGroups(caseClause.Body.Statements, stmt)
 

@@ -268,6 +268,19 @@ func (p *Parser) checkInitializerEarlyErrors(node Node) {
 	}
 	var h initializerHazard
 	scanInitializer(reflect.ValueOf(node), &h)
+	if p.tscDiagnostics {
+		if h.arguments != nil {
+			p.addErrorWithCode(h.arguments.Token, "TS2815", "'arguments' cannot be referenced in property initializers or class static initialization blocks.")
+		}
+		if h.superCall != nil {
+			tok := h.superCall.Token
+			if sup, ok := h.superCall.Function.(*SuperExpression); ok && sup.Token != nil {
+				tok = sup.Token
+			}
+			p.addErrorWithCode(tok, "TS2337", "Super calls are not permitted outside constructors or in nested functions inside constructors.")
+		}
+		return
+	}
 	if h.arguments != nil {
 		p.addError(h.arguments.Token, "'arguments' is not allowed in class field initializer or static initialization block")
 	}

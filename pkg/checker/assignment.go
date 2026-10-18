@@ -255,6 +255,14 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 
 	// Set computed type for the overall assignment expression (evaluates to RHS value)
 	node.SetComputedType(rhsType)
+	switch node.Operator {
+	case "&&=", "||=", "??=":
+		// A logical assignment evaluates like the logical operator: the
+		// retained part of the old value or the assigned value.
+		if lhsType != nil && rhsType != nil {
+			node.SetComputedType(c.logicalOperatorResultType(strings.TrimSuffix(node.Operator, "="), lhsType, rhsType))
+		}
+	}
 }
 
 // isThisExpression checks if an expression is a 'this' expression

@@ -1103,9 +1103,59 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 
 			// Check the method body - but preserve the context established here
 			c.checkMethodBodyWithContext(method.Value)
+			c.refineMethodReturnType(instanceType, body, method)
 		}
 	}
 
+}
+
+// refineMethodReturnType gives a method without a return type annotation the
+// return type its body was found to have. The method's signature is built
+// before bodies are checked, with an any return; this is tsc's inferred
+// return type for callers checked afterwards.
+func (c *Checker) refineMethodReturnType(owner *types.ObjectType, body *parser.ClassBody, method *parser.MethodDefinition) {
+	if owner == nil || method == nil || method.Value == nil || method.Kind != "method" ||
+		method.Value.ReturnTypeAnnotation != nil || len(method.Value.TypeParameters) > 0 {
+		return
+	}
+	name, known := getMethodKeyString(method.Key)
+	if !known {
+		return
+	}
+	for _, m := range body.Methods {
+		if m != method && m.IsStatic == method.IsStatic && m.Kind == "method" {
+			if other, ok := getMethodKeyString(m.Key); ok && other == name {
+				return // overloads or duplicates: leave the declared signatures alone
+			}
+		}
+	}
+	fnType, ok := method.Value.GetComputedType().(*types.ObjectType)
+	if !ok || len(fnType.CallSigs()) != 1 {
+		return
+	}
+	inferred := fnType.CallSigs()[0].ReturnType
+	if inferred == nil || inferred == types.Any {
+		return
+	}
+	// `return this` has the polymorphic this type in tsc, which is not
+	// modelled: an instance type of this class or a base would be wrong in
+	// subclasses, so such methods keep the any return.
+	members := []types.Type{inferred}
+	if u, ok := inferred.(*types.UnionType); ok {
+		members = u.Types
+	}
+	for _, m := range members {
+		if mo, ok := m.(*types.ObjectType); ok && mo.IsClassInstance() && (mo == owner || c.rel.IsAssignable(owner, mo)) {
+			return
+		}
+	}
+	propType, ok := owner.Props()[name].(*types.ObjectType)
+	if !ok || len(propType.CallSigs()) != 1 || propType == fnType {
+		return
+	}
+	if sig := propType.CallSigs()[0]; sig.ReturnType == types.Any {
+		sig.ReturnType = inferred
+	}
 }
 
 // checkMethodBodyWithContext checks a method body while preserving class context
@@ -1741,6 +1791,7 @@ func (c *Checker) deferStaticMethodBodies(className string, body *parser.ClassBo
 		for _, method := range methods {
 			c.setClassContext(className, types.AccessContextStaticMethod)
 			c.checkMethodBodyWithContext(method.Value)
+			c.refineMethodReturnType(constructorType, body, method)
 		}
 	}
 	if c.deferMethodBodies {

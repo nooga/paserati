@@ -684,6 +684,25 @@ func (p *Parser) parseSubStatement(ctx subStatementContext) Statement {
 		return stmt
 	}
 	if declarationBindings(stmt, func(*Identifier) {}) == lexicalDeclaration {
+		if p.tscDiagnostics {
+			// tsc: TS1156 naming the declaration kind; under a label only
+			// the label is refused (TS1344, from the checker).
+			if ctx != subStatementLabel {
+				kind := "let"
+				switch st := stmt.(type) {
+				case *LetStatement:
+					if st.IsAwaitUsing {
+						kind = "await using"
+					} else if st.IsUsing {
+						kind = "using"
+					}
+				case *ConstStatement:
+					kind = "const"
+				}
+				p.addErrorWithCode(startTok, "TS1156", "'"+kind+"' declarations can only be declared inside a block.")
+			}
+			return stmt
+		}
 		p.addError(startTok, "SyntaxError: Lexical declaration cannot appear in a single-statement context")
 		return stmt
 	}
