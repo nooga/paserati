@@ -78,6 +78,8 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 		p.SetTscDiagnostics(true)
 		p.SetStrictMode(alwaysStrictEnabled(opts))
 		p.SetTarget(targetLevel(opts))
+		experimental, _ := opts.boolOpt("experimentaldecorators")
+		p.SetExperimentalDecorators(experimental)
 		prog, parseErrs := p.ParseProgram()
 		for _, e := range parseErrs {
 			resp.Actual = append(resp.Actual, toDiag(e, "parse"))

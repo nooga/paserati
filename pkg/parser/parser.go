@@ -62,6 +62,8 @@ type Parser struct {
 	// target is tsc's --target as a year (5 for ES5); 0 means current. Only
 	// consulted in tscDiagnostics mode.
 	target int
+	// experimentalDecorators is tsc's --experimentalDecorators.
+	experimentalDecorators bool
 
 	// JS redeclaration early errors, re-labelled by finishBinding.
 	redeclarationErrors []*errors.SyntaxError
@@ -566,6 +568,12 @@ func (p *Parser) SetTscDiagnostics(on bool) {
 // target-dependent diagnostics in tscDiagnostics mode.
 func (p *Parser) SetTarget(year int) {
 	p.target = year
+}
+
+// SetExperimentalDecorators sets tsc's --experimentalDecorators, for the
+// placement rules of decorators in tscDiagnostics mode.
+func (p *Parser) SetExperimentalDecorators(on bool) {
+	p.experimentalDecorators = on
 }
 
 func (p *Parser) SetDisallowSuper(disallow bool) {

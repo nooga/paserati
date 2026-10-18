@@ -114,6 +114,9 @@ func staticKeyName(key Expression) (string, bool) {
 // semantics rules (ECMA-262 15.7.1) that need the whole body, and resolves
 // the private-name references collected in scope.
 func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameScope) {
+	if p.tscDiagnostics && body != nil {
+		p.checkClassDecoratorPlacement(body)
+	}
 	type privateDecl struct {
 		kind     string // "field", "method", "getter", "setter"
 		isStatic bool
@@ -380,6 +383,43 @@ func scanClassComputedKeys(body *ClassBody, h *initializerHazard) {
 	for _, prop := range body.Properties {
 		if c, ok := prop.Key.(*ComputedPropertyName); ok {
 			scanInitializer(reflect.ValueOf(c.Expr), h)
+		}
+	}
+}
+
+// checkClassDecoratorPlacement reports TS1206 for decorators tsc does not
+// allow: on a constructor, on a #private member under
+// --experimentalDecorators, and on parameters without it.
+func (p *Parser) checkClassDecoratorPlacement(body *ClassBody) {
+	bad := func(ds []*Decorator) {
+		if len(ds) > 0 && ds[0] != nil && ds[0].Token != nil {
+			p.addErrorWithCode(ds[0].Token, errors.TS1206, "Decorators are not valid here.")
+		}
+	}
+	for _, m := range body.Methods {
+		if m == nil {
+			continue
+		}
+		_, private := privateKeyName(m.Key)
+		if m.Kind == "constructor" || (private && p.experimentalDecorators) {
+			bad(m.Decorators)
+		}
+		if !p.experimentalDecorators && m.Value != nil {
+			for _, prm := range m.Value.Parameters {
+				if prm != nil {
+					bad(prm.Decorators)
+				}
+			}
+		}
+	}
+	if p.experimentalDecorators {
+		for _, prop := range body.Properties {
+			if prop == nil {
+				continue
+			}
+			if _, private := privateKeyName(prop.Key); private {
+				bad(prop.Decorators)
+			}
 		}
 	}
 }

@@ -434,7 +434,7 @@ var unmodeledOptions = map[string]bool{
 	"nolib": true, "lib": true, "target": true, "module": true, "moduleresolution": true,
 	"moduledetection": true, "jsx": true, "jsxfactory": true, "jsxfragmentfactory": true,
 	"jsximportsource": true, "reactnamespace": true,
-	"experimentaldecorators": true, "emitdecoratormetadata": true,
+	"emitdecoratormetadata": true,
 	"allowjs": true, "checkjs": true, "maxnodemodulejsdepth": true,
 	"declaration": true, "isolateddeclarations": true, "isolatedmodules": true,
 	"verbatimmodulesyntax": true, "nounusedlocals": true, "nounusedparameters": true,
