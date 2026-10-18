@@ -244,16 +244,21 @@ func (c *Checker) analyzeNestedFunctionScopes(node parser.Node) {
 	})
 }
 
-// analyzeNamespaceScope analyzes a namespace body as its own scope. Exported
-// variables are properties of the namespace object, which TS does not track
-// through flow analysis, so only non-exported ones are candidates.
+// analyzeNamespaceScope analyzes a namespace body as its own scope. Inside
+// the body an exported variable is read like any other.
 func (c *Checker) analyzeNamespaceScope(ns *parser.NamespaceDeclaration) {
 	if ns.Declare || ns.Body == nil {
 		return
 	}
 	stmts := make([]parser.Statement, 0, len(ns.Body.Statements))
 	for _, s := range ns.Body.Statements {
-		if _, exported := s.(*parser.ExportNamedDeclaration); exported {
+		if exp, exported := s.(*parser.ExportNamedDeclaration); exported {
+			// An exported variable is still a variable inside the body.
+			switch d := exp.Declaration.(type) {
+			case *parser.VarStatement, *parser.LetStatement, *parser.ConstStatement:
+				stmts = append(stmts, d.(parser.Statement))
+				continue
+			}
 			// Still analyze functions and nested namespaces declared there.
 			c.analyzeNestedFunctionScopes(s)
 			continue
@@ -463,6 +468,34 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 	// --- Nested functions are separate scopes, skipped here ---
 	case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
 		return
+
+	// --- An immediately invoked function runs inline: TS's flow container
+	// --- skips it, so its reads see the enclosing flow.
+	case *parser.CallExpression:
+		body, isIIFE := nestedFunctionBody(n.Function)
+		if !isIIFE {
+			forEachChildInScope(node, func(child parser.Node) {
+				a.walk(child, assigned)
+			})
+			return
+		}
+		for _, arg := range n.Arguments {
+			a.walk(arg, assigned)
+		}
+		if body != nil {
+			// Names the function declares itself shadow the outer ones.
+			var shadowed []string
+			for name := range iifeDeclaredNames(n.Function, body) {
+				if a.candidates[name] {
+					delete(a.candidates, name)
+					shadowed = append(shadowed, name)
+				}
+			}
+			a.walk(body, assigned)
+			for _, name := range shadowed {
+				a.candidates[name] = true
+			}
+		}
 
 	// --- Class members and namespace bodies are flow containers of their own
 	// --- in TS: reads there see outer variables as initialized and writes
@@ -1028,4 +1061,71 @@ func forEachDescendant(node parser.Node, fn func(parser.Node)) {
 	forEachChildInScope(node, func(child parser.Node) {
 		forEachDescendant(child, fn)
 	})
+}
+
+// iifeDeclaredNames lists the names a function literal declares: its
+// parameters and the variables, functions and classes of its body.
+func iifeDeclaredNames(fn parser.Expression, body parser.Node) map[string]bool {
+	names := map[string]bool{}
+	var params []*parser.Parameter
+	switch f := fn.(type) {
+	case *parser.FunctionLiteral:
+		params = f.Parameters
+		if f.RestParameter != nil && f.RestParameter.Name != nil {
+			names[f.RestParameter.Name.Value] = true
+		}
+	case *parser.ArrowFunctionLiteral:
+		params = f.Parameters
+		if f.RestParameter != nil && f.RestParameter.Name != nil {
+			names[f.RestParameter.Name.Value] = true
+		}
+	}
+	for _, p := range params {
+		if p == nil {
+			continue
+		}
+		if p.Name != nil {
+			names[p.Name.Value] = true
+		}
+		if p.Pattern != nil {
+			forEachNodeInScope(p.Pattern, func(n parser.Node) {
+				if id, ok := n.(*parser.Identifier); ok {
+					names[id.Value] = true
+				}
+			})
+		}
+	}
+	if block, ok := body.(*parser.BlockStatement); ok {
+		forEachNodeInScope(block, func(n parser.Node) {
+			switch d := n.(type) {
+			case *parser.VarStatement:
+				for _, decl := range d.Declarations {
+					if decl != nil && decl.Name != nil {
+						names[decl.Name.Value] = true
+					}
+				}
+			case *parser.LetStatement:
+				for _, decl := range d.Declarations {
+					if decl != nil && decl.Name != nil {
+						names[decl.Name.Value] = true
+					}
+				}
+			case *parser.ConstStatement:
+				for _, decl := range d.Declarations {
+					if decl != nil && decl.Name != nil {
+						names[decl.Name.Value] = true
+					}
+				}
+			case *parser.ClassDeclaration:
+				if d.Name != nil {
+					names[d.Name.Value] = true
+				}
+			case *parser.ExpressionStatement:
+				if fl, isFn := d.Expression.(*parser.FunctionLiteral); isFn && fl.Name != nil {
+					names[fl.Name.Value] = true
+				}
+			}
+		})
+	}
+	return names
 }
