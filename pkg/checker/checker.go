@@ -559,6 +559,9 @@ type Checker struct {
 	// --- NEW: Object method context ---
 	// Track if we're currently inside an object method (for super support)
 	inObjectMethod bool
+	// objectLiteralFunction is the function expression an object literal is
+	// visiting as a member value; its `this` is the object literal.
+	objectLiteralFunction parser.Node
 
 	// --- NEW: Eval super context ---
 	// Track if super is allowed in the current eval context (eval called from method)
@@ -4002,6 +4005,16 @@ func (c *Checker) visit(node parser.Node) {
 		// Its type is set by whoever made it.
 
 	case *parser.FunctionLiteral:
+		// A `function` has its own `this`: the enclosing one reaches it only
+		// as an object literal member (or by a contextual this, which the
+		// body check finds).
+		if node.Token != nil && node.Token.Literal == "function" && c.objectLiteralFunction != node && c.currentThisType != nil {
+			savedThis := c.currentThisType
+			c.currentThisType = nil
+			c.checkFunctionLiteral(node)
+			c.currentThisType = savedThis
+			break
+		}
 		c.checkFunctionLiteral(node)
 
 	case *parser.ArrowFunctionLiteral:
@@ -4918,6 +4931,15 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 			}
 			c.functionLiteralContext[node] = ctxTypes
 		}
+		// A contextual signature with a `this` parameter types the
+		// function's `this`.
+		if thisType := contextualThisType(context.ExpectedType); thisType != nil && node.Token != nil && node.Token.Literal == "function" {
+			savedThis, savedFn := c.currentThisType, c.objectLiteralFunction
+			c.currentThisType, c.objectLiteralFunction = thisType, node
+			c.visit(node)
+			c.currentThisType, c.objectLiteralFunction = savedThis, savedFn
+			break
+		}
 		c.visit(node)
 	case *parser.TypeAssertionExpression:
 		c.visit(node)
@@ -4962,6 +4984,15 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		// For other node types, use regular visit for now
 		c.visit(node)
 	}
+}
+
+// contextualThisType is the `this` parameter type of a contextual function
+// type's signature, if it declares one.
+func contextualThisType(expected types.Type) types.Type {
+	if ot, ok := expected.(*types.ObjectType); ok && len(ot.CallSigs()) > 0 {
+		return ot.CallSigs()[0].ThisType
+	}
+	return nil
 }
 
 // contextualTypeFromUnion picks, out of a union expected type, the constituent

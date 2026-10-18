@@ -977,7 +977,10 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		// Visit function properties with 'this' context
 		if _, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); isFunctionLiteral {
 			debugPrintf("// [Checker ObjectLit] Visiting function property '%s' with this context\n", keyName)
+			outerFn := c.objectLiteralFunction
+			c.objectLiteralFunction = prop.Value
 			c.visit(prop.Value)
+			c.objectLiteralFunction = outerFn
 			valueType := prop.Value.GetComputedType()
 			if valueType == nil {
 				valueType = types.Any

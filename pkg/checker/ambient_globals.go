@@ -155,7 +155,9 @@ func declareDecoratorContextTypes(env *Environment) {
 	metadata := types.NewObjectType()
 	metadata.Materialize()
 	metadata.IndexSignatures = []*types.IndexSignature{{KeyType: types.String, ValueType: types.Unknown}}
-	addInit := types.NewSimpleFunction([]types.Type{types.NewSimpleFunction(nil, types.Void)}, types.Void)
+	initializer := types.NewSimpleFunction(nil, types.Void)
+	initializer.CallSigs()[0].ThisType = types.Any // this: This
+	addInit := types.NewSimpleFunction([]types.Type{initializer}, types.Void)
 	param := func(name string) *types.TypeParameter {
 		return &types.TypeParameter{Name: name, Default: types.Unknown}
 	}
