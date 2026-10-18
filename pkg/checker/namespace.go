@@ -231,6 +231,20 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 				}
 			}
 		case *parser.InterfaceDeclaration:
+			if exported && n.Name != nil {
+				// An exported interface merges with the same-named exported
+				// interface of an earlier body of this namespace.
+				if _, local := c.env.typeAliases[n.Name.Value]; !local {
+					switch prev := nsType.TypeMembers[n.Name.Value].(type) {
+					case *types.GenericType:
+						c.env.DefineTypeAlias(n.Name.Value, prev)
+					case *types.ObjectType:
+						if prev.IsInterface {
+							c.env.DefineTypeAlias(n.Name.Value, prev)
+						}
+					}
+				}
+			}
 			c.checkInterfaceDeclaration(n)
 			if exported && n.Name != nil {
 				if t, found := c.env.ResolveType(n.Name.Value); found {
