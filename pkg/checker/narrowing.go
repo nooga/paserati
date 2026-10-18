@@ -628,16 +628,14 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		} else if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
 			// For discriminant guards, we need to compute the narrowed type
 			// First, get the original type of the member expression from the narrowings or by resolving
-			var originalType types.Type
-			if existingNarrowing, exists := c.env.narrowings[guard.VariableName]; exists {
-				originalType = existingNarrowing
-			} else {
-				// Try to resolve the root identifier to infer the member's type
-				// For now, we'll return nil - discriminant narrowing on member expressions
-				// requires more complex resolution
+			originalType := c.memberRefType(guard.VariableName)
+			if originalType == nil {
 				debugPrintf("// [TypeNarrowing] Discriminant guard on member expression %s.%s, but cannot resolve original type\n",
 					guard.VariableName, guard.DiscriminantProp)
 				return nil
+			}
+			if c.narrowsAsMemberValue(guard, originalType) {
+				return c.applyPositiveTypeNarrowing(memberValueGuard(guard))
 			}
 
 			// The original type must be a union for discriminated narrowing
@@ -1101,13 +1099,14 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		// Check if this is a discriminant guard on a member expression
 		if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
 			// For discriminant guards on member expressions, we need to compute the complement
-			var originalType types.Type
-			if existingNarrowing, exists := c.env.narrowings[guard.VariableName]; exists {
-				originalType = existingNarrowing
-			} else {
+			originalType := c.memberRefType(guard.VariableName)
+			if originalType == nil {
 				debugPrintf("// [InvertedTypeNarrowing] Discriminant guard on member expression %s.%s, but cannot resolve original type\n",
 					guard.VariableName, guard.DiscriminantProp)
 				return nil
+			}
+			if c.narrowsAsMemberValue(guard, originalType) {
+				return c.applyInvertedTypeNarrowing(memberValueGuard(guard))
 			}
 
 			if unionType, ok := originalType.(*types.UnionType); ok {
@@ -3090,4 +3089,13 @@ func (c *Checker) narrowsAsMemberValue(guard *TypeGuard, objectType types.Type) 
 	}
 	_, isUnionProp := c.resolveMemberExpressionOriginalType(guard.VariableName + "." + guard.DiscriminantProp).(*types.UnionType)
 	return isUnionProp
+}
+
+// memberRefType is the current type of a member chain: its narrowing in an
+// enclosing scope, else its declared type.
+func (c *Checker) memberRefType(key string) types.Type {
+	if t := typeOfRefIn(c.env, key); t != nil && !isNarrowingMarker(t) {
+		return t
+	}
+	return c.resolveMemberExpressionOriginalType(key)
 }
