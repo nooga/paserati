@@ -80,6 +80,8 @@ type definiteAssignment struct {
 	reported map[parser.Node]bool
 	// loopHeadVars holds the `var` declarators of for-of/for-in heads.
 	loopHeadVars map[*parser.VarDeclarator]bool
+	// unreachable is non-zero while walking code a constant condition skips.
+	unreachable int
 }
 
 // --- Candidate collection -------------------------------------------------
@@ -96,9 +98,9 @@ func (a *definiteAssignment) collectCandidates(node parser.Node) {
 		case *parser.ForInStatement:
 			a.noteLoopHeadVars(s.Variable)
 		case *parser.LetStatement:
-			a.collectFromDeclarators(s.Declarations, s.Declare)
+			a.collectFromDeclarators(s.Declarations, s.Declare, false)
 		case *parser.VarStatement:
-			a.collectFromDeclarators(s.Declarations, s.Declare)
+			a.collectFromDeclarators(s.Declarations, s.Declare, true)
 		}
 	})
 }
@@ -119,7 +121,7 @@ func (a *definiteAssignment) noteLoopHeadVars(variable parser.Statement) {
 	}
 }
 
-func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarator, ambient bool) {
+func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarator, ambient, isVar bool) {
 	for _, d := range decls {
 		if d == nil || d.Name == nil {
 			continue
@@ -141,7 +143,7 @@ func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarato
 			a.candidates[name] = t != nil && !strictInitTypePermits(t)
 			continue
 		}
-		a.candidates[name] = !ambient && definiteAssignmentEligible(d)
+		a.candidates[name] = !ambient && (definiteAssignmentEligible(d) || isVar && initializedVarEligible(d))
 	}
 }
 
@@ -154,6 +156,17 @@ func definiteAssignmentEligible(d *parser.VarDeclarator) bool {
 	// strictInitTypePermits covers `any` and anything admitting `undefined`,
 	// which are exactly the types TS lets go uninitialized.
 	return !strictInitTypePermits(declaredVarType(d))
+}
+
+// initializedVarEligible covers a `var` with an initializer: it is hoisted, so
+// a read before the initializer runs (or in a catch clause after the try threw
+// first) still sees it unassigned. `let` has TS2448 for that instead.
+func initializedVarEligible(d *parser.VarDeclarator) bool {
+	if d.Value == nil || d.DefiniteAssignment {
+		return false
+	}
+	t := declaredVarType(d)
+	return t != nil && !strictInitTypePermits(t)
 }
 
 // declaredVarType returns the resolved type of a declarator. Function-scoped
@@ -293,33 +306,49 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 	// --- Branching: the one construct modelled precisely ---
 	case *parser.IfStatement:
 		a.walk(n.Condition, assigned)
-		thenSet := copyAssigned(assigned)
-		a.walk(n.Consequence, thenSet)
-		elseSet := copyAssigned(assigned)
-		a.walk(n.Alternative, elseSet)
+		gt, gf := a.conditionGuards(n.Condition)
+		cv, cok := constantCondition(n.Condition)
+		thenSet := withGuards(assigned, gt)
+		a.walkReachable(n.Consequence, thenSet, !cok || cv)
+		elseSet := withGuards(assigned, gf)
+		a.walkReachable(n.Alternative, elseSet, !cok || !cv)
 		mergeBranches(assigned, thenSet, elseSet,
-			branchTerminates(n.Consequence), branchTerminates(n.Alternative))
+			branchTerminates(n.Consequence) || cok && !cv, branchTerminates(n.Alternative) || cok && cv)
 	case *parser.TernaryExpression:
 		a.walk(n.Condition, assigned)
-		thenSet := copyAssigned(assigned)
-		a.walk(n.Consequence, thenSet)
-		elseSet := copyAssigned(assigned)
-		a.walk(n.Alternative, elseSet)
-		mergeBranches(assigned, thenSet, elseSet, false, false)
+		gt, gf := a.conditionGuards(n.Condition)
+		cv, cok := constantCondition(n.Condition)
+		thenSet := withGuards(assigned, gt)
+		a.walkReachable(n.Consequence, thenSet, !cok || cv)
+		elseSet := withGuards(assigned, gf)
+		a.walkReachable(n.Alternative, elseSet, !cok || !cv)
+		mergeBranches(assigned, thenSet, elseSet, cok && !cv, cok && cv)
 
-	// --- Short-circuiting operators: the right side may not run ---
+	// --- Short-circuiting operators: the right side may not run, and sees
+	// --- the left side's narrowing ---
 	case *parser.InfixExpression:
 		a.walk(n.Left, assigned)
-		if n.Operator == "&&" || n.Operator == "||" || n.Operator == "??" {
+		switch n.Operator {
+		case "&&", "||":
+			gt, gf := a.conditionGuards(n.Left)
+			cv, cok := constantCondition(n.Left)
+			if n.Operator == "&&" {
+				a.walkReachable(n.Right, withGuards(assigned, gt), !cok || cv)
+			} else {
+				a.walkReachable(n.Right, withGuards(assigned, gf), !cok || !cv)
+			}
+		case "??":
 			a.walk(n.Right, copyAssigned(assigned))
-		} else {
+		default:
 			a.walk(n.Right, assigned)
 		}
 
 	// --- Loops: body runs an unknown number of times ---
 	case *parser.WhileStatement:
 		a.walk(n.Condition, assigned)
-		a.walkMayNotRun(n.Body, assigned)
+		gt, _ := a.conditionGuards(n.Condition)
+		a.walk(n.Body, withGuards(assigned, gt))
+		unionSyntacticWrites(assigned, n.Body)
 	case *parser.DoWhileStatement:
 		// The body always runs at least once, so its writes propagate.
 		a.walk(n.Body, assigned)
@@ -327,7 +356,11 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 	case *parser.ForStatement:
 		a.walk(n.Initializer, assigned)
 		a.walk(n.Condition, assigned)
-		body := copyAssigned(assigned)
+		var gt map[string]bool
+		if n.Condition != nil {
+			gt, _ = a.conditionGuards(n.Condition)
+		}
+		body := withGuards(assigned, gt)
 		a.walk(n.Body, body)
 		a.walk(n.Update, body)
 		unionSyntacticWrites(assigned, n.Body)
@@ -543,8 +576,17 @@ func (a *definiteAssignment) walkMayNotRun(body parser.Node, assigned map[string
 	unionSyntacticWrites(assigned, body)
 }
 
+// walkReachable walks node, reporting nothing in it when it is unreachable.
+func (a *definiteAssignment) walkReachable(node parser.Node, assigned map[string]bool, reachable bool) {
+	if !reachable {
+		a.unreachable++
+		defer func() { a.unreachable-- }()
+	}
+	a.walk(node, assigned)
+}
+
 func (a *definiteAssignment) reportIfUnassigned(id *parser.Identifier, assigned map[string]bool) {
-	if id == nil || !a.candidates[id.Value] || assigned[id.Value] {
+	if id == nil || !a.candidates[id.Value] || assigned[id.Value] || a.unreachable > 0 {
 		return
 	}
 	if a.reported == nil {
