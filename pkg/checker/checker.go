@@ -593,6 +593,7 @@ type Checker struct {
 	argumentGenerators        map[parser.Node]bool // bodies of generator functions passed as arguments
 	implicitAnyMembers        map[parser.Node]bool // member names reported TS7008
 	checkedTypeLiterals       map[*parser.ObjectTypeExpression]bool
+	checkedSpreadOverrides    map[*parser.ObjectLiteral]bool
 }
 
 type deferredComputedKeyCheck struct {
