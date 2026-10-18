@@ -108,6 +108,11 @@ type FunctionCheckContext struct {
 	AllowOverloadCompletion  bool                    // Whether to check for overload completion
 	ContextualParameterTypes []types.Type            // Contextual parameter types from expected signature
 	ContextualReturnType     types.Type              // Contextual return type (nil for generic inference)
+	// InferUnderContext: the return expressions are contextually typed by
+	// the expected return type but not checked against it, and the return
+	// type is inferred from them (tsc does not elaborate a block-bodied or
+	// conditional-arm arrow into its returns).
+	InferUnderContext bool
 }
 
 // resolveFunctionParameters resolves parameter types and creates the parameter environment setup
@@ -526,6 +531,12 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 
 	c.currentExpectedReturnType = expectedReturnType
 	c.currentInferredReturnTypes = nil
+	outerUnchecked := c.uncheckedReturns
+	c.uncheckedReturns = ctx.InferUnderContext && expectedReturnType != nil
+	defer func() { c.uncheckedReturns = outerUnchecked }()
+	if c.uncheckedReturns {
+		c.currentInferredReturnTypes = []types.Type{}
+	}
 	c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 	if expectedReturnType == nil {
 		c.currentInferredReturnTypes = []types.Type{}
@@ -609,12 +620,30 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	} else {
 		c.visit(ctx.Body)
 	}
-	if block, ok := ctx.Body.(*parser.BlockStatement); ok {
+	if block, ok := ctx.Body.(*parser.BlockStatement); ok && !c.uncheckedReturns {
 		c.checkMissingReturn(ctx.ReturnTypeAnnotation, expectedReturnType, block, ctx.IsAsync, ctx.IsGenerator)
+	}
+	if c.uncheckedReturns {
+		var inferred types.Type
+		if exprBody, ok := ctx.Body.(parser.Expression); ok {
+			inferred = exprBody.GetComputedType()
+		} else {
+			inferred = c.inferFinalReturnType(nil, ctx.FunctionName)
+		}
+		if inferred == nil {
+			inferred = types.Any
+		}
+		// The inferred type stands in for the contextual one when it fits.
+		if c.rel.IsAssignable(inferred, expectedReturnType) {
+			inferred = expectedReturnType
+		}
+		finalReturnType = inferred
 	}
 
 	// Handle different body types
-	if ctx.IsArrow {
+	if c.uncheckedReturns {
+		// Inferred above.
+	} else if ctx.IsArrow {
 		// Special handling for arrow function expression bodies
 		if exprBody, ok := ctx.Body.(parser.Expression); ok {
 			bodyType := exprBody.GetComputedType()

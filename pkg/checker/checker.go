@@ -417,6 +417,9 @@ type Checker struct {
 	// to its arms.
 	ternaryContexts map[*parser.TernaryExpression]*ContextualType
 	ternaryArms     map[*parser.ArrowFunctionLiteral]bool
+	// uncheckedReturns: the current function's returns are contextually
+	// typed but not checked (FunctionCheckContext.InferUnderContext).
+	uncheckedReturns bool
 	// presetCallee is a `new` expression's constructor, checked as the
 	// callee of a call whose type is presetCalleeType.
 	presetCallee     parser.Expression
@@ -3233,7 +3236,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		// Check against expected type if available
-		if c.currentExpectedReturnType != nil {
+		if c.currentExpectedReturnType != nil && !c.uncheckedReturns {
 			if checkerDebug {
 				debugPrintf("// [Checker Return] Checking return type: actual=%T(%s) vs expected=%T(%s)\n",
 					actualReturnType, actualReturnType.String(), c.currentExpectedReturnType, c.currentExpectedReturnType.String())
@@ -3273,7 +3276,10 @@ func (c *Checker) visit(node parser.Node) {
 		// Add to inferred types - widen literal types for better inference
 		// This is especially important for generators where the return type becomes TReturn parameter
 		widenedReturnType := c.rel.GetWidenedType(actualReturnType)
-		if _, isLiteral := node.ReturnValue.(*parser.ObjectLiteral); isLiteral {
+		if c.uncheckedReturns && c.rel.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
+			// A literal the contextual return type admits is not widened.
+			widenedReturnType = actualReturnType
+		} else if _, isLiteral := node.ReturnValue.(*parser.ObjectLiteral); isLiteral {
 			// A returned object literal's members widen too, so the
 			// inferred return type is `{ a: number }`, not `{ a: 1 }`.
 			widenedReturnType = c.rel.DeeplyWidenType(widenedReturnType)
@@ -5071,6 +5077,9 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		switch node.Operator {
 		case "&&", "||", "??":
 			c.checkInfixExpression(node, context)
+		case ",":
+			c.markUnusedResult(node.Left)
+			c.checkInfixExpression(node, context)
 		default:
 			c.visit(node)
 		}
@@ -5294,14 +5303,15 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			// elaborated against the contextual return type (tsc reports the
 			// conditional's union instead): its return type is inferred, and
 			// taken as the contextual one when it fits.
-			armReturn := expectedReturnTypeForBodyCheck
-			if c.ternaryArms[node] && armReturn != nil && node.ReturnTypeAnnotation == nil {
-				expectedReturnTypeForBodyCheck = nil
+			// A block body is not elaborated either: its returns are not
+			// checked against the contextual return type.
+			_, blockBody := node.Body.(*parser.BlockStatement)
+			if (c.ternaryArms[node] || blockBody && !node.IsAsync) && node.ReturnTypeAnnotation == nil {
+				if _, predicate := expectedReturnTypeForBodyCheck.(*types.TypePredicateType); !predicate {
+					ctx.InferUnderContext = true
+				}
 			}
 			finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBodyCheck)
-			if armReturn != nil && expectedReturnTypeForBodyCheck == nil && finalReturnType != nil && c.rel.IsAssignable(finalReturnType, armReturn) {
-				finalReturnType = armReturn
-			}
 			if checkerDebug {
 				debugPrintf("// [Checker ArrowFuncContext] Inferred final return type: %s\n", finalReturnType.String())
 			}
