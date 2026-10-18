@@ -165,6 +165,8 @@ const (
 	TS4114  = "TS4114"  // This member must have an 'override' modifier because it overrides a member in the base class 'X'
 	TS4117  = "TS4117"  // This member cannot have an 'override' modifier because it is not declared in the base class 'X'. Did you mean 'Y'?
 	TS17005 = "TS17005" // A constructor cannot contain a 'super' call when its class extends 'null'
+	TS17009 = "TS17009" // 'super' must be called before accessing 'this' in the constructor of a derived class
+	TS17011 = "TS17011" // 'super' must be called before accessing a property of 'super' in the constructor of a derived class
 	TS18013 = "TS18013" // Property 'X' is not accessible outside class 'Y'
 	TS1345  = "TS1345"  // void cannot be tested for truthiness
 	TS1166  = "TS1166"  // class property computed name must be a simple literal
