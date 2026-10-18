@@ -1281,6 +1281,10 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	if len(c.expandoNames) > 0 {
 		c.declareExpandoRead(node)
 	}
+	if prop, ok := node.Property.(*parser.Identifier); ok && c.checkGlobalThisMember(node.Object, prop.Value, node.Property) {
+		node.SetComputedType(types.Any)
+		return
+	}
 	// Check if there's a narrowed type for this member expression
 	memberKey := expressionToNarrowingKey(node)
 	if memberKey != "" {
@@ -2023,6 +2027,10 @@ func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardRe
 }
 
 func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
+	if key, ok := node.Index.(*parser.StringLiteral); ok && c.checkGlobalThisMember(node.Left, key.Value, node.Left) {
+		node.SetComputedType(types.Any)
+		return
+	}
 	// 1. Visit the base expression (array/object)
 	c.visit(node.Left)
 	leftType := node.Left.GetComputedType()
