@@ -2899,7 +2899,12 @@ type deferredHeritageCheck struct {
 func (c *Checker) reportNonConstructorBase(expr parser.Expression, t types.Type) {
 	switch bt := t.(type) {
 	case *types.ObjectType:
-		if len(bt.ConstructSigs()) > 0 || len(bt.CallSigs()) > 0 {
+		if len(bt.ConstructSigs()) > 0 {
+			return
+		}
+		// Built-in constructors are modelled as callable types with a
+		// prototype; a plain function cannot be extended.
+		if _, hasProto := bt.EffectiveProperty("prototype"); hasProto || (bt.IsClassConstructor()) {
 			return
 		}
 		// An interface `new(...)` member is modeled as a property named "new".
