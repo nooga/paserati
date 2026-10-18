@@ -2012,6 +2012,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				}
 			}
 
+			if allMembersHaveProperty && unionAccessConflict(unionMembers, propertyName) {
+				allMembersHaveProperty = false
+			}
 			if allMembersHaveProperty && len(possibleTypes) > 0 {
 				// All members have the property, create union of result types
 				if len(possibleTypes) == 1 {
@@ -4335,4 +4338,29 @@ func (c *Checker) checkNewOnCallSignature(node *parser.NewExpression, obj *types
 	if rt := sigs[0].ReturnType; rt != nil && rt != types.Void && rt != types.Undefined && rt != types.Any {
 		c.addErrorWithCode(node, errors.TS2350, "Only a void function can be called with the 'new' keyword.")
 	}
+}
+
+// unionAccessConflict reports whether a union has no property name because
+// the property is private or protected in one constituent and declared
+// elsewhere (another class, or a plain object type) in another
+// (tsc's createUnionOrIntersectionProperty).
+func unionAccessConflict(members []types.Type, name string) bool {
+	nonPublic := false
+	decls := map[string]bool{}
+	for _, m := range members {
+		obj, ok := m.(*types.ObjectType)
+		if !ok {
+			decls[fmt.Sprintf("%p", m)] = true
+			continue
+		}
+		if obj.ClassMeta == nil || !obj.ClassMeta.IsClassInstance {
+			decls[fmt.Sprintf("%p", obj)] = true
+			continue
+		}
+		decls["class "+obj.ClassMeta.ClassName] = true
+		if info := obj.ClassMeta.GetMemberAccess(name); info != nil && info.AccessLevel != types.AccessPublic {
+			nonPublic = true
+		}
+	}
+	return nonPublic && len(decls) > 1
 }
