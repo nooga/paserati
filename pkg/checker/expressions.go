@@ -2438,11 +2438,19 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				} else if isIndexStringLiteral {
 					resultType = c.getPropertyTypeFromType(base, indexStringValue, false)
 					if resultType == types.Never {
-						c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'string'.", indexStringValue))
+						// string has a number index signature: an unknown
+						// key reads it implicitly as any (TS7015).
+						if c.noImplicitAny {
+							c.addErrorAtStart(node.Index, "TS7015", "Element implicitly has an 'any' type because index expression is not of type 'number'.")
+						}
+						resultType = types.Any
 					}
 				} else if c.rel.IsAssignable(indexType, types.String) || c.rel.IsAssignable(indexType, types.Symbol) {
 					// String or Symbol index - accessing string properties (like Symbol.iterator)
 					resultType = types.Any // String properties can have arbitrary types
+					if c.noImplicitAny && indexType != types.Any && c.rel.IsAssignable(indexType, types.String) {
+						c.addErrorAtStart(node.Index, "TS7015", "Element implicitly has an 'any' type because index expression is not of type 'number'.")
+					}
 				} else {
 					c.addError(node.Index, fmt.Sprintf("string index must be of type number, string, or symbol, got %s", indexType.String()))
 					resultType = types.Any
