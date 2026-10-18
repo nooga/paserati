@@ -2,9 +2,11 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // checkInfixExpression type-checks a binary expression. rightContext, when
@@ -133,6 +135,14 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 			c.checkRelationalOperator(infixOperands(node), leftType, rightType)
 			resultType = types.Boolean
 		case "==", "!=", "===", "!==":
+			// A template literal compared for equality has its literal
+			// type (tsc's isTemplateLiteralContext).
+			if folded := foldedTemplateLiteral(node.Left); folded != nil {
+				leftType = folded
+			}
+			if folded := foldedTemplateLiteral(node.Right); folded != nil {
+				rightType = folded
+			}
 			// Check for impossible comparisons before setting result type
 			c.checkImpossibleComparison(leftType, rightType, node.Operator, node)
 			// Comparison always results in boolean, even with 'any'
@@ -257,4 +267,29 @@ func (c *Checker) widenLiteralUnion(t types.Type) types.Type {
 		}
 	}
 	return kind
+}
+
+// foldedTemplateLiteral is the string literal type of a template literal
+// whose substitutions all have literal types, or nil.
+func foldedTemplateLiteral(e parser.Expression) types.Type {
+	tl, ok := e.(*parser.TemplateLiteral)
+	if !ok {
+		return nil
+	}
+	var sb strings.Builder
+	for _, part := range tl.Parts {
+		switch p := part.(type) {
+		case *parser.TemplateStringPart:
+			sb.WriteString(p.Value)
+		case parser.Expression:
+			lit, isLit := p.GetComputedType().(*types.LiteralType)
+			if !isLit {
+				return nil
+			}
+			sb.WriteString(lit.Value.ToString())
+		default:
+			return nil
+		}
+	}
+	return &types.LiteralType{Value: vm.String(sb.String())}
 }
