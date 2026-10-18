@@ -83,7 +83,7 @@ func (p *Parser) parseMoreDeclListItems(items []declListItem, declToken *lexer.T
 			p.peekTokenIs(lexer.CONTINUE) || p.peekTokenIs(lexer.THROW) ||
 			p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) ||
 			p.peekTokenIs(lexer.RBRACE) {
-			p.addError(commaToken, "Trailing comma not allowed.")
+			p.addErrorWithCode(commaToken, "TS1009", "Trailing comma not allowed.")
 			break
 		}
 

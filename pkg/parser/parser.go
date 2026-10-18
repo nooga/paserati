@@ -1834,6 +1834,20 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 		p.curToken = &tok
 		prefix = p.parseTypeIdentifier
 	}
+	if prefix == nil && p.canRecover() && p.curToken.Type != lexer.ILLEGAL {
+		// tsc parses a type reference whose name is missing: "Type expected."
+		// at the token (at the end of the previous one for end of input), which
+		// is left for the enclosing construct.
+		at := p.curToken
+		if at.Type == lexer.EOF && p.prevToken != nil {
+			at = &lexer.Token{Line: p.prevToken.Line, Column: p.prevToken.Column, StartPos: p.prevToken.EndPos, EndPos: p.prevToken.EndPos}
+		}
+		p.addErrorWithCode(at, "TS1110", "Type expected.")
+		if p.stepBackForMissing() {
+			return p.missingExpression()
+		}
+		return nil
+	}
 	if prefix == nil {
 		// Error: No function found to start parsing this token as a type
 		msg := fmt.Sprintf("unexpected token %s (%q) at start of type annotation",
@@ -2145,6 +2159,11 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 	if p.peekTokenIs(lexer.RBRACKET) {
 		p.nextToken() // Move to ']'
 		debugPrint("parseTupleTypeExpression: Empty tuple")
+		return tupleTypeExp
+	}
+	if p.peekTokenIs(lexer.EOF) && p.canRecover() {
+		// End of input terminates the element list (tsc's isListTerminator).
+		p.expectPeekRecover(lexer.RBRACKET)
 		return tupleTypeExp
 	}
 
@@ -7624,8 +7643,19 @@ func (p *Parser) parseArrayLiteral() Expression {
 		}
 		// Otherwise, expect ']' next
 		if !p.peekTokenIs(lexer.RBRACKET) {
-			p.addError(p.curToken, "expected ',' or ']' in array literal")
-			return nil
+			if !p.canRecover() {
+				p.addError(p.curToken, "expected ',' or ']' in array literal")
+				return nil
+			}
+			switch p.recoverMissingComma(lexer.RBRACKET) {
+			case listContinue:
+				p.nextToken()
+				continue
+			case listAbort:
+				array.Elements = elements
+				array.Elisions = elisions
+				return array
+			}
 		}
 		p.nextToken() // move to ']'
 	}
@@ -7634,7 +7664,9 @@ func (p *Parser) parseArrayLiteral() Expression {
 	}
 	if !p.curTokenIs(lexer.RBRACKET) {
 		p.peekError(lexer.RBRACKET)
-		return nil
+		if !p.canRecover() {
+			return nil
+		}
 	}
 	array.Elements = elements
 	array.Elisions = elisions
@@ -7648,6 +7680,13 @@ func (p *Parser) parseIndexExpression(left Expression) Expression {
 		Left:  left,
 	}
 
+	if p.peekTokenIs(lexer.RBRACKET) && p.canRecover() {
+		// tsc: a missing argument, reported at the ']'.
+		p.addErrorWithCode(p.peekToken, "TS1011", "An element access expression should take an argument.")
+		exp.Index = p.missingExpression()
+		p.nextToken()
+		return exp
+	}
 	p.nextToken() // Consume '[', move to the start of the index expression
 	exp.Index = p.parseExpression(LOWEST)
 	if exp.Index == nil {
@@ -7676,6 +7715,16 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 
 	// Parse property name (allowing keywords as property names)
 	propIdent := p.parsePropertyName()
+	if propIdent == nil && p.canRecover() {
+		// tsc's parseRightSideOfDot: a missing name, reported at the token,
+		// which is left for whatever follows.
+		p.addErrorWithCode(p.curToken, errors.TS1003, "Identifier expected.")
+		if p.stepBackForMissing() {
+			exp.Property = p.missingExpression()
+			return exp
+		}
+		return nil
+	}
 	if propIdent == nil {
 		// If the token after '.' is not a valid property name, it's a syntax error.
 		msg := fmt.Sprintf("expected identifier after '.', got %s", p.curToken.Type)

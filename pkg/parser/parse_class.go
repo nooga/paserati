@@ -52,6 +52,13 @@ func (p *Parser) parseClassDeclaration() Statement {
 	// like 'abstract', 'from', 'of', 'type', 'async', etc. that are valid names).
 	p.nextToken()
 	if !p.curTokenIsIdentLike() {
+		if p.canRecover() && !p.curTokenIs(lexer.LBRACE) && !p.curTokenIs(lexer.EXTENDS) && !p.curTokenIs(lexer.IMPLEMENTS) && !p.curTokenIs(lexer.LT) {
+			// tsc: no name, then parseExpected('{') fails; the class is empty
+			// and the token is left to the next statement.
+			p.addErrorWithCode(p.curToken, errors.TS1005, "'{' expected.")
+			p.stepBackForMissing()
+			return nil
+		}
 		p.addError(p.curToken, fmt.Sprintf("expected class name, got %s", p.curToken.Type))
 		return nil
 	}

@@ -171,3 +171,32 @@ func (p *Parser) recoverClassMember() bool {
 func (p *Parser) missingCloseBrace() {
 	p.addErrorWithCode(p.curToken, errors.TS1005, "'}' expected.")
 }
+
+// listStep says how a delimited list goes on after recovering from a missing
+// delimiter.
+type listStep int
+
+const (
+	listContinue listStep = iota // the next element starts at peek
+	listClose                    // peek is the list's closing token
+	listAbort                    // the list is abandoned; peek belongs to an enclosing construct
+)
+
+// recoverMissingComma is tsc's parseDelimitedList recovery after an element
+// that is followed by neither ',' nor the closing token. cur is the element's
+// last token. It reports "',' expected." at the next token, then skips tokens
+// that neither start an element nor make sense to an enclosing construct.
+func (p *Parser) recoverMissingComma(close lexer.TokenType) listStep {
+	p.addErrorWithCode(p.peekToken, errors.TS1005, "',' expected.")
+	for {
+		switch {
+		case p.peekTokenIs(close):
+			return listClose
+		case p.startsExpression(p.peekToken) || p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.SPREAD):
+			return listContinue
+		case p.peekTokenIs(lexer.SEMICOLON) || listAbortsAt(p.peekToken):
+			return listAbort
+		}
+		p.nextToken()
+	}
+}
