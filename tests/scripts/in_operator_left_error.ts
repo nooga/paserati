@@ -1,4 +1,4 @@
-// expect_compile_error: left-hand side of 'in' must be of type 'string', 'number', or 'symbol'
+// expect_compile_error: is not assignable to type 'string | number | symbol'.
 
 // Test type error for invalid left operand
 let obj = { name: "John" };

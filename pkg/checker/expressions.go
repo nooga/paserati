@@ -3204,17 +3204,25 @@ func (c *Checker) isPrimitiveType(t types.Type) bool {
 
 // checkInOperator handles type checking for the 'in' operator ("prop" in obj)
 func (c *Checker) checkInOperator(leftType, rightType types.Type, node *parser.InfixExpression) {
-	// Left operand (property name) should be string, number, or symbol (per ECMAScript spec)
-	if leftType != types.Any && leftType != types.String && leftType != types.Number && leftType != types.Symbol {
-		// Check if it's a literal string or number type
-		if !c.isStringOrNumberLiteralType(leftType) {
-			c.addError(node.Left, fmt.Sprintf("the left-hand side of 'in' must be of type 'string', 'number', or 'symbol', but got '%s'", leftType.String()))
+	// tsc's checkInExpression: the key must be assignable to
+	// string | number | symbol and the object to object (TS2322 each). A
+	// private name on the left is checked as a property access instead.
+	if _, isPrivate := node.Left.(*parser.PrivateIdentifier); !isPrivate && leftType != nil {
+		if c.checkNullishOperand(node.Left) {
+			leftType = types.Never
+		}
+		keyType := types.NewUnionType(types.String, types.Number, types.Symbol)
+		if !c.rel.IsAssignable(leftType, keyType) {
+			c.addErrorWithCode(node.Left, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type 'string | number | symbol'.", leftType.String()))
 		}
 	}
-
-	// Right operand (object) should be an object type
-	if rightType != types.Any && !c.isObjectType(c.apparentType(rightType)) {
-		c.addError(node.Right, fmt.Sprintf("the right-hand side of 'in' must be an object, but got '%s'", rightType.String()))
+	if rightType != nil {
+		if c.checkNullishOperand(node.Right) {
+			rightType = types.Never
+		}
+		if !c.rel.IsAssignable(rightType, types.NonPrimitive) && !c.isObjectType(c.apparentType(rightType)) {
+			c.addErrorWithCode(node.Right, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type 'object'.", rightType.String()))
+		}
 	}
 }
 
