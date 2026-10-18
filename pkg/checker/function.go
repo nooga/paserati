@@ -305,6 +305,10 @@ func generatorTypeArgs(t types.Type) (string, []types.Type) {
 		if tt.Instantiates != nil {
 			return tt.Instantiates.Name, tt.GenericArgs
 		}
+	case *types.GenericTypeAliasForwardReference:
+		// A lib iterator interface not yet resolved (Iterable<T>,
+		// IterableIterator<T>): its name and arguments are all we need.
+		return tt.AliasName, tt.TypeArguments
 	}
 	return "", nil
 }
