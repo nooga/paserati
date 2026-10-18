@@ -135,9 +135,14 @@ func (c *Checker) resolveLegacyDecorator(dec *parser.Decorator, kind legacyDecor
 	}
 	switch dec.Expression.(type) {
 	case *parser.Identifier, *parser.MemberExpression, *parser.CallExpression:
-	default:
+	case *parser.ArrowFunctionLiteral, *parser.FunctionLiteral:
 		// A function written in place takes its parameter types from the
-		// decorator call, which is not modelled.
+		// decorator call's arguments.
+		// FIXME: its signature is not resolved against those arguments.
+		ctx := types.NewFunctionType(&types.Signature{ParameterTypes: args, ReturnType: types.Any})
+		c.visitWithContext(dec.Expression, &ContextualType{ExpectedType: ctx, IsContextual: true})
+		return
+	default:
 		return
 	}
 	c.visit(dec.Expression)
