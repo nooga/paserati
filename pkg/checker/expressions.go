@@ -1432,6 +1432,17 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	// 4. Handle different base types
 	if widenedObjectType == types.Any {
 		resultType = types.Any // Property access on 'any' results in 'any'
+		if prop, ok := node.Property.(*parser.Identifier); ok && prop.Token != nil && c.program != nil {
+			// A private name no enclosing class declares: outside any class
+			// body tsc refuses it outright, inside one it is missing from any.
+			if inClass, unresolved := c.program.UnresolvedPrivateNames[prop.Token]; unresolved {
+				if inClass {
+					c.addErrorWithCode(prop, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'any'.", propertyName))
+				} else {
+					c.addErrorWithCode(prop, errors.TS18016, "Private identifiers are not allowed outside class bodies.")
+				}
+			}
+		}
 	} else if widenedObjectType == types.String {
 		if propertyName == "length" {
 			resultType = types.Number // string.length is number

@@ -451,6 +451,9 @@ func (l *Lexer) RestoreState(state LexerState) {
 
 // SetRegexContext tells the lexer that the next '/' should be interpreted as a regex literal start.
 // This is called by the parser after parsing statement-ending braces (blocks, functions, classes).
+// Input returns the source text being lexed.
+func (l *Lexer) Input() string { return l.input }
+
 func (l *Lexer) SetRegexContext() {
 	l.forceRegexContext = true
 }

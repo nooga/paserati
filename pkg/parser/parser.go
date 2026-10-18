@@ -55,6 +55,10 @@ type Parser struct {
 	// checker (TS2364/TS2357), and malformed for-of/for-in heads are
 	// recovered with tsc's grammar errors.
 	tscDiagnostics bool
+	// unresolvedPrivateNames are the private-name references no enclosing
+	// class declares (tscDiagnostics mode), mapped to whether they sit in
+	// a class body; see Program.UnresolvedPrivateNames.
+	unresolvedPrivateNames map[*lexer.Token]bool
 	// target is tsc's --target as a year (5 for ES5); 0 means current. Only
 	// consulted in tscDiagnostics mode.
 	target int
@@ -639,6 +643,26 @@ func (p *Parser) checkLegacyOctal(tok *lexer.Token) {
 	}
 }
 
+// tokenAfter returns a position token for the first non-whitespace character
+// after tok (where tsc's scanner would start the next token), skipping
+// comments only when they are on the same line.
+func (p *Parser) tokenAfter(tok *lexer.Token) *lexer.Token {
+	src := p.l.Input()
+	line, col, pos := tok.Line, tok.Column+(tok.EndPos-tok.StartPos), tok.EndPos
+	for pos < len(src) {
+		switch src[pos] {
+		case ' ', '\t', '\r':
+			col++
+		case '\n':
+			line, col = line+1, 1
+		default:
+			return &lexer.Token{Line: line, Column: col, StartPos: pos, EndPos: pos}
+		}
+		pos++
+	}
+	return &lexer.Token{Line: line, Column: col, StartPos: pos, EndPos: pos}
+}
+
 // reportLegacyNumericLiteral reports a legacy octal (TS1121) or a decimal with
 // a leading zero (TS1489) the way tsc's scanner does: in any mode, with the
 // octal suggestion covering a preceding minus sign.
@@ -878,6 +902,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 		p.checkEarlyErrors(program, initialStrict)
 	}
 	p.safeFinishBinding(program)
+	program.UnresolvedPrivateNames = p.unresolvedPrivateNames
 
 	return program, p.dropSuppressedGrammarErrors()
 }

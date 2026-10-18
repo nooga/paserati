@@ -62,6 +62,11 @@ type Program struct {
 	// DeclaredTypeNames are the names of all interfaces, type aliases, classes,
 	// enums and namespaces declared anywhere in the program.
 	DeclaredTypeNames map[string]bool
+	// UnresolvedPrivateNames are the tokens of private-name references
+	// (obj.#x) that no enclosing class declares, mapped to whether the
+	// reference is inside a class body. Only set by parsers in
+	// tscDiagnostics mode, which leave these to the checker.
+	UnresolvedPrivateNames map[*lexer.Token]bool
 }
 
 func (p *Program) TokenLiteral() string {

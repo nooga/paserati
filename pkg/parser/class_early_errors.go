@@ -35,11 +35,30 @@ func (p *Parser) notePrivateReference(tok *lexer.Token) {
 		p.privateScopes[n-1].refs = append(p.privateScopes[n-1].refs, tok)
 		return
 	}
-	p.reportUnresolvedPrivateName(tok)
+	p.reportUnresolvedPrivateName(tok, false)
 }
 
-func (p *Parser) reportUnresolvedPrivateName(tok *lexer.Token) {
+// bubblePrivateReference passes a reference no class declared to the
+// enclosing class scope, or reports it.
+func (p *Parser) bubblePrivateReference(tok *lexer.Token) {
+	if n := len(p.privateScopes); n > 0 {
+		p.privateScopes[n-1].refs = append(p.privateScopes[n-1].refs, tok)
+		return
+	}
+	p.reportUnresolvedPrivateName(tok, true)
+}
+
+func (p *Parser) reportUnresolvedPrivateName(tok *lexer.Token, inClass bool) {
 	if p.outerPrivateNames[tok.Literal] {
+		return
+	}
+	if p.tscDiagnostics {
+		// tsc leaves an undeclared private name to the checker, which needs
+		// to know whether the reference sits in a class body at all.
+		if p.unresolvedPrivateNames == nil {
+			p.unresolvedPrivateNames = map[*lexer.Token]bool{}
+		}
+		p.unresolvedPrivateNames[tok] = inClass
 		return
 	}
 	p.addError(tok, "Private field '"+tok.Literal+"' must be declared in an enclosing class")
@@ -188,7 +207,7 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 		if _, ok := declared[ref.Literal]; ok {
 			continue
 		}
-		p.notePrivateReference(ref)
+		p.bubblePrivateReference(ref)
 	}
 }
 

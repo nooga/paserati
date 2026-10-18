@@ -125,6 +125,7 @@ const (
 	TS2629  = "TS2629"  // Cannot assign to 'X' because it is a class
 	TS2631  = "TS2631"  // Cannot assign to 'X' because it is a namespace
 	TS2729  = "TS2729"  // Property 'X' is used before its initialization
+	TS18016 = "TS18016" // Private identifiers are not allowed outside class bodies.
 	TS1344  = "TS1344"  // 'A label is not allowed here.
 	TS2496  = "TS2496"  // The 'arguments' object cannot be referenced in an arrow function in ES5
 	TS2522  = "TS2522"  // The 'arguments' object cannot be referenced in an async function or method in ES5

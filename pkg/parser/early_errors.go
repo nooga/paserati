@@ -139,6 +139,10 @@ func (w *eeWalker) binding(id *Identifier, c eeCtx) {
 	if w.collect != nil {
 		*w.collect = append(*w.collect, id)
 	}
+	if w.p.tscDiagnostics && id.Value == "await" && c.await && !c.staticBlock {
+		w.p.addErrorWithCode(id.Token, "TS1359", "Identifier expected. 'await' is a reserved word that cannot be used here.")
+		return
+	}
 	w.ident(id, c)
 	if c.strict && (id.Value == "eval" || id.Value == "arguments") {
 		w.evalOrArguments(id, c)
@@ -485,6 +489,14 @@ func (w *eeWalker) expr(e Expression, c eeCtx) {
 	switch t := e.(type) {
 	case nil:
 	case *Identifier:
+		if w.p.tscDiagnostics && t.Value == "await" && c.await && !c.staticBlock && t.Token != nil {
+			// tsc parses an await expression here and finds no operand.
+			if c.noAwaitExpr {
+				w.p.addErrorWithCode(t.Token, "TS2524", "'await' expressions cannot be used in a parameter initializer.")
+			}
+			w.p.addErrorWithCode(w.p.tokenAfter(t.Token), "TS1109", "Expression expected.")
+			return
+		}
 		w.ident(t, c)
 	case *FunctionLiteral:
 		w.function(t, c, false, false)
