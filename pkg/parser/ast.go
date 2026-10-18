@@ -1327,6 +1327,7 @@ type TypeofExpression struct {
 	BaseExpression              // Embed base for ComputedType (always string)
 	Token          *lexer.Token // The 'typeof' token
 	Operand        Expression   // The expression whose type we want to get
+	Parenthesized  bool         // written as (typeof x), allowed left of **
 }
 
 func (te *TypeofExpression) expressionNode()      {}

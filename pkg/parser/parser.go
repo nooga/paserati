@@ -5548,6 +5548,8 @@ func (p *Parser) parseGroupedExpression() Expression {
 		e.Parenthesized = true
 	case *OptionalCallExpression:
 		e.Parenthesized = true
+	case *TypeofExpression:
+		e.Parenthesized = true
 	}
 	return exp
 }
@@ -5750,6 +5752,8 @@ func (p *Parser) parseInfixExpression(left Expression) Expression {
 				// tsc reports at the start of the unary expression.
 				p.addErrorWithCode(prefix.Token, "TS17006", fmt.Sprintf("An unary expression with the '%s' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses.", op))
 			}
+		} else if te, ok := left.(*TypeofExpression); ok && !te.Parenthesized {
+			p.addErrorWithCode(te.Token, "TS17006", "An unary expression with the 'typeof' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses.")
 		}
 	}
 
