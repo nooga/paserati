@@ -18,6 +18,9 @@ type deferredMethodBodyCheck struct {
 	body         *parser.ClassBody
 	instanceType *types.ObjectType
 	env          *Environment // The environment that was active during class processing
+	// classContext is the access context around the class, so a class
+	// nested in another's body still sees the outer class's private names.
+	classContext *types.AccessContext
 	// strict is set for classes whose enclosing scopes are all hoisted by the
 	// time the deferred check runs, so unresolved names are real errors.
 	strict bool
@@ -478,6 +481,8 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	for _, sig := range constructorSigs[1:] {
 		constructorType.WithConstructSignature(sig)
 	}
+	// Class metadata records the static members' access levels.
+	constructorType.AsClassConstructor(node.Name.Value)
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
@@ -703,6 +708,8 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	for _, sig := range constructorSigs[1:] {
 		constructorType.WithConstructSignature(sig)
 	}
+	// Class metadata records the static members' access levels.
+	constructorType.AsClassConstructor(node.Name.Value)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
 	c.deferRelationCheck(func() { c.checkClassIndexConstraints(node.Body, instanceType, constructorType) })
 	c.checkClassInitializationOrder(node.Name.Value, node.Body, instanceType)
@@ -1157,6 +1164,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 		// This ensures hoisted functions (including type predicate functions) are available
 		// Save the current environment so type parameters and class context are preserved
 		c.deferredMethodBodies = append(c.deferredMethodBodies, deferredMethodBodyCheck{
+			classContext: c.currentClassContext,
 			className:    className,
 			body:         body,
 			instanceType: instanceType,

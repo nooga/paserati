@@ -869,7 +869,15 @@ func (c *Checker) SetExperimentalDecorators(enabled bool) {
 
 // setClassContext sets the current class context for access control checking
 func (c *Checker) setClassContext(className string, contextType types.AccessContextType) {
+	var outer []string
+	if prev := c.currentClassContext; prev != nil {
+		outer = prev.OuterClassNames
+		if prev.CurrentClassName != className && prev.CurrentClassName != "" {
+			outer = append(append([]string(nil), outer...), prev.CurrentClassName)
+		}
+	}
 	c.currentClassContext = types.NewAccessContext(className, contextType)
+	c.currentClassContext.OuterClassNames = outer
 	// Set inheritance checking function
 	c.currentClassContext.IsSubclassOfFunc = c.isSubclassOf
 }
@@ -967,7 +975,7 @@ func (c *Checker) checkInheritanceChain(classType *types.ObjectType, targetClass
 // validateMemberAccess checks if a member access is allowed given the current context
 func (c *Checker) validateMemberAccess(objectType types.Type, memberName string, accessLocation parser.Node) {
 	// Only check access for class instance types
-	if objType, ok := objectType.(*types.ObjectType); ok && objType.IsClassInstance() {
+	if objType, ok := objectType.(*types.ObjectType); ok && (objType.IsClassInstance() || objType.IsClassConstructor()) {
 		// Check if member is accessible from current context
 		if !objType.IsAccessibleFrom(memberName, c.currentClassContext) {
 			c.createAccessError(objType, memberName, accessLocation)
@@ -1751,7 +1759,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				continue
 			}
 			c.strictDeferredMethodBodies = deferred.strict
+			c.currentClassContext = deferred.classContext
 			c.checkMethodBodiesInInstance(deferred.className, deferred.body, deferred.instanceType)
+			c.currentClassContext = nil
 			c.strictDeferredMethodBodies = false
 		}
 		c.env = globalEnv

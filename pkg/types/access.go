@@ -181,14 +181,14 @@ func (cm *ClassMetadata) IsAccessibleFrom(memberName string, accessContext *Acce
 		return true // Always accessible
 
 	case AccessPrivate:
-		// Only accessible within the same class
-		return accessContext != nil &&
-			accessContext.CurrentClassName == cm.SourceClassName
+		// Only accessible within the same class (lexically: a class nested
+		// in its body counts)
+		return accessContext != nil && accessContext.Within(cm.SourceClassName)
 
 	case AccessProtected:
 		// Accessible within the same class or subclasses
 		return accessContext != nil &&
-			(accessContext.CurrentClassName == cm.SourceClassName ||
+			(accessContext.Within(cm.SourceClassName) ||
 				accessContext.IsSubclassOf(cm.SourceClassName))
 	}
 
@@ -208,6 +208,10 @@ type AccessContext struct {
 
 	// Whether we're in a static context
 	IsStaticContext bool
+
+	// OuterClassNames are the classes whose bodies lexically enclose the
+	// current one, innermost last.
+	OuterClassNames []string
 
 	// Function to check inheritance relationships
 	// Returns true if currentClass is a subclass of targetClass
@@ -256,4 +260,18 @@ func NewAccessContext(className string, contextType AccessContextType) *AccessCo
 		IsInConstructor:  contextType == AccessContextConstructor,
 		IsStaticContext:  contextType == AccessContextStaticMethod,
 	}
+}
+
+// Within reports whether the access happens lexically inside the body of
+// the class className.
+func (ac *AccessContext) Within(className string) bool {
+	if ac.CurrentClassName == className {
+		return true
+	}
+	for _, outer := range ac.OuterClassNames {
+		if outer == className {
+			return true
+		}
+	}
+	return false
 }
