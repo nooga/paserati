@@ -179,6 +179,7 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	pas.SetAlwaysStrict(alwaysStrictEnabled(opts))
 	pas.SetUseDefineForClassFields(useDefineForClassFieldsEnabled(opts))
 	pas.SetTarget(targetLevel(opts))
+	pas.SetLegacyModuleFormat(legacyModuleFormat(opts))
 	pas.SetEmitStandardClassFields(useDefineForClassFieldsEnabled(opts) && targetLevel(opts) >= 2022)
 	return pas
 }
@@ -241,4 +242,19 @@ func targetLevel(o Options) int {
 		}
 	}
 	return 9999
+}
+
+// legacyModuleFormat is tsc's name for an explicit pre-ES2015 --module.
+func legacyModuleFormat(o Options) string {
+	switch strings.ToLower(strings.TrimSpace(o["module"])) {
+	case "commonjs":
+		return "CommonJS"
+	case "amd":
+		return "AMD"
+	case "umd":
+		return "UMD"
+	case "system":
+		return "System"
+	}
+	return ""
 }

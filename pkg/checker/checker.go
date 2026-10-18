@@ -440,6 +440,9 @@ type Checker struct {
 	// targetYear mirrors --target as a year (5 for ES5); 0 means the default,
 	// ES2025.
 	targetYear       int
+	// legacyModuleFormat names --module when it is a pre-ES2015 format
+	// (CommonJS, AMD, UMD or System); "" otherwise.
+	legacyModuleFormat string
 	classNameNode    *parser.Identifier // class being declared, for diagnostics reported on its name
 	strictNullChecks bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
 	// reportedRelationDiagnostics dedupes relation diagnostics reported at the
@@ -713,6 +716,13 @@ func (c *Checker) SetAlwaysStrict(strict bool) {
 // as for TypeScript's default target).
 func (c *Checker) SetUseDefineForClassFields(on bool) {
 	c.noDefineForClassFields = !on
+}
+
+// SetLegacyModuleFormat records --module when the file is emitted in a
+// format older than ES2015 modules, as tsc spells it ("CommonJS", "AMD",
+// "UMD", "System").
+func (c *Checker) SetLegacyModuleFormat(name string) {
+	c.legacyModuleFormat = name
 }
 
 // SetTarget mirrors --target, given as a year (3 and 5 for ES3 and ES5,

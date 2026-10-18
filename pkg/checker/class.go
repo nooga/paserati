@@ -376,6 +376,10 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// Skip for declare classes: ambient bodies have signatures without implementations
 	// and no bodies — that's their intended form.
 	ambient := node.Declare || c.inAmbientNamespace || c.inDeclarationFile()
+	if !ambient && node.Name != nil && node.Name.Value == "Object" && c.legacyModuleFormat != "" {
+		c.addErrorAtStart(node.Name, errors.TS2725, fmt.Sprintf(
+			"Class name cannot be 'Object' when targeting ES5 and above with module %s.", c.legacyModuleFormat))
+	}
 	if !ambient && !c.skipValidation() {
 		c.validateClassMemberConstraints(node.Body)
 	}

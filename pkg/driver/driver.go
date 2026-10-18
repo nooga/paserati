@@ -132,6 +132,12 @@ func (p *Paserati) SetUseDefineForClassFields(on bool) {
 
 // SetTarget mirrors --target, given as a year (5 for ES5, 2015 for ES6,
 // 9999 for ESNext).
+// SetLegacyModuleFormat mirrors a pre-ES2015 --module; see
+// Checker.SetLegacyModuleFormat.
+func (p *Paserati) SetLegacyModuleFormat(name string) {
+	p.checker.SetLegacyModuleFormat(name)
+}
+
 func (p *Paserati) SetTarget(year int) {
 	p.checker.SetTarget(year)
 }
