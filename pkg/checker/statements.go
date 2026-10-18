@@ -1502,6 +1502,8 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 							c.addErrorWithCode(ident, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", elementType.String(), varType.String()))
 						}
 						ident.SetComputedType(elementType)
+					} else {
+						c.checkForOfAssignmentPattern(exprStmt.Expression, elementType)
 					}
 				}
 			}
@@ -1983,4 +1985,103 @@ func forEachEffectiveMember(obj *types.ObjectType, fn func(owner *types.ObjectTy
 		}
 	}
 	walk(obj)
+}
+
+// checkForOfAssignmentPattern checks a for-of head that assigns to an array
+// or object pattern of existing references (tsc's checkDestructuringAssignment):
+// each target takes its part of the element type, and a default is
+// assigned to the target first. Both are reported at the target.
+func (c *Checker) checkForOfAssignmentPattern(pattern parser.Expression, sourceType types.Type) {
+	assign := func(target, def parser.Expression, partType types.Type) {
+		if target == nil {
+			return
+		}
+		switch target.(type) {
+		case *parser.ArrayLiteral, *parser.ObjectLiteral:
+			c.checkForOfAssignmentPattern(target, partType)
+			return
+		}
+		id, ok := target.(*parser.Identifier)
+		if !ok {
+			c.visit(target)
+			return
+		}
+		declared, _, found := c.env.Resolve(id.Value)
+		if !found {
+			c.addCannotFindNameError(id, c.env, id.Value)
+			return
+		}
+		id.SetComputedType(declared)
+		if def != nil {
+			c.visit(def)
+			if dt := def.GetComputedType(); dt != nil {
+				dt = c.rel.GetWidenedType(dt)
+				if !c.isAssignableWithExpansion(dt, declared) {
+					c.addErrorWithCode(id, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", dt.String(), declared.String()))
+					return
+				}
+			}
+			if partType != nil {
+				if stripped := types.RemoveNullUndefined(partType); stripped != nil && stripped != types.Never {
+					partType = stripped
+				}
+			}
+		}
+		if partType != nil && !c.isAssignableWithExpansion(partType, declared) {
+			c.addErrorWithCode(id, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", partType.String(), declared.String()))
+		}
+	}
+	split := func(e parser.Expression) (parser.Expression, parser.Expression) {
+		if a, ok := e.(*parser.AssignmentExpression); ok && a.Operator == "=" {
+			return a.Left, a.Value
+		}
+		return e, nil
+	}
+	src := c.rel.GetWidenedType(sourceType)
+	switch p := pattern.(type) {
+	case *parser.ArrayLiteral:
+		for i, el := range p.Elements {
+			if el == nil {
+				continue
+			}
+			if _, rest := el.(*parser.SpreadElement); rest {
+				continue
+			}
+			var part types.Type = types.Any
+			switch st := src.(type) {
+			case *types.TupleType:
+				if i < len(st.ElementTypes) {
+					part = st.ElementTypes[i]
+				} else {
+					part = types.Undefined
+				}
+			case *types.ArrayType:
+				part = st.ElementType
+			}
+			target, def := split(el)
+			assign(target, def, part)
+		}
+	case *parser.ObjectLiteral:
+		obj, _ := src.(*types.ObjectType)
+		for _, prop := range p.Properties {
+			if prop == nil {
+				continue
+			}
+			key, ok := prop.Key.(*parser.Identifier)
+			if !ok {
+				continue
+			}
+			var part types.Type = types.Any
+			if obj != nil {
+				if t, ok := obj.Props()[key.Value]; ok {
+					part = t
+				}
+			}
+			target, def := split(prop.Value)
+			if target == nil {
+				target = key
+			}
+			assign(target, def, part)
+		}
+	}
 }
