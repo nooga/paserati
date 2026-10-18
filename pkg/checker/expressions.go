@@ -1944,7 +1944,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				// Check what type this member would produce for the property
 				switch member := memberType.(type) {
 				case *types.ObjectType:
-					if fieldType, exists := member.Props()[propertyName]; exists {
+					if fieldType, exists := member.EffectiveProperty(propertyName); exists {
 						memberHasProperty = true
 						memberResultType = fieldType
 					} else {

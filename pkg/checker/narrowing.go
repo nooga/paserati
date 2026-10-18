@@ -445,6 +445,15 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 						// Generic constructor lookup: resolve the constructor from the environment
 						// and use its call/construct signature return type as the narrowed type
 						if ctorType, _, found := c.env.Resolve(constructorIdent.Value); found {
+							// A generic class narrows to its instance type with
+							// every type argument any (tsc's prototype type, C<any>).
+							if gt, isGeneric := ctorType.(*types.GenericType); isGeneric && len(gt.TypeParameters) > 0 {
+								args := make([]types.Type, len(gt.TypeParameters))
+								for i := range args {
+									args[i] = types.Any
+								}
+								ctorType = c.instantiateGenericType(gt, args, nil)
+							}
 							if objType, ok := ctorType.(*types.ObjectType); ok {
 								// Prefer ConstructSignatures, fall back to CallSignatures
 								if len(objType.ConstructSigs()) > 0 {
@@ -944,6 +953,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					canNarrow = true
 					narrowedType = guard.NarrowedType
 				}
+			} else if derived := c.instanceofDerivedMembers(unionType, guard); derived != nil {
+				canNarrow = true
+				narrowedType = derived
 			} else if unionType.ContainsType(guard.NarrowedType) {
 				// Regular type narrowing - union contains the exact target type
 				canNarrow = true
@@ -3102,4 +3114,29 @@ func (c *Checker) memberRefType(key string) types.Type {
 		return t
 	}
 	return c.resolveMemberExpressionOriginalType(key)
+}
+
+// instanceofDerivedMembers keeps the members of a union an instanceof guard
+// for a class instance type is derived from (B<T> for `instanceof B` with B
+// generic, whose guard type is B<any>); nil when none is.
+func (c *Checker) instanceofDerivedMembers(u *types.UnionType, guard *TypeGuard) types.Type {
+	if !guard.Instanceof {
+		return nil
+	}
+	if to, ok := guard.NarrowedType.(*types.ObjectType); !ok || !to.IsClassInstance() {
+		return nil
+	}
+	var kept []types.Type
+	for _, m := range u.Types {
+		if c.isDerivedFrom(m, guard.NarrowedType) {
+			kept = append(kept, m)
+		}
+	}
+	switch len(kept) {
+	case 0:
+		return nil
+	case 1:
+		return kept[0]
+	}
+	return types.NewUnionType(kept...)
 }
