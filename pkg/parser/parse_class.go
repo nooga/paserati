@@ -580,6 +580,11 @@ func (p *Parser) parseClassBody() *ClassBody {
 				n.Decorators = memberDecorators
 			case *PropertyDefinition:
 				n.Decorators = memberDecorators
+				// ES decorators cannot decorate abstract or ambient fields
+				// (tsc's nodeCanBeDecorated).
+				if p.tscDiagnostics && !p.experimentalDecorators && (isAbstract || isDeclare) {
+					p.addErrorWithCode(memberDecorators[0].Token, errors.TS1206, "Decorators are not valid here.")
+				}
 			}
 		}
 
@@ -603,7 +608,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				methods = append(methods, m)
 			case *MethodSignature:
 				m.IsAbstract = isAbstract
-				p.noteDecoratedSignature(memberDecorators)
+				p.noteDecoratedAccessorSignature(memberDecorators)
 				methodSigs = append(methodSigs, m)
 			}
 		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.LT) && !hasNewlineAfterCur && !isGetSetFieldTerminator {
@@ -619,7 +624,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				methods = append(methods, m)
 			case *MethodSignature:
 				m.IsAbstract = isAbstract
-				p.noteDecoratedSignature(memberDecorators)
+				p.noteDecoratedAccessorSignature(memberDecorators)
 				methodSigs = append(methodSigs, m)
 			}
 		} else if p.curTokenIs(lexer.ASTERISK) {
@@ -2008,6 +2013,14 @@ func nonThisParamCount(params []*Parameter) int {
 
 // noteDecoratedSignature reports tsc's checker grammar error for a decorator on a
 // method (or accessor) that has no body: only an implementation can be decorated.
+// noteDecoratedAccessorSignature reports decorators on an accessor without a
+// body; unlike a method overload, tsc calls these simply misplaced.
+func (p *Parser) noteDecoratedAccessorSignature(decorators []*Decorator) {
+	if len(decorators) > 0 && p.tscDiagnostics {
+		p.addErrorWithCode(decorators[0].Token, errors.TS1206, "Decorators are not valid here.")
+	}
+}
+
 func (p *Parser) noteDecoratedSignature(decorators []*Decorator) {
 	if len(decorators) > 0 {
 		p.addGrammarErrorWithCode(decorators[0].Token, "TS1249", "A decorator can only decorate a method implementation, not an overload.")
