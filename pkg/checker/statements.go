@@ -1394,6 +1394,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 				} else {
 					elementType = types.Any
 				}
+				c.reportNotIterable(node.Iterable, iterableType)
 			} else if iterableType == types.String || c.rel.IsAssignable(iterableType, types.String) {
 				// String iteration yields individual characters (strings)
 				// This handles both the general string type and string literal types
@@ -1473,6 +1474,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 			} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
 				// Array destructuring: for(const [x, y] of arr)
 				// Define each destructured variable with its type from the element
+				c.reportNotIterable(arrayDestr, elementType)
 				c.checkArrayDestructuringInForLoop(arrayDestr, elementType)
 			} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
 				// Object destructuring: for(const {x, y} of arr)
