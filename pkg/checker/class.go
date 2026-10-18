@@ -1010,7 +1010,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				// Try to extract constant property name
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific method
-					instanceType.WithClassMember(constantName, methodType, accessLevel, false, false)
+					instanceType.WithClassMethod(constantName, methodType, accessLevel, false, false)
 					if checkerDebug {
 						debugPrintf("// [Checker Class] Added constant computed method '%s' to instance type: %s (%s)\n",
 							constantName, methodType.String(), accessLevel.String())
@@ -1026,7 +1026,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			} else {
 				// Add method with access control metadata
 				methodName := c.extractPropertyName(method.Key)
-				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
+				instanceType.WithClassMethod(methodName, methodType, accessLevel, false, false)
 
 				if checkerDebug {
 					debugPrintf("// [Checker Class] Added method '%s' to instance type: %s (%s)\n",
@@ -1059,7 +1059,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				}
 				accessLevel := c.getAccessLevel(methodSig.IsPublic, methodSig.IsPrivate, methodSig.IsProtected)
 
-				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
+				instanceType.WithClassMethod(methodName, methodType, accessLevel, false, false)
 				if checkerDebug {
 					debugPrintf("// [Checker Class] Added method signature '%s' to instance type: %s\n", methodName, methodType.String())
 				}
@@ -1863,7 +1863,7 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 
 			// Add method with access control metadata
 			methodName := c.extractPropertyName(method.Key)
-			constructorType.WithClassMember(methodName, methodType, accessLevel, true, false)
+			constructorType.WithClassMethod(methodName, methodType, accessLevel, true, false)
 
 			if checkerDebug {
 				debugPrintf("// [Checker Class] Added static method '%s' to constructor type: %s (%s)\n",
@@ -3054,7 +3054,7 @@ func (c *Checker) addAmbientMethodSignatures(body *parser.ClassBody, static bool
 		}
 		first := sigs[0]
 		access := c.getAccessLevel(first.IsPublic, first.IsPrivate, first.IsProtected)
-		target.WithClassMember(name, methodType, access, static, false)
+		target.WithClassMethod(name, methodType, access, static, false)
 	}
 }
 

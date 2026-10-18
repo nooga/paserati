@@ -1595,6 +1595,12 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				if exists {
 					// Property found - check access control for class types
 					c.validateMemberAccess(objectType, propertyName, node.Property)
+					if _, isSuper := node.Object.(*parser.SuperExpression); isSuper && c.target() < 2015 {
+						// Before ES2015 super reaches only the base's methods.
+						if info := obj.GetMemberAccessInfo(propertyName); info != nil && !info.IsMethod {
+							c.addErrorWithCode(node.Property, "TS2340", "Only public and protected methods of the base class are accessible via the 'super' keyword.")
+						}
+					}
 
 					if fieldType == nil { // Should ideally not happen if checker populates correctly
 						c.addError(node.Property, fmt.Sprintf("internal checker error: property '%s' has nil type in ObjectType", propertyName))

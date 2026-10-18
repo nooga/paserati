@@ -857,6 +857,18 @@ func (ot *ObjectType) WithClassMember(memberName string, memberType Type, access
 	return ot
 }
 
+// WithClassMethod adds a class method: a member declared as a method, which
+// (unlike a property) may be read through super before ES2015.
+func (ot *ObjectType) WithClassMethod(memberName string, memberType Type, accessLevel AccessModifier, isStatic, isReadonly bool) *ObjectType {
+	ot.WithClassMember(memberName, memberType, accessLevel, isStatic, isReadonly)
+	if ot.ClassMeta != nil {
+		if info := ot.ClassMeta.GetMemberAccess(memberName); info != nil {
+			info.IsMethod = true
+		}
+	}
+	return ot
+}
+
 // --- Convenience constructors for common patterns ---
 
 // NewSimpleFunction creates a function type: (params) => returnType

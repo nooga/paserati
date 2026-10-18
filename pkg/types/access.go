@@ -30,6 +30,7 @@ type MemberAccessInfo struct {
 	IsReadonly  bool
 	IsGetter    bool // This property is defined with 'get' keyword
 	IsSetter    bool // This property is defined with 'set' keyword
+	IsMethod    bool // This member is a method declaration
 }
 
 // ClassMetadata contains class-specific type information for access control
