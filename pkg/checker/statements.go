@@ -299,6 +299,8 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 	// Use the interface type's properties maps (either from placeholder or new)
 	properties := interfaceType.Props()
+	// inherited holds the members this declaration only inherits so far.
+	inherited := map[string]bool{}
 	optionalProperties := interfaceType.OptionalProps()
 	if optionalProperties == nil {
 		optionalProperties = make(map[string]bool)
@@ -344,6 +346,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// Copy all properties from the extended interface
 			rb := newThisRebind(extendedObjectType, interfaceType)
 			forEachEffectiveMember(extendedObjectType, func(owner *types.ObjectType, propName string) {
+				if _, own := properties[propName]; !own {
+					inherited[propName] = true
+				}
 				propType := owner.Props()[propName]
 				interfaceType.SetProperty(propName, c.rebindThisType(propType, rb))
 				interfaceType.SetPropertyDoc(propName, owner.PropertyDoc(propName))
@@ -371,6 +376,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				c.recordDerived(baseObject, interfaceType)
 				rb := newThisRebind(baseObject, interfaceType)
 				forEachEffectiveMember(baseObject, func(owner *types.ObjectType, propName string) {
+					if _, own := properties[propName]; !own {
+						inherited[propName] = true
+					}
 					propType := owner.Props()[propName]
 					interfaceType.SetProperty(propName, c.rebindThisType(propType, rb))
 					interfaceType.SetPropertyDoc(propName, owner.PropertyDoc(propName))
@@ -489,8 +497,11 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				propType = types.Any
 			}
 
-			// Check if we're overriding an inherited property
-			if existingType, exists := properties[prop.Name.Value]; exists {
+			// A member declared again merges into an overload set; one that
+			// overrides an inherited member replaces it.
+			if inherited[prop.Name.Value] {
+				delete(inherited, prop.Name.Value)
+			} else if existingType, exists := properties[prop.Name.Value]; exists {
 				if mergedType, merged := mergeInterfaceFunctionMemberTypes(existingType, propType); merged {
 					propType = mergedType
 				}

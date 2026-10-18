@@ -1035,6 +1035,18 @@ func eraseGenericType(g *GenericType) Type {
 	for _, tp := range g.TypeParameters {
 		subs[tp] = Any
 	}
+	// A generic function type's signatures declare the parameters
+	// themselves, which would shadow the substitution.
+	if bo, ok := g.Body.(*ObjectType); ok && len(bo.Props()) == 0 && len(bo.IndexSigs()) == 0 &&
+		len(bo.ConstructSigs()) == 0 && len(bo.CallSigs()) > 0 {
+		out := NewObjectType()
+		for _, sig := range bo.CallSigs() {
+			erased := substituteSignature(sig, subs)
+			erased.ParameterNames = sig.ParameterNames
+			out.WithCallSignature(erased)
+		}
+		return out
+	}
 	return substituteType(g.Body, subs)
 }
 
