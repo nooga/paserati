@@ -4779,8 +4779,9 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 
 			// Build remaining properties map
 			remainingProps := make(map[string]types.Type)
-			for _, propName := range types.SortedPropertyNames(objType.Props()) {
-				propType := objType.Props()[propName]
+			props := spreadableProps(objType)
+			for _, propName := range types.SortedPropertyNames(props) {
+				propType := props[propName]
 				if _, wasExtracted := extractedProps[propName]; !wasExtracted {
 					remainingProps[propName] = propType
 				}

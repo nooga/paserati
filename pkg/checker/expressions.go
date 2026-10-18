@@ -487,7 +487,7 @@ func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type)
 		if checkerDebug {
 			debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadType.String())
 		}
-		for propName, propType := range spreadType.Props() {
+		for propName, propType := range spreadableProps(spreadType) {
 			fields[propName] = propType // Later properties override earlier ones
 			if checkerDebug {
 				debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
@@ -533,6 +533,38 @@ func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type)
 		}
 		return false
 	}
+}
+
+// spreadableProps returns the properties a spread or object rest copies
+// from obj: its own spreadable members, and a class constructor's prototype.
+func spreadableProps(obj *types.ObjectType) map[string]types.Type {
+	props := make(map[string]types.Type)
+	if obj.IsClassConstructor() {
+		if pt, ok := obj.EffectiveProperty("prototype"); ok {
+			props["prototype"] = pt
+		} else if sigs := obj.ConstructSigs(); len(sigs) > 0 && sigs[0].ReturnType != nil {
+			props["prototype"] = sigs[0].ReturnType
+		}
+	}
+	for name, t := range obj.Props() {
+		if isSpreadableMember(obj, name) {
+			props[name] = t
+		}
+	}
+	return props
+}
+
+// isSpreadableMember reports whether a spread copies a property: private
+// names never are, nor are a class's methods and accessors, which live on
+// the prototype (tsc's isSpreadableProperty).
+func isSpreadableMember(obj *types.ObjectType, name string) bool {
+	if strings.HasPrefix(name, "#") {
+		return false
+	}
+	if info := obj.GetMemberAccessInfo(name); info != nil && (info.IsMethod || info.IsGetter || info.IsSetter) {
+		return false
+	}
+	return true
 }
 
 // checkObjectLiteral checks the type of an object literal expression.

@@ -37,7 +37,7 @@ func (c *Checker) nestedObjectPatternRestType(source types.Type, pattern *parser
 		// Computed keys and the rest element itself contribute nothing.
 	}
 	remaining := make(map[string]types.Type)
-	for name, t := range objType.Props() {
+	for name, t := range spreadableProps(objType) {
 		if _, wasExtracted := extracted[name]; !wasExtracted {
 			remaining[name] = t
 		}
