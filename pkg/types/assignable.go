@@ -251,8 +251,20 @@ func (r *Relation) isAssignable(source, target Type) bool {
 		case Number, String, Boolean, Symbol, BigInt, Null, Undefined, Void, Never:
 			return false
 		}
-		if _, ok := source.(*Primitive); ok {
-			return false // Any other primitive-like singleton
+		switch src := source.(type) {
+		case *Primitive:
+			// RegExp is modelled as a primitive-like singleton but is an
+			// object at runtime.
+			return src == RegExp
+		case *LiteralType, *TemplateLiteralType:
+			return false
+		case *UnionType:
+			for _, m := range src.Types {
+				if !r.isAssignable(m, target) {
+					return false
+				}
+			}
+			return true
 		}
 		return true // ObjectTypes, arrays, functions, etc.
 	}

@@ -3220,7 +3220,7 @@ func (c *Checker) checkInOperator(leftType, rightType types.Type, node *parser.I
 		if c.checkNullishOperand(node.Right) {
 			rightType = types.Never
 		}
-		if !c.rel.IsAssignable(rightType, types.NonPrimitive) && !c.isObjectType(c.apparentType(rightType)) {
+		if !c.rel.IsAssignable(rightType, types.NonPrimitive) {
 			c.addErrorWithCode(node.Right, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type 'object'.", rightType.String()))
 		}
 	}
