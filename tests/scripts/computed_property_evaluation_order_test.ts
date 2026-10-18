@@ -1,3 +1,4 @@
+// no-typecheck
 // Test computed property name evaluation order
 // Per ECMAScript spec, property key must be evaluated and converted to
 // property key (calling toString()) BEFORE the property value is evaluated

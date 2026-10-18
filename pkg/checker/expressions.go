@@ -20,29 +20,13 @@ func (c *Checker) validateComputedPropertyNameType(expr parser.Expression, error
 	}
 }
 
+// isValidComputedPropertyNameType is tsc's checkComputedPropertyName rule:
+// the key's type must be assignable to string | number | symbol.
 func (c *Checker) isValidComputedPropertyNameType(t types.Type) bool {
-	if t == nil {
+	if t == nil || t == types.Any {
 		return true
 	}
-	if t == types.Any || t == types.String || t == types.Number || t == types.Symbol {
-		return true
-	}
-	if literal, ok := t.(*types.LiteralType); ok {
-		switch literal.Value.Type() {
-		case vm.TypeString, vm.TypeIntegerNumber, vm.TypeFloatNumber, vm.TypeBigInt:
-			return true
-		}
-		return false
-	}
-	if union, ok := t.(*types.UnionType); ok {
-		for _, member := range union.Types {
-			if !c.isValidComputedPropertyNameType(c.rel.GetWidenedType(member)) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
+	return c.rel.IsAssignable(t, types.NewUnionType(types.String, types.Number, types.Symbol))
 }
 
 func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
@@ -551,15 +535,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			// Handle computed properties: [expression]
 			c.visit(key.Expr)
 			// TS2464: computed property name must be string, number, symbol, or any.
-			// Keep object literal checks conservative because JavaScript object literal
-			// keys support runtime ToPropertyKey coercion and the smoke suite covers it.
-			if keyExprType := key.Expr.GetComputedType(); keyExprType != nil {
-				widenedKeyType := c.rel.GetWidenedType(keyExprType)
-				switch widenedKeyType {
-				case types.Boolean, types.Null, types.Undefined, types.Void, types.Never:
-					c.addErrorWithCode(key, errors.TS2464, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
-				}
-			}
+			c.validateComputedPropertyNameType(key.Expr, key)
 
 			// Note: keyType is computed but primarily used for validation
 			// The actual key name is determined at runtime for computed properties

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/jsregex"
@@ -54,6 +55,9 @@ type Parser struct {
 	// checker (TS2364/TS2357), and malformed for-of/for-in heads are
 	// recovered with tsc's grammar errors.
 	tscDiagnostics bool
+	// target is tsc's --target as a year (5 for ES5); 0 means current. Only
+	// consulted in tscDiagnostics mode.
+	target int
 
 	// JS redeclaration early errors, re-labelled by finishBinding.
 	redeclarationErrors []*errors.SyntaxError
@@ -554,6 +558,12 @@ func (p *Parser) SetTscDiagnostics(on bool) {
 	p.tscDiagnostics = on
 }
 
+// SetTarget sets tsc's --target as a year (5 for ES5, 2015 for ES6), for
+// target-dependent diagnostics in tscDiagnostics mode.
+func (p *Parser) SetTarget(year int) {
+	p.target = year
+}
+
 func (p *Parser) SetDisallowSuper(disallow bool) {
 	p.disallowSuper = disallow
 }
@@ -612,7 +622,14 @@ func (p *Parser) SetStrictMode(strict bool) {
 // 12.9.4.1). It runs as each token becomes current, since such tokens can
 // appear anywhere a literal can (including property names).
 func (p *Parser) checkLegacyOctal(tok *lexer.Token) {
-	if tok == nil || !tok.LegacyOctal || !p.strictMode {
+	if tok == nil || !tok.LegacyOctal {
+		return
+	}
+	if p.tscDiagnostics && tok.Type == lexer.NUMBER {
+		p.reportLegacyNumericLiteral(tok)
+		return
+	}
+	if !p.strictMode {
 		return
 	}
 	if tok.Type == lexer.NUMBER {
@@ -620,6 +637,26 @@ func (p *Parser) checkLegacyOctal(tok *lexer.Token) {
 	} else {
 		p.addError(tok, "Octal escape sequences are not allowed in strict mode.")
 	}
+}
+
+// reportLegacyNumericLiteral reports a legacy octal (TS1121) or a decimal with
+// a leading zero (TS1489) the way tsc's scanner does: in any mode, with the
+// octal suggestion covering a preceding minus sign.
+func (p *Parser) reportLegacyNumericLiteral(tok *lexer.Token) {
+	digits := tok.Literal
+	if strings.ContainsAny(digits, "89.eE") {
+		p.addErrorWithCode(tok, "TS1489", "Decimals with leading zeros are not allowed.")
+		return
+	}
+	v, err := strconv.ParseUint(digits, 8, 64)
+	if err != nil {
+		return
+	}
+	at, literal := tok, "0o"+strconv.FormatUint(v, 8)
+	if p.prevToken != nil && p.prevToken.Type == lexer.MINUS {
+		at, literal = p.prevToken, "-"+literal
+	}
+	p.addErrorWithCode(at, "TS1121", "Octal literals are not allowed. Use the syntax '"+literal+"'.")
 }
 
 // dropSuppressedGrammarErrors implements tsc's rule that checker grammar errors
@@ -2880,6 +2917,9 @@ func (p *Parser) parseRegexLiteral() Expression {
 
 	// The pattern and flags are early errors: an invalid literal is a
 	// SyntaxError when the script is parsed, not when it is evaluated.
+	if p.tscDiagnostics && p.target != 0 {
+		p.checkRegexFlagTargets(literal, lastSlash)
+	}
 	if err := jsregex.Validate(pattern, flags); err != nil {
 		p.addError(p.curToken, "SyntaxError: "+err.Error())
 		return nil
@@ -2889,6 +2929,33 @@ func (p *Parser) parseRegexLiteral() Expression {
 		Token:   p.curToken,
 		Pattern: pattern,
 		Flags:   flags,
+	}
+}
+
+// regexFlagTargets is the first --target (as a year) supporting each flag,
+// with tsc's name for it.
+var regexFlagTargets = map[rune]struct {
+	year int
+	name string
+}{
+	'd': {2022, "es2022"},
+	's': {2018, "es2018"},
+	'u': {2015, "es6"},
+	'v': {2024, "es2024"},
+	'y': {2015, "es6"},
+}
+
+// checkRegexFlagTargets reports TS1501 for each flag of a regex literal that
+// the --target does not support, at the flag.
+func (p *Parser) checkRegexFlagTargets(literal string, lastSlash int) {
+	tok := p.curToken
+	col := tok.Column + len(utf16.Encode([]rune(literal[:lastSlash+1])))
+	for i, ch := range literal[lastSlash+1:] {
+		ft, ok := regexFlagTargets[ch]
+		if ok && p.target < ft.year {
+			at := &lexer.Token{Line: tok.Line, Column: col + i, StartPos: tok.StartPos + lastSlash + 1 + i, EndPos: tok.StartPos + lastSlash + 2 + i}
+			p.addErrorWithCode(at, "TS1501", "This regular expression flag is only available when targeting '"+ft.name+"' or later.")
+		}
 	}
 }
 
@@ -10906,6 +10973,20 @@ func GetTokenFromNode(node Node) *lexer.Token {
 			return GetTokenFromNode(n.Statements[0]) // Use first statement's token
 		}
 		return &lexer.Token{} // Empty program, return zero value
+
+	case *ComputedPropertyName:
+		// The node keeps no '[' token; it is taken to sit right before the
+		// key expression, as it does unless whitespace separates them.
+		if n.Expr == nil {
+			return &lexer.Token{}
+		}
+		t := *GetTokenFromNode(n.Expr)
+		if t.Column > 1 && t.StartPos > 0 {
+			t.Column--
+			t.StartPos--
+		}
+		t.Type, t.Literal = lexer.LBRACKET, "["
+		return &t
 
 	// Add other node types as needed
 	default:
