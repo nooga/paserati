@@ -30,6 +30,7 @@ func (c *Checker) checkImplicitAnyClassMembers(node *parser.ClassDeclaration) {
 	if !c.noImplicitAny || node == nil || node.Body == nil || c.inDeclarationFile() {
 		return
 	}
+	c.checkCircularClassFields(node.Body)
 	ambient := node.Declare || c.inAmbientNamespace
 	// Parameter properties are typed by their parameter.
 	paramTokens := map[*lexer.Token]bool{}

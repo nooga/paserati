@@ -167,6 +167,7 @@ const (
 	TS17005 = "TS17005" // A constructor cannot contain a 'super' call when its class extends 'null'
 	TS18013 = "TS18013" // Property 'X' is not accessible outside class 'Y'
 	TS7008  = "TS7008"  // Member implicitly has an 'any' type
+	TS7022  = "TS7022"  // implicitly any: referenced in its own initializer
 	TS7057  = "TS7057"  // yield implicitly results in any
 	TS18014 = "TS18014" // private identifier shadowed by an inner class
 	TS18046 = "TS18046" // 'X' is of type 'unknown'

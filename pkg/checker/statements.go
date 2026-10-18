@@ -1346,6 +1346,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		return
 	}
 
+	c.checkForOfSelfReference(node)
 	originalEnv := c.env
 	loopEnv := NewEnclosedEnvironment(originalEnv)
 	c.env = loopEnv
