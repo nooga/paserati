@@ -25,7 +25,7 @@ func (r *Relation) assignableToTemplateLiteral(source Type, target *TemplateLite
 		}
 		return true, true
 	case *TemplateLiteralType:
-		return s.Equals(target), true
+		return r.templateAssignableToTemplate(s, target), true
 	}
 	if source == String {
 		return false, true
@@ -130,4 +130,40 @@ func isNumericTemplateText(s string) bool {
 	}
 	_, err := strconv.ParseFloat(s, 64)
 	return err == nil
+}
+
+// templateAssignableToTemplate relates two template literal types of the
+// same shape: equal texts, and each source hole assignable to its target
+// hole. Empty text parts are ignored.
+func (r *Relation) templateAssignableToTemplate(source, target *TemplateLiteralType) bool {
+	sp, tp := nonEmptyTemplateParts(source.Parts), nonEmptyTemplateParts(target.Parts)
+	if len(sp) != len(tp) {
+		return false
+	}
+	for i := range sp {
+		if sp[i].IsLiteral != tp[i].IsLiteral {
+			return false
+		}
+		if sp[i].IsLiteral {
+			if sp[i].Literal != tp[i].Literal {
+				return false
+			}
+			continue
+		}
+		if sp[i].Type == nil || tp[i].Type == nil || !r.IsAssignable(sp[i].Type, tp[i].Type) {
+			return false
+		}
+	}
+	return true
+}
+
+func nonEmptyTemplateParts(parts []TemplateLiteralPart) []TemplateLiteralPart {
+	out := make([]TemplateLiteralPart, 0, len(parts))
+	for _, p := range parts {
+		if p.IsLiteral && p.Literal == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }

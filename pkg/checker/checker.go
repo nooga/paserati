@@ -4616,6 +4616,11 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		c.returnContexts[node] = context.ExpectedType
 		c.visit(node)
 		delete(c.returnContexts, node)
+	case *parser.TemplateLiteral:
+		c.visit(node)
+		if node.GetComputedType() == types.String && wantsTemplateLiteralType(context.ExpectedType) {
+			node.SetComputedType(c.templateExpressionType(node))
+		}
 	case *parser.InfixExpression:
 		// The expected type only ever reaches the operand that decides the
 		// expression's value in context: for `&&`/`||`/`??` that is the right

@@ -3931,3 +3931,50 @@ func (c *Checker) inferCollectionTypeArgs(paramCount int, callArgs []parser.Expr
 
 // maxAliasInstantiationDepth bounds nested instantiateAliasReference calls.
 const maxAliasInstantiationDepth = 50
+
+// wantsTemplateLiteralType reports whether a contextual type makes a template
+// expression a template literal type, as tsc's isTemplateLiteralContextualType:
+// it is (or has a member that is) a string literal or template literal type.
+func wantsTemplateLiteralType(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.TemplateLiteralType:
+		return true
+	case *types.LiteralType:
+		return tt.Value.Type() == vm.TypeString
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if wantsTemplateLiteralType(m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// templateExpressionType is the template literal type of a template
+// expression: its text with the types of its substitutions.
+func (c *Checker) templateExpressionType(node *parser.TemplateLiteral) types.Type {
+	var parts []types.TemplateLiteralPart
+	for _, part := range node.Parts {
+		if sp, ok := part.(*parser.TemplateStringPart); ok {
+			if sp.Value != "" {
+				parts = append(parts, types.TemplateLiteralPart{IsLiteral: true, Literal: sp.Value})
+			}
+			continue
+		}
+		e, ok := part.(parser.Expression)
+		if !ok {
+			return types.String
+		}
+		t := e.GetComputedType()
+		if t == nil {
+			return types.String
+		}
+		parts = append(parts, types.TemplateLiteralPart{Type: t})
+	}
+	tlt := &types.TemplateLiteralType{Parts: parts}
+	if computed := c.computeTemplateLiteralType(tlt); computed != nil {
+		return computed
+	}
+	return tlt
+}

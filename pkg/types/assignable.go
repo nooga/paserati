@@ -240,8 +240,10 @@ func (r *Relation) isAssignable(source, target Type) bool {
 			return result
 		}
 	}
-	if _, ok := source.(*TemplateLiteralType); ok && target == String {
-		return true // every template literal type is a string
+	if _, ok := source.(*TemplateLiteralType); ok {
+		if _, toTemplate := target.(*TemplateLiteralType); !toTemplate {
+			return r.isAssignable(String, target) // every template literal type is a string
+		}
 	}
 
 	// NonPrimitive (the `object` keyword) only accepts non-primitive types (ObjectType,
@@ -267,6 +269,13 @@ func (r *Relation) isAssignable(source, target Type) bool {
 			return true
 		}
 		return true // ObjectTypes, arrays, functions, etc.
+	}
+
+	// boolean is true | false.
+	if source == Boolean {
+		if u, ok := target.(*UnionType); ok && unionHasBooleanLiteral(u, true) && unionHasBooleanLiteral(u, false) {
+			return true
+		}
 	}
 
 	// `object` has no members, so it is assignable to an object type that
@@ -1377,4 +1386,14 @@ func simplifyKeyof(t Type) Type {
 		keys[i] = &LiteralType{Value: vm.String(name)}
 	}
 	return NewUnionType(keys...)
+}
+
+// unionHasBooleanLiteral reports whether u has the boolean literal v.
+func unionHasBooleanLiteral(u *UnionType, v bool) bool {
+	for _, m := range u.Types {
+		if lt, ok := m.(*LiteralType); ok && lt.Value.Type() == vm.TypeBoolean && lt.Value.AsBoolean() == v {
+			return true
+		}
+	}
+	return false
 }
