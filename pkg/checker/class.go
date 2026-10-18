@@ -476,7 +476,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
-	c.checkClassIndexConstraints(node.Body, instanceType, constructorType)
+	c.deferRelationCheck(func() { c.checkClassIndexConstraints(node.Body, instanceType, constructorType) })
 	c.checkClassInitializationOrder(node.Name.Value, node.Body, instanceType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
@@ -699,7 +699,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		constructorType.WithConstructSignature(sig)
 	}
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
-	c.checkClassIndexConstraints(node.Body, instanceType, constructorType)
+	c.deferRelationCheck(func() { c.checkClassIndexConstraints(node.Body, instanceType, constructorType) })
 	c.checkClassInitializationOrder(node.Name.Value, node.Body, instanceType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
@@ -1202,6 +1202,25 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 // before bodies are checked, with an any return; this is tsc's inferred
 // return type for callers checked afterwards.
 func (c *Checker) refineMethodReturnType(owner *types.ObjectType, body *parser.ClassBody, method *parser.MethodDefinition) {
+	if owner != nil && method != nil && method.Value != nil && method.Kind == "getter" && method.Value.ReturnTypeAnnotation == nil {
+		// An accessor property typed any before its getter body was checked
+		// takes the getter's inferred return type.
+		name, known := getMethodKeyString(method.Key)
+		if !known {
+			return
+		}
+		// An annotated setter's parameter type is the write type; the
+		// property keeps it.
+		if owner.Props()[name] != types.Any || hasAnnotatedSetter(body, name, method.IsStatic) {
+			return
+		}
+		if fnType, ok := method.Value.GetComputedType().(*types.ObjectType); ok && len(fnType.CallSigs()) == 1 {
+			if inferred := fnType.CallSigs()[0].ReturnType; inferred != nil && inferred != types.Any {
+				owner.Props()[name] = inferred
+			}
+		}
+		return
+	}
 	if owner == nil || method == nil || method.Value == nil || method.Kind != "method" ||
 		method.Value.ReturnTypeAnnotation != nil || len(method.Value.TypeParameters) > 0 {
 		return
@@ -2996,4 +3015,21 @@ func (c *Checker) addAmbientMethodSignatures(body *parser.ClassBody, static bool
 		access := c.getAccessLevel(first.IsPublic, first.IsPrivate, first.IsProtected)
 		target.WithClassMember(name, methodType, access, static, false)
 	}
+}
+
+// hasAnnotatedSetter reports whether body has a setter for name whose
+// parameter has a type annotation.
+func hasAnnotatedSetter(body *parser.ClassBody, name string, static bool) bool {
+	for _, m := range body.Methods {
+		if m != nil && m.Kind == "setter" && m.IsStatic == static && m.Value != nil {
+			if n, ok := getMethodKeyString(m.Key); ok && n == name {
+				for _, p := range m.Value.Parameters {
+					if p != nil && p.TypeAnnotation != nil {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }

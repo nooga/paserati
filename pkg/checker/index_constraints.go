@@ -226,29 +226,36 @@ func hasDeclaredStringIndex(t *types.ObjectType) bool {
 // signatures (checkIndexConstraints): instance members against the instance
 // type's, static members against the constructor's.
 func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceType, ctorType *types.ObjectType) {
-	if body == nil || len(body.IndexSignatures) == 0 {
+	if body == nil {
+		return
+	}
+	instanceSigs, staticSigs := classIndexSignatures(instanceType, 0), classIndexSignatures(ctorType, 0)
+	if len(instanceSigs) == 0 && len(staticSigs) == 0 {
 		return
 	}
 	check := func(key parser.Expression, static bool) {
-		owner := instanceType
+		owner, sigs := instanceType, instanceSigs
 		if static {
-			owner = ctorType
+			owner, sigs = ctorType, staticSigs
 		}
-		if owner == nil || key == nil {
+		if owner == nil || key == nil || len(sigs) == 0 {
 			return
 		}
 		name := c.extractPropertyName(key)
+		known := name != ""
 		if cp, ok := key.(*parser.ComputedPropertyName); ok {
 			name = c.extractConstantPropertyName(cp.Expr)
+			_, isStr := cp.Expr.(*parser.StringLiteral)
+			known = name != "" || isStr // [""] names the empty string
 		}
-		if name == "" {
+		if !known {
 			return
 		}
 		propType := owner.Props()[name]
 		if propType == nil {
 			return
 		}
-		c.checkPropertyAgainstIndexSignatures(owner, key, name, propType, owner.IndexSigs())
+		c.checkPropertyAgainstIndexSignatures(owner, key, name, propType, sigs)
 	}
 	for _, prop := range body.Properties {
 		if prop != nil && !isPrivateNameKey(prop.Key) {
@@ -265,4 +272,18 @@ func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceTyp
 func isPrivateNameKey(key parser.Expression) bool {
 	id, ok := key.(*parser.Identifier)
 	return ok && len(id.Value) > 0 && id.Value[0] == '#'
+}
+
+// classIndexSignatures is t's own index signatures and those of its bases.
+func classIndexSignatures(t *types.ObjectType, depth int) []*types.IndexSignature {
+	if t == nil || depth > 32 {
+		return nil
+	}
+	sigs := append([]*types.IndexSignature(nil), t.IndexSigs()...)
+	for _, b := range t.Bases() {
+		if bo, ok := b.(*types.ObjectType); ok {
+			sigs = append(sigs, classIndexSignatures(bo, depth+1)...)
+		}
+	}
+	return sigs
 }
