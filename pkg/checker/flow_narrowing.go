@@ -46,7 +46,28 @@ func (f *flowNarrowState) track(name string, narrowType types.Type) {
 		f.c.flowNarrowOverlay = make(map[string]types.Type)
 	}
 	f.c.flowNarrowOverlay[name] = narrowType
+	if f.c.flowNarrowOverlayEnv == nil {
+		f.c.flowNarrowOverlayEnv = make(map[string]*Environment)
+	}
+	f.c.flowNarrowOverlayEnv[name] = f.c.env
 	f.tracked[name] = true
+}
+
+// overlayFor returns name's live straight-line narrowing, unless a scope
+// opened since it was recorded binds name again (a guard's narrowing inside
+// a branch, which is newer).
+func (c *Checker) overlayFor(name string) (types.Type, bool) {
+	t, ok := c.flowNarrowOverlay[name]
+	if !ok || t == nil {
+		return nil, false
+	}
+	stop := c.flowNarrowOverlayEnv[name]
+	for e := c.env; e != nil && e != stop; e = e.outer {
+		if _, rebound := e.symbols[name]; rebound {
+			return nil, false
+		}
+	}
+	return t, true
 }
 
 // forget drops any narrowing this state holds for name, e.g. because it's

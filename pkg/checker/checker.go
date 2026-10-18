@@ -544,6 +544,8 @@ type Checker struct {
 	// consulted by identifier reads on top of the declared type in c.env.
 	// See flow_narrowing.go.
 	flowNarrowOverlay map[string]types.Type
+	// flowNarrowOverlayEnv is the scope each overlay entry was recorded in.
+	flowNarrowOverlayEnv map[string]*Environment
 
 	// constAliases are the initializers of unannotated consts (aliased
 	// conditions); stableParams the parameters of the function being checked
@@ -3628,7 +3630,7 @@ func (c *Checker) visit(node parser.Node) {
 
 			// A live flow-narrowed type (see flow_narrowing.go) takes
 			// priority over the declared type from a straight-line read.
-			if narrowType, ok := c.flowNarrowOverlay[node.Value]; ok {
+			if narrowType, ok := c.overlayFor(node.Value); ok {
 				typ = narrowType
 			}
 			// A `var`'s narrowing does not reach into a function created

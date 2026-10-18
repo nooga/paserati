@@ -703,6 +703,17 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		debugPrintf("// [TypeNarrowing] Variable '%s' not found for narrowing\n", guard.VariableName)
 		return nil
 	}
+	if t, live := c.overlayFor(guard.VariableName); live {
+		// Narrowed by a straight-line assignment: the declared members the
+		// assigned type can be (tsc's assignment-reduced type).
+		originalType = t
+		declared := c.declaredTypeOfRef(guard.VariableName)
+		if reduced := c.assignmentReducedType(declared, t); reduced != nil {
+			originalType = reduced
+		} else if _, isUnion := declared.(*types.UnionType); declared != nil && !isUnion {
+			originalType = declared
+		}
+	}
 	if originalType == nil {
 		debugPrintf("// [TypeNarrowing] Variable '%s' found but has nil type\n", guard.VariableName)
 		return nil
@@ -1214,6 +1225,17 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' not found\n", guard.VariableName)
 		return nil
 	}
+	if t, live := c.overlayFor(guard.VariableName); live {
+		// Narrowed by a straight-line assignment: the declared members the
+		// assigned type can be (tsc's assignment-reduced type).
+		originalType = t
+		declared := c.declaredTypeOfRef(guard.VariableName)
+		if reduced := c.assignmentReducedType(declared, t); reduced != nil {
+			originalType = reduced
+		} else if _, isUnion := declared.(*types.UnionType); declared != nil && !isUnion {
+			originalType = declared
+		}
+	}
 
 	// Handle discriminated union narrowing in else branch
 	// e.g., after "if (expr.kind === 'num')", the else branch has all members except those with kind='num'
@@ -1432,6 +1454,15 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					originalType.String(), narrowedTypeStr)
 			}
 			return nil
+		}
+	}
+
+	// A primitive whose typeof the guard matches leaves nothing in the else
+	// branch: `typeof x === "number"` on number.
+	if base := c.rel.GetWidenedType(originalType); guard.NarrowedType != nil && !guard.Predicate && !guard.Instanceof && isTypeofPrimitive(base) && base == guard.NarrowedType {
+		narrowedEnv := NewEnclosedEnvironment(c.env)
+		if narrowedEnv.Define(guard.VariableName, types.Never, isConst) {
+			return narrowedEnv
 		}
 	}
 
@@ -2971,4 +3002,13 @@ func (c *Checker) unknownWithoutNullish(removed types.Type) types.Type {
 func isObjectMarker(t types.Type) bool {
 	_, ok := t.(*types.ObjectTypeMarker)
 	return ok
+}
+
+// isTypeofPrimitive reports whether t is a primitive a typeof guard names.
+func isTypeofPrimitive(t types.Type) bool {
+	switch t {
+	case types.Number, types.String, types.Boolean, types.BigInt, types.Symbol:
+		return true
+	}
+	return false
 }
