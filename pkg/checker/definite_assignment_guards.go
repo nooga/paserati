@@ -142,6 +142,16 @@ func (a *definiteAssignment) predicateGuards(call *parser.CallExpression, whenTr
 	if call.Function == nil {
 		return
 	}
+	if a.collectOnly {
+		// Before checking there are no types to find predicates by, so any
+		// argument may be guarded.
+		for _, arg := range call.Arguments {
+			if id, ok := arg.(*parser.Identifier); ok && a.candidates[id.Value] {
+				whenTrue[id.Value] = true
+			}
+		}
+		return
+	}
 	ft, ok := call.Function.GetComputedType().(*types.ObjectType)
 	if !ok {
 		return

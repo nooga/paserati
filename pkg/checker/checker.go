@@ -390,6 +390,10 @@ type Checker struct {
 
 	// Names of the program's top-level var and function declarations.
 	programHoistedNames map[string]bool
+	// unassignedReads holds the reads definite assignment may report as
+	// used before being assigned (collectUnassignedReads).
+	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
+	daCollectOnly   bool
 	// hoistedSignatures holds the exported ambient function signatures
 	// Pass 2 already defined.
 	hoistedSignatures map[*parser.FunctionSignature]bool
@@ -1336,6 +1340,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 		}
 	}
+
+	c.collectUnassignedReads(program)
 
 	// --- Pass 0: Pre-register all interface names as forward references ---
 	// This allows mutually recursive interfaces like:
@@ -3364,6 +3370,11 @@ func (c *Checker) visit(node parser.Node) {
 			// priority over the declared type from a straight-line read.
 			if narrowType, ok := c.flowNarrowOverlay[node.Value]; ok {
 				typ = narrowType
+			}
+			// A read that may see the variable unassigned has its declared
+			// type, not a narrowed one.
+			if declared, ok := c.readDeclaredTypeIfUnassigned(node); ok {
+				typ = declared
 			}
 			typ = c.resolveDeferredTypeofIndex(typ, true)
 

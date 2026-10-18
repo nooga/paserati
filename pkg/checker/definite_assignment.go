@@ -47,11 +47,41 @@ func (c *Checker) checkDefiniteAssignment(program *parser.Program) {
 	c.analyzeDefiniteAssignmentScope(program.Statements)
 }
 
+// collectUnassignedReads runs the definite assignment walk before checking
+// and records the reads it may report, with their declarations. tsc types
+// such a read with the declared type rather than the narrowed one (the
+// TS2454 path of checkIdentifier), so checking needs them up front. Without
+// types, every annotated declaration is a candidate and every guard call
+// may narrow; readDeclaredTypeIfUnassigned finishes the eligibility test.
+func (c *Checker) collectUnassignedReads(program *parser.Program) {
+	if c.skipDefiniteAssignment || program == nil {
+		return
+	}
+	c.unassignedReads = map[*parser.Identifier]*parser.VarDeclarator{}
+	c.daCollectOnly = true
+	c.analyzeDefiniteAssignmentScope(program.Statements)
+	c.daCollectOnly = false
+}
+
+// readDeclaredTypeIfUnassigned returns the declared type of a read that may
+// see its variable unassigned, when that type does not admit undefined.
+func (c *Checker) readDeclaredTypeIfUnassigned(id *parser.Identifier) (types.Type, bool) {
+	d := c.unassignedReads[id]
+	if d == nil {
+		return nil, false
+	}
+	t := declaredVarType(d)
+	if t == nil || d.TypeAnnotation == nil || strictInitTypePermits(t) {
+		return nil, false
+	}
+	return t, true
+}
+
 // analyzeDefiniteAssignmentScope analyzes one function-level scope: the
 // statement list plus every nested function body it contains, each as its own
 // independent scope.
 func (c *Checker) analyzeDefiniteAssignmentScope(stmts []parser.Statement) {
-	a := &definiteAssignment{c: c, candidates: map[string]bool{}}
+	a := &definiteAssignment{c: c, candidates: map[string]bool{}, collectOnly: c.daCollectOnly}
 
 	for _, s := range stmts {
 		a.collectCandidates(s)
@@ -82,6 +112,10 @@ type definiteAssignment struct {
 	loopHeadVars map[*parser.VarDeclarator]bool
 	// unreachable is non-zero while walking code a constant condition skips.
 	unreachable int
+	// collectOnly records reads in c.unassignedReads instead of reporting.
+	collectOnly bool
+	// decls maps each candidate name to its declarator.
+	decls map[string]*parser.VarDeclarator
 }
 
 // --- Candidate collection -------------------------------------------------
@@ -136,6 +170,16 @@ func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarato
 		// that ambient declaration, which is already initialized.
 		if a.c.preexistingGlobals[name] {
 			a.candidates[name] = false
+			continue
+		}
+		if a.decls == nil {
+			a.decls = map[string]*parser.VarDeclarator{}
+		}
+		a.decls[name] = d
+		if a.collectOnly {
+			// Types are not known yet; only annotated declarations can
+			// read as their declared type.
+			a.candidates[name] = !ambient && d.TypeAnnotation != nil && !d.DefiniteAssignment && (d.Value == nil || isVar)
 			continue
 		}
 		if a.loopHeadVars[d] && d.TypeAnnotation == nil {
@@ -596,6 +640,12 @@ func (a *definiteAssignment) reportIfUnassigned(id *parser.Identifier, assigned 
 		return
 	}
 	a.reported[id] = true
+	if a.collectOnly {
+		if d := a.decls[id.Value]; d != nil {
+			a.c.unassignedReads[id] = d
+		}
+		return
+	}
 	a.c.addErrorWithCode(id, errors.TS2454, fmt.Sprintf("Variable '%s' is used before being assigned.", id.Value))
 }
 
