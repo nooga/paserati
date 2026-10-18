@@ -90,6 +90,10 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 			return
 		}
 		pas.SetIsModule(programIsModule(prog))
+		if prog.UsesImportMeta {
+			// import.meta compiles only in module code.
+			pas.EnableModuleMode("")
+		}
 
 		// tsc type-checks files with syntax errors and reports both kinds, so we
 		// run the checker on the (error-recovered) AST as well. If the checker
@@ -150,6 +154,9 @@ func dedupeDiags(ds []Diag) []Diag {
 }
 
 func programIsModule(prog *parser.Program) bool {
+	if prog.UsesImportMeta {
+		return true
+	}
 	for _, s := range prog.Statements {
 		switch s.(type) {
 		case *parser.ImportDeclaration, *parser.ExportNamedDeclaration,

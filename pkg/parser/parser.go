@@ -64,6 +64,8 @@ type Parser struct {
 	target int
 	// experimentalDecorators is tsc's --experimentalDecorators.
 	experimentalDecorators bool
+	// usesImportMeta: see Program.UsesImportMeta.
+	usesImportMeta bool
 
 	// JS redeclaration early errors, re-labelled by finishBinding.
 	redeclarationErrors []*errors.SyntaxError
@@ -911,6 +913,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	}
 	p.safeFinishBinding(program)
 	program.UnresolvedPrivateNames = p.unresolvedPrivateNames
+	program.UsesImportMeta = p.usesImportMeta
 
 	return program, p.dropSuppressedGrammarErrors()
 }
@@ -3112,6 +3115,7 @@ func (p *Parser) parseImportMetaExpression() Expression {
 			if p.disallowModuleSyntax {
 				p.addError(importToken, "SyntaxError: 'import.meta' is only valid in module code")
 			}
+			p.usesImportMeta = true
 			return &ImportMetaExpression{Token: importToken}
 		} else if p.peekTokenIs(lexer.IDENT) && (p.peekToken.Literal == "defer" || p.peekToken.Literal == "source") {
 			importPhase := p.peekToken.Literal

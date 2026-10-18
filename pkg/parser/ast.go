@@ -67,6 +67,9 @@ type Program struct {
 	// reference is inside a class body. Only set by parsers in
 	// tscDiagnostics mode, which leave these to the checker.
 	UnresolvedPrivateNames map[*lexer.Token]bool
+	// UsesImportMeta is set when the program reads import.meta, which makes
+	// a file a module for tsc's module detection.
+	UsesImportMeta bool
 }
 
 func (p *Program) TokenLiteral() string {
