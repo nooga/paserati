@@ -36,7 +36,15 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	}
 
 	// 1. Resolve parameters and signature
-	preliminarySignature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv := c.resolveFunctionParameters(ctx)
+	// FIXME: a function expression gets contextual parameter types but no
+	// contextual return type, so a generator expression passed where a
+	// Generator<0, 0, 1> is expected widens `return 0` (tsc keeps 0;
+	// generatorYieldContextualType).
+	if ctxTypes, ok := c.functionLiteralContext[node]; ok {
+		ctx.ContextualParameterTypes = ctxTypes
+		delete(c.functionLiteralContext, node)
+	}
+	preliminarySignature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv := c.resolveFunctionParametersWithContext(ctx)
 
 	// 2. Setup function environment
 	originalEnv := c.setupFunctionEnvironment(ctx, paramTypes, paramNames, restParameterType, restParameterName, preliminarySignature, typeParamEnv)
@@ -45,6 +53,11 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	// For generator functions, we need to check the body against the inner return type,
 	// not the full Generator<T, TReturn, TNext> type
 	expectedReturnTypeForBody := preliminarySignature.ReturnType
+	if node.ReturnTypeAnnotation == nil {
+		// No annotation: the return type is inferred from the body (the
+		// contextual resolution leaves an any placeholder).
+		expectedReturnTypeForBody = nil
+	}
 	var innerReturnTypeFromAnnotation types.Type
 
 	if node.IsGenerator {
@@ -335,4 +348,58 @@ func (c *Checker) checkGeneratorAnnotation(annotation parser.Expression, declare
 	if !c.isAssignableWithExpansion(gen, declared) {
 		c.addErrorWithCode(annotation, errors.TS2322, fmt.Sprintf("Type 'Generator<any, any, unknown>' is not assignable to type '%s'.", declared.String()))
 	}
+}
+
+// contextualParameterTypes is the contextual type of each parameter of a
+// function expression with the given parameters, from the expected type's
+// call signature: nil when the expected type gives none (not callable,
+// overloads that disagree on their parameters, an annotated parameter, or
+// more parameters than the signature can take).
+func contextualParameterTypes(expected types.Type, params []*parser.Parameter, rest *parser.RestParameter) []types.Type {
+	obj, ok := expected.(*types.ObjectType)
+	if !ok || !obj.IsCallable() || len(obj.CallSigs()) == 0 {
+		return nil
+	}
+	sig := obj.CallSigs()[0]
+	// With several overloads that disagree on their parameters there is
+	// no single contextual signature (getContextualSignature), so the
+	// parameters stay untyped.
+	for _, other := range obj.CallSigs()[1:] {
+		if !sameParameterTypes(sig, other) {
+			return nil
+		}
+	}
+	n := 0
+	for _, p := range params {
+		if p == nil {
+			continue
+		}
+		if p.TypeAnnotation != nil {
+			return nil
+		}
+		if !p.IsThis {
+			n++
+		}
+	}
+	if rest != nil {
+		return nil
+	}
+	var restElem types.Type
+	if sig.RestParameterType != nil {
+		if arr, ok := sig.RestParameterType.(*types.ArrayType); ok {
+			restElem = arr.ElementType
+		}
+	}
+	if n > len(sig.ParameterTypes) && restElem == nil {
+		return nil
+	}
+	out := make([]types.Type, 0, n)
+	for i := 0; i < n; i++ {
+		if i < len(sig.ParameterTypes) {
+			out = append(out, sig.ParameterTypes[i])
+		} else {
+			out = append(out, restElem)
+		}
+	}
+	return out
 }

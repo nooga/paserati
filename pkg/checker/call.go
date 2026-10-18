@@ -1477,8 +1477,13 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		additionalConstraints := c.collectTypeParameterConstraints(partialSig, argTypes)
 		allConstraints := append(constraints, additionalConstraints...)
 
-		// Solve all constraints together
+		// Solve all constraints together. Inferences from the function
+		// arguments (context sensitive, checked with the phase 1 solution as
+		// context) do not override what the other arguments fixed.
 		finalSolution := c.solveTypeParameterConstraints(allConstraints)
+		for tp, t := range partialSolution {
+			finalSolution[tp] = t
+		}
 		if checkerDebug {
 			debugPrintf("// [Checker Inference] Phase 2: Final solution with %d type parameter bindings\n", len(finalSolution))
 		}

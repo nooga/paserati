@@ -337,6 +337,9 @@ type Checker struct {
 	// generator function whose body is being checked (Generator<Y, R, N>),
 	// nil outside one or without an annotation.
 	currentGeneratorAnnotation types.Type
+	// functionLiteralContext holds the contextual parameter types a function
+	// expression is checked with (see visitWithContext).
+	functionLiteralContext map[*parser.FunctionLiteral][]types.Type
 	// List of types found in return statements within the current function (used for inference).
 	currentInferredReturnTypes []types.Type
 	// List of types found in yield expressions within the current generator function (used for inference).
@@ -4906,6 +4909,16 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		c.checkObjectLiteralWithContext(node, context)
 	case *parser.ArrowFunctionLiteral:
 		c.checkArrowFunctionLiteralWithContext(node, context)
+	case *parser.FunctionLiteral:
+		// A function expression's unannotated parameters take the contextual
+		// signature's parameter types.
+		if ctxTypes := contextualParameterTypes(context.ExpectedType, node.Parameters, node.RestParameter); len(ctxTypes) > 0 && len(node.TypeParameters) == 0 {
+			if c.functionLiteralContext == nil {
+				c.functionLiteralContext = make(map[*parser.FunctionLiteral][]types.Type)
+			}
+			c.functionLiteralContext[node] = ctxTypes
+		}
+		c.visit(node)
 	case *parser.TypeAssertionExpression:
 		c.visit(node)
 		// An `as const` array literal contextually typed by a mutable array
@@ -5065,28 +5078,10 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 	if objType, ok := context.ExpectedType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSigs()) > 0 {
 		expectedSig := objType.CallSigs()[0] // Use the first signature for contextual typing
 
-		// Check if parameter counts are compatible
-		nodeParamCount := len(node.Parameters)
-		expectedParamCount := len(expectedSig.ParameterTypes)
-
-		// Only apply contextual typing if the parameter counts match and none of the arrow function
-		// parameters have explicit type annotations
-		canApplyContextualTyping := (nodeParamCount == expectedParamCount)
-		for _, param := range node.Parameters {
-			if param.TypeAnnotation != nil {
-				canApplyContextualTyping = false
-				break
-			}
-		}
-		// With several overloads that disagree on their parameters there is
-		// no single contextual signature (getContextualSignature), so the
-		// parameters stay untyped.
-		for _, other := range objType.CallSigs()[1:] {
-			if !sameParameterTypes(expectedSig, other) {
-				canApplyContextualTyping = false
-				break
-			}
-		}
+		// The parameters take the contextual signature's types (fewer
+		// parameters than it has are fine, as in tsc).
+		ctxParamTypes := contextualParameterTypes(objType, node.Parameters, node.RestParameter)
+		canApplyContextualTyping := ctxParamTypes != nil
 
 		if canApplyContextualTyping {
 			if checkerDebug {
@@ -5133,8 +5128,8 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				IsGenerator:              false, // Arrow functions cannot be generators
 				AllowSelfReference:       false,
 				AllowOverloadCompletion:  false,
-				ContextualParameterTypes: expectedSig.ParameterTypes, // Pass contextual parameter types
-				ContextualReturnType:     contextualReturnType,       // Only pass non-generic return types
+				ContextualParameterTypes: ctxParamTypes,        // Pass contextual parameter types
+				ContextualReturnType:     contextualReturnType, // Only pass non-generic return types
 			}
 
 			// 1. Resolve parameters with contextual types
