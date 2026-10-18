@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -126,6 +127,9 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 				phase = "compile"
 			}
 			resp.Actual = append(resp.Actual, toDiag(e, phase))
+		}
+		if !st.HasFilename {
+			resp.Actual = append(resp.Actual, missingReferenceDiags(st.Source)...)
 		}
 		resp.Actual = dedupeDiags(resp.Actual)
 	}()
@@ -273,4 +277,21 @@ func legacyModuleFormat(o Options) string {
 		return "System"
 	}
 	return ""
+}
+
+var referencePathRe = regexp.MustCompile(`^(\s*///\s*<reference\s+path\s*=\s*["'])([^"']*)["']`)
+
+// missingReferenceDiags reports TS6053 for each `/// <reference path>` of a
+// single-file test: its only file is the test itself, so a referenced file
+// exists only among the harness's /.lib files.
+func missingReferenceDiags(source string) []Diag {
+	var out []Diag
+	for i, line := range strings.Split(source, "\n") {
+		m := referencePathRe.FindStringSubmatch(line)
+		if m == nil || strings.HasPrefix(m[2], "/.lib/") {
+			continue
+		}
+		out = append(out, Diag{Line: i + 1, Col: len(m[1]), Code: "TS6053", Msg: fmt.Sprintf("File '%s' not found.", m[2]), Phase: "check"})
+	}
+	return out
 }
