@@ -703,6 +703,30 @@ func (c *Checker) target() int {
 	return c.targetYear
 }
 
+// reportMissingImplementation reports an overload signature left without an
+// implementation: TS2389 when a function implementation with another name
+// immediately follows it (tsc's checkFunctionOrConstructorSymbol), else
+// TS2391.
+func (c *Checker) reportMissingImplementation(stmts []parser.Statement, sig *parser.FunctionSignature) {
+	if sig == nil || sig.Name == nil {
+		return
+	}
+	for i, st := range stmts {
+		es, ok := st.(*parser.ExpressionStatement)
+		if !ok || es.Expression != sig || i+1 >= len(stmts) {
+			continue
+		}
+		if next, ok := stmts[i+1].(*parser.ExpressionStatement); ok {
+			if fl, ok := next.Expression.(*parser.FunctionLiteral); ok && fl.Name != nil && fl.Body != nil && fl.Name.Value != sig.Name.Value {
+				c.addErrorWithCode(fl.Name, errors.TS2389, fmt.Sprintf("Function implementation name must be '%s'.", sig.Name.Value))
+				return
+			}
+		}
+		break
+	}
+	c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
+}
+
 // declaredInInnermostFunction reports whether name is declared in the scopes
 // of the nearest enclosing function, up to and including its parameters.
 func (c *Checker) declaredInInnermostFunction(name string) bool {
@@ -2112,9 +2136,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// Emit TS2391 for any function overload signatures that never got an implementation
 	for _, sigs := range globalEnv.GetAllPendingOverloads() {
 		for _, sig := range sigs {
-			if sig.Name != nil {
-				c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
-			}
+			c.reportMissingImplementation(program.Statements, sig)
 		}
 	}
 
@@ -3033,9 +3055,7 @@ func (c *Checker) visit(node parser.Node) {
 		// Check for block-scoped function overload signatures without implementations (TS2391)
 		for _, sigs := range c.env.GetAllPendingOverloads() {
 			for _, sig := range sigs {
-				if sig.Name != nil {
-					c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
-				}
+				c.reportMissingImplementation(node.Statements, sig)
 			}
 		}
 		c.blockDepth--

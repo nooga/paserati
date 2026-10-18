@@ -86,6 +86,19 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 	// reports it at the operand and then treats the operand as
 	// non-nullable, so none of the operator-level diagnostics below fire.
 	if c.checkNullishOperandsForOperator(node, leftType, rightType) {
+		switch node.Operator {
+		case "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>":
+			// The nullish side counts as never, so the other operand is
+			// still checked (`null ** true` is TS18050 and TS2363).
+			l, r := leftType, rightType
+			if _, ok := nullishOperandName(node.Left); ok || l == nil {
+				l = types.Never
+			}
+			if _, ok := nullishOperandName(node.Right); ok || r == nil {
+				r = types.Never
+			}
+			c.checkArithmeticOperator(infixOperands(node), l, r)
+		}
 		node.SetComputedType(nullishOperatorResultType(node.Operator))
 		return
 	}

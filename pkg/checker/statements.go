@@ -1488,9 +1488,9 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 						// Check if the variable exists and is assignable
 						varType, _, exists := c.env.Resolve(ident.Value)
 						if !exists {
-							c.addError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
+							c.addCannotFindNameError(ident, c.env, ident.Value)
 						} else if !c.rel.IsAssignable(elementType, varType) {
-							c.addError(ident, fmt.Sprintf("cannot assign element type '%s' to variable type '%s'", elementType.String(), varType.String()))
+							c.addErrorWithCode(ident, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", elementType.String(), varType.String()))
 						}
 						ident.SetComputedType(elementType)
 					}

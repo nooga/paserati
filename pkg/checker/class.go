@@ -133,9 +133,97 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 			continue
 		}
 		if !implNames[name] {
+			if next := nextClassMethodAfter(body, sig); next != nil && next.Kind == "method" && next.Value != nil && next.Value.Body != nil {
+				if nextName, ok := getMethodKeyString(next.Key); ok && nextName != name {
+					c.addErrorWithCode(next.Key, errors.TS2389, fmt.Sprintf("Function implementation name must be '%s'.", name))
+					continue
+				}
+			}
 			c.addErrorWithCode(sig.Key, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
 		}
 	}
+}
+
+// isNonBindableDynamicName reports whether a member name is computed from an
+// expression that is neither a literal nor a well-known symbol (Symbol.x,
+// whose unique symbol type makes the name late-bindable).
+func (c *Checker) isNonBindableDynamicName(key parser.Node) bool {
+	cpn, ok := key.(*parser.ComputedPropertyName)
+	if !ok {
+		return false
+	}
+	switch e := cpn.Expr.(type) {
+	case *parser.StringLiteral, *parser.NumberLiteral, *parser.TemplateLiteral:
+		return false
+	case *parser.PrefixExpression:
+		if _, isNum := e.Right.(*parser.NumberLiteral); isNum && (e.Operator == "-" || e.Operator == "+") {
+			return false
+		}
+	case *parser.MemberExpression:
+		if obj, ok := e.Object.(*parser.Identifier); ok && obj.Value == "Symbol" {
+			return false
+		}
+	}
+	// A symbol-typed key (`const k = Symbol()`) is a unique symbol in tsc.
+	if cpn.Expr.GetComputedType() == nil {
+		c.visit(cpn.Expr)
+	}
+	if t := cpn.Expr.GetComputedType(); t != nil && strings.Contains(t.String(), "symbol") {
+		return false
+	}
+	// Class members are typed before top-level consts are, so look for the
+	// declaration itself.
+	if id, ok := cpn.Expr.(*parser.Identifier); ok && c.program != nil && constDeclaredAsSymbol(c.program.Statements, id.Value) {
+		return false
+	}
+	return true
+}
+
+// constDeclaredAsSymbol reports whether stmts declare `const name = Symbol(...)`.
+func constDeclaredAsSymbol(stmts []parser.Statement, name string) bool {
+	for _, st := range stmts {
+		cs, ok := st.(*parser.ConstStatement)
+		if !ok {
+			continue
+		}
+		for _, d := range cs.Declarations {
+			if d == nil || d.Name == nil || d.Name.Value != name {
+				continue
+			}
+			if call, ok := d.Value.(*parser.CallExpression); ok {
+				if fn, ok := call.Function.(*parser.Identifier); ok && fn.Value == "Symbol" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// nextClassMethodAfter returns the method that immediately follows sig in the
+// class body, or nil when the next member is something else.
+func nextClassMethodAfter(body *parser.ClassBody, sig *parser.MethodSignature) *parser.MethodDefinition {
+	at := parser.GetTokenFromNode(sig).StartPos
+	best, bestPos := parser.Node(nil), -1
+	consider := func(n parser.Node) {
+		if isNilNode(n) {
+			return
+		}
+		if p := parser.GetTokenFromNode(n).StartPos; p > at && (bestPos < 0 || p < bestPos) {
+			best, bestPos = n, p
+		}
+	}
+	for _, m := range body.Methods {
+		consider(m)
+	}
+	for _, p := range body.Properties {
+		consider(p)
+	}
+	for _, s := range body.MethodSigs {
+		consider(s)
+	}
+	m, _ := best.(*parser.MethodDefinition)
+	return m
 }
 
 // extractPropertyName extracts the property name from a class member key
@@ -1288,6 +1376,10 @@ func (c *Checker) validateOverrideProperty(prop *parser.PropertyDefinition, clas
 }
 
 func (c *Checker) validateClassMemberOverride(node parser.Node, memberName string, isStatic, hasOverride, currentIsAbstract bool, className string, instanceType *types.ObjectType) {
+	if hasOverride && c.isNonBindableDynamicName(node) {
+		c.addErrorWithCode(node, errors.TS4127, "This member cannot have an 'override' modifier because its name is dynamic.")
+		return
+	}
 	if memberName == "" || instanceType == nil || instanceType.ClassMeta == nil {
 		return
 	}

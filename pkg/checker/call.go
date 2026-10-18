@@ -10,6 +10,18 @@ import (
 	"github.com/nooga/paserati/pkg/vm"
 )
 
+// iifeParameters returns the parameters of a function or arrow literal that
+// is called directly (an IIFE), or nil.
+func iifeParameters(callee parser.Expression) []*parser.Parameter {
+	switch fn := callee.(type) {
+	case *parser.FunctionLiteral:
+		return fn.Parameters
+	case *parser.ArrowFunctionLiteral:
+		return fn.Parameters
+	}
+	return nil
+}
+
 // formatArityError renders a TypeScript-style TS2554 "Expected N arguments,
 // but got M." message. When min < max (some trailing parameters are
 // optional), the expected count is rendered as a "min-max" range, matching
@@ -893,6 +905,18 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			}
 		}
 
+		if params := iifeParameters(node.Function); params != nil && len(params) == expectedArgCount {
+			// An immediately invoked function's untyped parameters past the
+			// supplied arguments are optional (tsc's isOptionalParameter).
+			required := 0
+			for i, p := range params {
+				optional := i < len(funcSignature.OptionalParams) && funcSignature.OptionalParams[i]
+				if !optional && !(p.TypeAnnotation == nil && i >= actualArgCount) {
+					required = i + 1
+				}
+			}
+			minRequiredArgs = required
+		}
 		if !skipArityCheck && actualArgCount < minRequiredArgs {
 			c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 			// Continue checking assignable args anyway? Let's stop if arity wrong.
