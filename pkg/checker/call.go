@@ -2604,7 +2604,157 @@ func (c *Checker) markContextuallyTypedFunction(node parser.Node, expected types
 	if !c.noImplicitAny || expected == nil || expected == types.Any || expected == types.Unknown {
 		return
 	}
-	c.markFunctionsUnder(node, 0)
+	c.markFunctionsAgainst(node, expected, 0)
+}
+
+// markFunctionsAgainst marks the functions under node that expected gives a
+// contextual signature, following object literal members and array elements
+// into the matching parts of expected. A function whose contextual type
+// cannot be callable (unknown, a primitive, a non-callable object, a member
+// expected does not have) keeps its implicit any, as in tsc. A nil expected
+// means the type could not be taken apart here, and everything under node is
+// marked.
+func (c *Checker) markFunctionsAgainst(node parser.Node, expected types.Type, depth int) {
+	if node == nil || depth > 6 {
+		return
+	}
+	if expected == nil {
+		c.markFunctionsUnder(node, depth)
+		return
+	}
+	switch n := node.(type) {
+	case *parser.ArrowFunctionLiteral, *parser.FunctionLiteral, *parser.ShorthandMethod, *parser.MethodDefinition:
+		if mayGiveSignature(expected) {
+			c.markFunctionsUnder(n, depth)
+		}
+	case *parser.ObjectLiteral:
+		for _, prop := range n.Properties {
+			if t, known := c.contextualMemberType(expected, prop.Key); !known {
+				c.markFunctionsUnder(prop.Value, depth+1)
+			} else if t != nil {
+				c.markFunctionsAgainst(prop.Value, t, depth+1)
+			}
+		}
+	case *parser.ArrayLiteral:
+		var elem types.Type
+		if arr, ok := expected.(*types.ArrayType); ok {
+			elem = arr.ElementType
+		}
+		for _, e := range n.Elements {
+			c.markFunctionsAgainst(e, elem, depth+1)
+		}
+	case *parser.TernaryExpression:
+		c.markFunctionsAgainst(n.Consequence, expected, depth+1)
+		c.markFunctionsAgainst(n.Alternative, expected, depth+1)
+	case *parser.InfixExpression:
+		switch n.Operator {
+		case "??", "||":
+			c.markFunctionsAgainst(n.Left, expected, depth+1)
+			c.markFunctionsAgainst(n.Right, expected, depth+1)
+		case "&&", ",":
+			c.markFunctionsAgainst(n.Right, expected, depth+1)
+		}
+	default:
+		c.markFunctionsUnder(node, depth)
+	}
+}
+
+// mayGiveSignature reports whether a contextual type may supply a function
+// with a signature; only types that plainly cannot are ruled out.
+func mayGiveSignature(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.Primitive:
+		return tt == types.Any
+	case *types.LiteralType:
+		return false
+	case *types.ObjectType:
+		return tt.IsCallable()
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if mayGiveSignature(m) {
+				return true
+			}
+		}
+		return false
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if mayGiveSignature(m) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// contextualMemberType is the contextual type expected gives the object
+// literal member with the given key: a property, else an index signature's
+// value. known is false when expected cannot be taken apart here; a nil type
+// with known true means the member has no contextual type.
+func (c *Checker) contextualMemberType(expected types.Type, key parser.Expression) (t types.Type, known bool) {
+	name, numeric := "", false
+	switch k := key.(type) {
+	case *parser.Identifier:
+		name = k.Value
+	case *parser.StringLiteral:
+		name = k.Value
+	case *parser.NumberLiteral:
+		name, numeric = fmt.Sprintf("%v", k.Value), true
+	default:
+		return nil, false
+	}
+	if mt, ok := expected.(*types.MappedType); ok {
+		expected = c.expandMappedType(mt)
+	}
+	switch e := expected.(type) {
+	case *types.Primitive:
+		if e == types.Any {
+			return nil, false
+		}
+		return nil, true
+	case *types.ObjectType:
+		if pt, ok := e.EffectiveProperty(name); ok {
+			return pt, true
+		}
+		for _, is := range e.IndexSignatures {
+			if is == nil || is.IsMapped {
+				return nil, false
+			}
+			if is.KeyType == types.String || numeric && is.KeyType == types.Number {
+				return is.ValueType, true
+			}
+		}
+		return nil, true
+	case *types.IntersectionType, *types.UnionType:
+		var members []types.Type
+		it, isIntersection := e.(*types.IntersectionType)
+		if isIntersection {
+			members = it.Types
+		} else {
+			members = e.(*types.UnionType).Types
+		}
+		var found []types.Type
+		for _, m := range members {
+			mt, k := c.contextualMemberType(m, key)
+			if !k {
+				return nil, false
+			}
+			if mt != nil && (mt != types.Unknown || !isIntersection) {
+				found = append(found, mt)
+			}
+		}
+		switch len(found) {
+		case 0:
+			return nil, true
+		case 1:
+			return found[0], true
+		}
+		if isIntersection {
+			return &types.IntersectionType{Types: found}, true
+		}
+		return types.NewUnionType(found...), true
+	}
+	return nil, false
 }
 
 func (c *Checker) markFunctionsUnder(node parser.Node, depth int) {
@@ -2634,13 +2784,15 @@ func (c *Checker) markFunctionsUnder(node parser.Node, depth int) {
 		c.markFunctionsUnder(n.Consequence, depth+1)
 		c.markFunctionsUnder(n.Alternative, depth+1)
 	case *parser.InfixExpression:
+		// tsc's getContextualTypeForBinaryOperand: `||` and `??` pass the
+		// context to both operands, `&&` and `,` only to the right one.
 		switch n.Operator {
-		case "??", "||", "&&", ",":
+		case "??", "||":
 			c.markFunctionsUnder(n.Left, depth+1)
 			c.markFunctionsUnder(n.Right, depth+1)
+		case "&&", ",":
+			c.markFunctionsUnder(n.Right, depth+1)
 		}
-	case *parser.SatisfiesExpression:
-		c.markFunctionsUnder(n.Expression, depth+1)
 	case *parser.TypeAssertionExpression:
 		c.markFunctionsUnder(n.Expression, depth+1)
 	}
