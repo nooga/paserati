@@ -420,6 +420,9 @@ type Checker struct {
 	// uncheckedReturns: the current function's returns are contextually
 	// typed but not checked (FunctionCheckContext.InferUnderContext).
 	uncheckedReturns bool
+	// funcLitVariables maps a top-level function expression initializer to
+	// the variable it initializes.
+	funcLitVariables map[*parser.FunctionLiteral]string
 	// functionLiteralReturnContext is a function expression's contextual
 	// return type.
 	functionLiteralReturnContext map[*parser.FunctionLiteral]types.Type
@@ -1289,6 +1292,10 @@ func (c *Checker) hoistVarLikeDeclarationsPass2(declarations []*parser.VarDeclar
 			}
 			funcLitInitializer.SetComputedType(initialFuncObjectType) // Set initial type on the initializer node
 			functionsToVisitBody = append(functionsToVisitBody, funcLitInitializer)
+			if c.funcLitVariables == nil {
+				c.funcLitVariables = map[*parser.FunctionLiteral]string{}
+			}
+			c.funcLitVariables[funcLitInitializer] = varName.Value
 			nodesProcessedPass2[funcLitInitializer] = true // Mark initializer node if it's a func lit
 			debugPrintf("// [Checker Pass 2] Added initializer func for '%s' to visit list\n", varName.Value)
 		}
@@ -2271,15 +2278,13 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// *** Update Environment & Node ***
 		// Update the function's type in the *outer* (global) environment
+		// A function expression initializing a variable updates the
+		// variable; a hoisted declaration updates its own name.
 		targetName := ""
-		if funcLit.Name != nil { // Hoisted function
+		if varName, isInit := c.funcLitVariables[funcLit]; isInit {
+			targetName = varName
+		} else if funcLit.Name != nil {
 			targetName = funcLit.Name.Value
-		} else { // Find the variable it was assigned to
-			// This requires linking back from funcLit node to the Let/Const stmt, which is tricky.
-			// Alternative: Update based on the node pointer? Need a map[Node]Name...
-			// For now, let's only update hoisted functions explicitly by name.
-			// Assigned functions will rely on the final check pass.
-			// TODO: Fix this update logic for assigned functions.
 		}
 
 		if targetName != "" {
