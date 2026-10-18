@@ -466,6 +466,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	instanceType := c.createInstanceTypeInPlace(node.Name.Value, node.Body, heritageRef(node.SuperClass, node.SuperTypeArgs), node.Implements, placeholderType)
 	placeholderType.Pending = false
 	c.deferRelationCheck(func() { c.checkClassHeritageAccessibility(node, instanceType) })
+	c.deferRelationCheck(func() { c.checkClassStaticHeritageAccessibility(node, instanceType) })
 
 	if checkerDebug {
 		debugPrintf("// [Checker Class] Finalized class type alias '%s': %s\n",

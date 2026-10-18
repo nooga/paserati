@@ -245,6 +245,75 @@ func (c *Checker) checkClassHeritageAccessibility(node *parser.ClassDeclaration,
 	}
 }
 
+// checkClassStaticHeritageAccessibility is TS2415's static side, TS2417:
+// a static member less accessible than the base class static member it
+// shadows, or a redeclared private static member.
+func (c *Checker) checkClassStaticHeritageAccessibility(node *parser.ClassDeclaration, instanceType *types.ObjectType) {
+	if node == nil || node.Name == nil || node.Body == nil || instanceType == nil || len(instanceType.Bases()) == 0 {
+		return
+	}
+	baseObj, ok := c.resolveStructural(instanceType.Bases()[0]).(*types.ObjectType)
+	if !ok || baseObj.ClassMeta == nil {
+		return
+	}
+	baseName := baseObj.ClassMeta.ClassName
+	if baseName == "" {
+		return
+	}
+	baseIdent, isIdent := node.SuperClass.(*parser.Identifier)
+	if !isIdent {
+		return
+	}
+	baseCtorType, _, found := c.env.Resolve(baseIdent.Value)
+	if !found {
+		return
+	}
+	baseCtor, isObj := baseCtorType.(*types.ObjectType)
+	if !isObj {
+		return
+	}
+	baseStaticLevel := func(name string) (types.AccessModifier, bool) {
+		if info := baseCtor.GetMemberAccessInfo(name); info != nil {
+			return info.AccessLevel, true
+		}
+		return types.AccessPublic, false
+	}
+	incompatible := func(name string, private, protected bool) bool {
+		if len(name) > 0 && name[0] == '#' {
+			return false
+		}
+		baseLevel, found := baseStaticLevel(name)
+		if !found {
+			return false
+		}
+		switch {
+		case baseLevel == types.AccessPrivate:
+			return true
+		case baseLevel == types.AccessProtected && private:
+			return true
+		case baseLevel == types.AccessPublic && (private || protected):
+			return true
+		}
+		return false
+	}
+	report := func() {
+		c.addErrorAtStart(node.Name, errors.TS2417, fmt.Sprintf(
+			"Class static side 'typeof %s' incorrectly extends base class static side 'typeof %s'.", node.Name.Value, baseName))
+	}
+	for _, prop := range node.Body.Properties {
+		if id, ok := prop.Key.(*parser.Identifier); ok && prop.IsStatic && incompatible(id.Value, prop.IsPrivate, prop.IsProtected) {
+			report()
+			return
+		}
+	}
+	for _, method := range node.Body.Methods {
+		if id, ok := method.Key.(*parser.Identifier); ok && method.IsStatic && incompatible(id.Value, method.IsPrivate, method.IsProtected) {
+			report()
+			return
+		}
+	}
+}
+
 // classMemberKind is how a class declares an instance member: as a property
 // or as an accessor (get/set or `accessor`), and whether it is abstract.
 type classMemberKind struct {

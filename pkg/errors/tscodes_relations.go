@@ -7,6 +7,7 @@ const (
 	TS2353 = "TS2353" // Object literal may only specify known properties, and 'X' does not exist in type 'Y'
 	TS2403 = "TS2403" // Subsequent variable declarations must have the same type
 	TS2415 = "TS2415" // Class 'X' incorrectly extends base class 'Y'
+	TS2417 = "TS2417" // static side incorrectly extends base static side
 	TS2416 = "TS2416" // Property 'X' in type 'A' is not assignable to the same property in base type 'B'
 	TS2430 = "TS2430" // Interface 'X' incorrectly extends interface 'Y'
 	TS2559 = "TS2559" // Type 'X' has no properties in common with type 'Y'
