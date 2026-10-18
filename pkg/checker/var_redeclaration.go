@@ -308,9 +308,10 @@ func (c *Checker) checkTopLevelVarLikeDeclarators(declarations []*parser.VarDecl
 			continue
 		}
 		c.settlePendingInit(d.Name.Value)
-		// A function literal initializer was fully handled by Pass 2/3.
+		// An unannotated function literal initializer was fully handled by
+		// Pass 2/3.
 		value := d.Value
-		if _, isFn := value.(*parser.FunctionLiteral); isFn {
+		if _, isFn := value.(*parser.FunctionLiteral); isFn && d.TypeAnnotation == nil {
 			value = nil
 		}
 		if isVar {

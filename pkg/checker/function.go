@@ -60,6 +60,15 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	}
 	var innerReturnTypeFromAnnotation types.Type
 
+	// Returns are contextually typed by a contextual return type, but not
+	// checked against it (see InferUnderContext).
+	if rt, ok := c.functionLiteralReturnContext[node]; ok {
+		delete(c.functionLiteralReturnContext, node)
+		if node.ReturnTypeAnnotation == nil && !node.IsGenerator && !node.IsAsync {
+			expectedReturnTypeForBody = rt
+			ctx.InferUnderContext = true
+		}
+	}
 	if node.IsGenerator {
 		// For generators, we want to check the body against the inner return type
 		if preliminarySignature.ReturnType != nil {

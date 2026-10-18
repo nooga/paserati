@@ -420,6 +420,9 @@ type Checker struct {
 	// uncheckedReturns: the current function's returns are contextually
 	// typed but not checked (FunctionCheckContext.InferUnderContext).
 	uncheckedReturns bool
+	// functionLiteralReturnContext is a function expression's contextual
+	// return type.
+	functionLiteralReturnContext map[*parser.FunctionLiteral]types.Type
 	// presetCallee is a `new` expression's constructor, checked as the
 	// callee of a call whose type is presetCalleeType.
 	presetCallee     parser.Expression
@@ -1262,7 +1265,9 @@ func (c *Checker) hoistVarLikeDeclarationsPass2(declarations []*parser.VarDeclar
 		var preliminaryType types.Type = declaredType // Start with annotation type
 
 		// Check initializer specifically for FunctionLiteral
-		if funcLitInitializer, ok := initializer.(*parser.FunctionLiteral); ok {
+		// An annotated declaration's function is checked with its statement,
+		// contextually typed by the annotation.
+		if funcLitInitializer, ok := initializer.(*parser.FunctionLiteral); ok && declaredType == nil {
 			debugPrintf("// [Checker Pass 2] Variable '%s' initialized with FunctionLiteral\n", varName.Value)
 			initialFuncSignature := c.resolveFunctionLiteralSignature(funcLitInitializer, globalEnv)
 			if initialFuncSignature == nil { // Handle resolution error
@@ -2391,7 +2396,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			needsInitializerCheck := false
 			if declarations, stmtType, _ := varLikeDeclarationParts(stmt); declarations != nil {
 				for _, d := range declarations {
-					if _, isFn := d.Value.(*parser.FunctionLiteral); !isFn && d.Value != nil {
+					if _, isFn := d.Value.(*parser.FunctionLiteral); (!isFn || d.TypeAnnotation != nil) && d.Value != nil {
 						needsInitializerCheck = true
 					}
 				}
@@ -5031,6 +5036,12 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 			}
 			c.functionLiteralContext[node] = ctxTypes
 		}
+		if rt := contextualReturnTypeOf(context.ExpectedType); rt != nil && len(node.TypeParameters) == 0 {
+			if c.functionLiteralReturnContext == nil {
+				c.functionLiteralReturnContext = map[*parser.FunctionLiteral]types.Type{}
+			}
+			c.functionLiteralReturnContext[node] = rt
+		}
 		// A contextual signature with a `this` parameter types the
 		// function's `this`.
 		if thisType := contextualThisType(context.ExpectedType); thisType != nil && node.Token != nil && node.Token.Literal == "function" {
@@ -5094,6 +5105,24 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		// For other node types, use regular visit for now
 		c.visit(node)
 	}
+}
+
+// contextualReturnTypeOf is the return type of a contextual function type
+// with a single non-generic call signature, or nil.
+func contextualReturnTypeOf(expected types.Type) types.Type {
+	ot, ok := expected.(*types.ObjectType)
+	if !ok || len(ot.CallSigs()) != 1 {
+		return nil
+	}
+	sig := ot.CallSigs()[0]
+	if len(sig.TypeParameters) > 0 || sig.ReturnType == nil || sig.ReturnType == types.Any {
+		return nil
+	}
+	switch sig.ReturnType.(type) {
+	case *types.TypePredicateType, *types.TypeParameterType:
+		return nil
+	}
+	return sig.ReturnType
 }
 
 // contextualThisType is the `this` parameter type of a contextual function
