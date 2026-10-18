@@ -371,6 +371,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 		c.env.MarkBindingKind(node.Name.Value, BindingClass)
 	}
 	debugPrintf("// [Checker Class] Checking class declaration '%s'\n", node.Name.Value)
+	inheritSetterAnnotations(node.Body)
 
 	// Validate class member constraints before type-building.
 	// Skip for declare classes: ambient bodies have signatures without implementations
@@ -3066,4 +3067,38 @@ func hasAnnotatedSetter(body *parser.ClassBody, name string, static bool) bool {
 		}
 	}
 	return false
+}
+
+// inheritSetterAnnotations gives a getter with no return type annotation
+// the parameter annotation of its setter: tsc types the accessor pair by
+// the setter's annotation then, and checks the getter's returns against it.
+func inheritSetterAnnotations(body *parser.ClassBody) {
+	if body == nil {
+		return
+	}
+	for _, g := range body.Methods {
+		if g == nil || g.Kind != "getter" || g.Value == nil || g.Value.ReturnTypeAnnotation != nil {
+			continue
+		}
+		name, ok := g.Key.(*parser.Identifier)
+		if !ok {
+			continue
+		}
+		for _, s := range body.Methods {
+			if s == nil || s.Kind != "setter" || s.IsStatic != g.IsStatic || s.Value == nil || len(s.Value.Parameters) == 0 {
+				continue
+			}
+			if sn, ok := s.Key.(*parser.Identifier); ok && sn.Value == name.Value {
+				if p := s.Value.Parameters[0]; p != nil && p.TypeAnnotation != nil {
+					// FIXME: a type query (`typeof y`) used as the getter's
+					// return annotation resolves to a different type than in
+					// the setter's parameter, so it is left out for now.
+					if _, query := p.TypeAnnotation.(*parser.TypeofTypeExpression); !query {
+						g.Value.ReturnTypeAnnotation = p.TypeAnnotation
+					}
+				}
+				break
+			}
+		}
+	}
 }
