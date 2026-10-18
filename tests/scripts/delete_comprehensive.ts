@@ -1,7 +1,7 @@
 // expect: true
 
 // Test delete operator functionality
-let obj: { x: number; y: number; z?: number; nonexistent?: number } = {
+let obj: { x?: number; y: number; z?: number; nonexistent?: number } = {
   x: 10,
   y: 20,
 };

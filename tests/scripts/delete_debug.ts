@@ -1,5 +1,5 @@
 // expect: true
 
-let obj = { x: 10 };
+let obj: { x?: number } = { x: 10 };
 delete obj.x;
 obj.x === undefined;

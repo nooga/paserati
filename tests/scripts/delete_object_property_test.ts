@@ -1,7 +1,7 @@
 // Test delete operator on object properties
 // expect: pass
 
-const obj = { x: 1, y: 2, z: 3 };
+const obj: { x?: number; y: number; z: number } = { x: 1, y: 2, z: 3 };
 
 // Delete existing property should return true
 if (delete obj.x !== true) {

@@ -151,6 +151,7 @@ const (
 	TS2695  = "TS2695"  // Left side of comma operator is unused and has no side effects
 	TS2698  = "TS2698"  // Spread types may only be created from object types
 	TS2703  = "TS2703"  // The operand of a 'delete' operator must be a property reference
+	TS2790  = "TS2790"  // The operand of a 'delete' operator must be optional
 	TS2707  = "TS2707"  // Generic type 'X' requires between N and M type arguments
 	TS2721  = "TS2721"  // Cannot invoke an object which is possibly 'null'
 	TS2722  = "TS2722"  // Cannot invoke an object which is possibly 'undefined'

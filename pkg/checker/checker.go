@@ -405,6 +405,9 @@ type Checker struct {
 	// hoistedSignatures holds the exported ambient function signatures
 	// Pass 2 already defined.
 	hoistedSignatures map[*parser.FunctionSignature]bool
+	// chainLinkReceivers holds the receiver type of the first link of each
+	// optional chain continuation, whose receiver slot is nil in the tree.
+	chainLinkReceivers map[parser.Expression]types.Type
 
 	// Constant values of enum members, per enum (see enum.go).
 	enumConsts map[*types.EnumType]enumMemberConsts
@@ -507,6 +510,8 @@ type Checker struct {
 	// expected to have, for inferring type parameters that no argument
 	// determines (`const xs: string[] = from()`).
 	returnContexts map[*parser.CallExpression]types.Type
+	// optionalCallContexts is returnContexts for `f?.()` calls.
+	optionalCallContexts map[*parser.OptionalCallExpression]types.Type
 
 	// currentAmbientModule is the module whose ambient declaration body is
 	// being checked (see ambient_modules.go).
@@ -3528,6 +3533,7 @@ func (c *Checker) visit(node parser.Node) {
 				default:
 					// Other expressions (literals, typeof, arithmetic) — valid delete targets
 				}
+				c.checkDeleteOperandOptional(node.Right)
 			// --- END NEW ---
 			default:
 				c.addError(node, fmt.Sprintf("unsupported prefix operator: %s", node.Operator))
@@ -4690,6 +4696,13 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		c.returnContexts[node] = context.ExpectedType
 		c.visit(node)
 		delete(c.returnContexts, node)
+	case *parser.OptionalCallExpression:
+		if c.optionalCallContexts == nil {
+			c.optionalCallContexts = map[*parser.OptionalCallExpression]types.Type{}
+		}
+		c.optionalCallContexts[node] = context.ExpectedType
+		c.visit(node)
+		delete(c.optionalCallContexts, node)
 	case *parser.TemplateLiteral:
 		c.visit(node)
 		if node.GetComputedType() == types.String && wantsTemplateLiteralType(context.ExpectedType) {

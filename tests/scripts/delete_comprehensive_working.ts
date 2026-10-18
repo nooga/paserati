@@ -3,7 +3,7 @@
 // Comprehensive test of delete operator functionality
 
 // Test 1: Basic deletion
-let obj1 = { x: 10, y: 20 };
+let obj1: { x?: number; y: number } = { x: 10, y: 20 };
 let delete1 = delete obj1.x;
 let after1 = obj1.x === undefined;
 let remaining1 = obj1.y === 20;
@@ -13,7 +13,7 @@ let obj2: { a: number; nonexistent?: number } = { a: 1 };
 let delete2 = delete obj2.nonexistent;
 
 // Test 3: Multiple operations on same object
-let obj3 = { a: 1, b: 2, c: 3 };
+let obj3: { a?: number; b?: number; c: number } = { a: 1, b: 2, c: 3 };
 let deleteA = delete obj3.a;
 let deleteB = delete obj3.b;
 let afterA = obj3.a === undefined;
@@ -30,7 +30,7 @@ let propGone = obj4.prop === undefined;
 let otherRemains = obj4.other === "data";
 
 // Test 5: Multiple references to same object
-let obj5 = { x: 100 };
+let obj5: { x?: number } = { x: 100 };
 let ref5 = obj5; // Same object reference
 let deleteFromRef = delete ref5.x;
 let originalAlsoDeleted = obj5.x === undefined;

@@ -1,7 +1,7 @@
 // expect: true
 
 // Test delete operator functionality
-let obj = { x: 10, y: 20 };
+let obj: { x?: number; y: number } = { x: 10, y: 20 };
 
 // Delete existing property
 let result1 = delete obj.x; // Should return true

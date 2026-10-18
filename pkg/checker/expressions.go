@@ -2624,56 +2624,18 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 
 // checkOptionalIndexExpression handles optional computed property access (e.g., obj?.[expr])
 func (c *Checker) checkOptionalIndexExpression(node *parser.OptionalIndexExpression) {
-	// 1. Visit the object part
 	c.visit(node.Object)
 	objectType := node.Object.GetComputedType()
 	if objectType == nil {
 		objectType = types.Any
 	}
-
-	// 2. Visit the index expression
-	c.visit(node.Index)
+	// The access is typed as `obj[expr]` on the non-nullish object.
+	resultType := c.checkOptionalLink(objectType, func(base *parser.ChainBase) parser.Expression {
+		return &parser.IndexExpression{Token: node.Token, Left: base, Index: node.Index}
+	})
 	indexType := node.Index.GetComputedType()
 	if indexType == nil {
 		indexType = types.Any
-	}
-
-	// 3. Check that index type is valid (string, number, or symbol)
-	widenedIndexType := c.rel.GetWidenedType(indexType)
-	if widenedIndexType != types.Any && widenedIndexType != types.String && widenedIndexType != types.Number && widenedIndexType != types.Symbol {
-		c.addError(node.Index, "Index signature parameter type must be 'string', 'number', 'symbol' or a template literal pattern")
-	}
-
-	// 4. Determine result type (similar to IndexExpression but with optional chaining)
-	widenedObjectType := c.rel.GetWidenedType(objectType)
-	var baseResultType types.Type
-
-	if widenedObjectType == types.Any {
-		baseResultType = types.Any
-	} else if widenedObjectType == types.Null || widenedObjectType == types.Undefined {
-		baseResultType = types.Undefined
-	} else if arrayType, ok := widenedObjectType.(*types.ArrayType); ok {
-		// Array access - check if index is numeric
-		if widenedIndexType == types.Number || widenedIndexType == types.Any {
-			baseResultType = arrayType.ElementType
-		} else {
-			baseResultType = types.Undefined
-		}
-	} else {
-		// Object access - for optional chaining, be permissive
-		baseResultType = types.Any
-	}
-
-	// 5. For optional chaining, always union with undefined
-	var resultType types.Type
-	if baseResultType == types.Undefined {
-		resultType = types.Undefined
-	} else if baseResultType == types.Any && widenedObjectType == types.Any {
-		resultType = types.Any
-	} else {
-		resultType = &types.UnionType{
-			Types: []types.Type{baseResultType, types.Undefined},
-		}
 	}
 
 	resultType = c.checkOptionalContinuation(node.Continuation, resultType, nil)
@@ -2685,58 +2647,34 @@ func (c *Checker) checkOptionalIndexExpression(node *parser.OptionalIndexExpress
 
 // checkOptionalCallExpression handles optional function calls (e.g., func?.())
 func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpression) {
-	// 1. Visit the function part
 	c.visit(node.Function)
 	functionType := node.Function.GetComputedType()
 	if functionType == nil {
 		functionType = types.Any
 	}
-
-	// 2. Visit arguments
-	var argumentTypes []types.Type
-	for _, arg := range node.Arguments {
-		c.visit(arg)
-		argType := arg.GetComputedType()
-		if argType == nil {
-			argType = types.Any
+	var receiver parser.Expression
+	switch fn := node.Function.(type) {
+	case *parser.MemberExpression:
+		receiver = fn.Object
+	case *parser.OptionalChainingExpression:
+		if fn.Continuation == nil {
+			receiver = fn.Object
 		}
-		argumentTypes = append(argumentTypes, argType)
 	}
-
-	// 3. Determine result type
-	widenedFunctionType := c.rel.GetWidenedType(functionType)
-	var baseResultType types.Type
-
-	if widenedFunctionType == types.Any {
-		baseResultType = types.Any
-	} else if widenedFunctionType == types.Null || widenedFunctionType == types.Undefined {
-		baseResultType = types.Undefined
-	} else {
-		// For optional call, we're more permissive - just try to get return type
-		if objType, ok := widenedFunctionType.(*types.ObjectType); ok {
-			// Check if it has a call signature
-			if len(objType.CallSigs()) > 0 {
-				baseResultType = objType.CallSigs()[0].ReturnType
-			} else {
-				baseResultType = types.Any
+	// The call is typed as `func(args)` on the non-nullish callee.
+	var call *parser.CallExpression
+	defer func() { delete(c.returnContexts, call) }()
+	resultType := c.checkOptionalLink(functionType, func(base *parser.ChainBase) parser.Expression {
+		base.Receiver = receiver
+		call = &parser.CallExpression{Token: node.Token, Function: base, Arguments: node.Arguments}
+		if expected := c.optionalCallContexts[node]; expected != nil {
+			if c.returnContexts == nil {
+				c.returnContexts = map[*parser.CallExpression]types.Type{}
 			}
-		} else {
-			// Assume it might be callable and return Any
-			baseResultType = types.Any
+			c.returnContexts[call] = types.RemoveNullishTypes(expected)
 		}
-	}
-
-	// 4. For optional chaining, always union with undefined
-	var resultType types.Type
-	if baseResultType == types.Undefined {
-		resultType = types.Undefined
-	} else if baseResultType == types.Any && widenedFunctionType == types.Any {
-		resultType = types.Any
-	} else {
-		resultType = &types.UnionType{
-			Types: []types.Type{baseResultType, types.Undefined},
-		}
-	}
+		return call
+	})
 
 	resultType = c.checkOptionalContinuation(node.Continuation, resultType, nil)
 	node.SetComputedType(resultType)
@@ -3840,6 +3778,35 @@ func (c *Checker) classHasExtendsClause(className string) bool {
 	return instance == nil || instance.ClassMeta == nil || instance.ClassMeta.HasExtendsClause
 }
 
+// checkOptionalLink types one `?.` link: build makes the plain access or
+// call on a stand-in for the non-nullish head, and the result gains
+// undefined when the head can be nullish.
+func (c *Checker) checkOptionalLink(head types.Type, build func(*parser.ChainBase) parser.Expression) types.Type {
+	nonNullish := types.RemoveNullishTypes(head)
+	onlyNullish := nonNullish == nil || nonNullish == types.Never
+	base := &parser.ChainBase{}
+	if onlyNullish {
+		// Nothing is accessed, but the operands are still checked.
+		base.SetComputedType(types.Any)
+	} else {
+		base.SetComputedType(nonNullish)
+	}
+	link := build(base)
+	base.Token = parser.GetTokenFromNode(link)
+	c.visit(link)
+	result := link.GetComputedType()
+	if onlyNullish {
+		return types.Undefined
+	}
+	if result == nil || result == types.Any || head == types.Any {
+		return types.Any
+	}
+	if nonNullish != head {
+		return types.NewUnionType(result, types.Undefined)
+	}
+	return result
+}
+
 // checkOptionalContinuation types the rest of an optional chain (`.c`, `[i]`,
 // `(args)` after `a?.b`) against the non-nullish type of its head and returns
 // the type of the whole chain. The continuation's root receiver is nil in the
@@ -3891,6 +3858,10 @@ func (c *Checker) checkOptionalContinuation(cont parser.Expression, head types.T
 		break
 	}
 	defer restore()
+	if c.chainLinkReceivers == nil {
+		c.chainLinkReceivers = map[parser.Expression]types.Type{}
+	}
+	c.chainLinkReceivers[cur] = nonNullish
 
 	c.visit(cont)
 	result := cont.GetComputedType()
