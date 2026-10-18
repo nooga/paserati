@@ -80,6 +80,8 @@ const (
 	TS2369  = "TS2369"  // A parameter property is only allowed in a constructor implementation
 	TS2370  = "TS2370"  // A rest parameter must be of an array type
 	TS2371  = "TS2371"  // A parameter initializer is only allowed in a function or constructor implementation
+	TS2372  = "TS2372"  // Parameter 'X' cannot reference itself
+	TS2373  = "TS2373"  // Parameter 'X' cannot reference identifier 'Y' declared after it
 	TS2374  = "TS2374"  // Duplicate index signature for type 'X'
 	TS2378  = "TS2378"  // A 'get' accessor must return a value
 	TS2390  = "TS2390"  // Constructor implementation is missing

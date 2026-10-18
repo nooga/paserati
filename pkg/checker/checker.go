@@ -2169,6 +2169,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// TS2454: definite assignment analysis. Runs last so every declarator's
 	// ComputedType has been resolved by the passes above.
 	c.checkDefiniteAssignment(program)
+	c.checkParameterReferences(program)
 
 	c.reportImplicitAnyParameters()
 
