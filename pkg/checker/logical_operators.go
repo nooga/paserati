@@ -164,6 +164,10 @@ func (c *Checker) logicalOperatorResultType(operator string, left, right types.T
 	if c.rel.GetWidenedType(left) == types.Any {
 		return types.Any
 	}
+	// A type predicate call evaluates to a boolean.
+	if _, ok := left.(*types.TypePredicateType); ok {
+		left = types.Boolean
+	}
 	retained := retainedOperandType(operator, left)
 	if retained == types.Never {
 		// The left operand can never take the branch that would retain it,

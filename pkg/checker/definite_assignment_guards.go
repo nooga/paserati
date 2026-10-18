@@ -161,13 +161,12 @@ func (a *definiteAssignment) predicateGuards(call *parser.CallExpression, whenTr
 		if !ok || pred.Asserts || pred.Type == nil || strictInitTypePermits(pred.Type) {
 			continue
 		}
-		for i, name := range sig.ParameterNames {
-			if name != pred.ParameterName || i >= len(call.Arguments) {
-				continue
-			}
-			if id, ok := call.Arguments[i].(*parser.Identifier); ok && a.candidates[id.Value] {
-				whenTrue[id.Value] = true
-			}
+		i := predicateArgumentIndex(&typePredicateSignature{predicate: pred, signature: sig}, len(call.Arguments))
+		if i < 0 {
+			continue
+		}
+		if id, ok := call.Arguments[i].(*parser.Identifier); ok && a.candidates[id.Value] {
+			whenTrue[id.Value] = true
 		}
 	}
 }

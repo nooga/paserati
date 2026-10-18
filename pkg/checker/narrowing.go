@@ -19,6 +19,7 @@ type TypeGuard struct {
 	DiscriminantValue        types.Type        // For discriminated unions: the value being compared (e.g., literal "num")
 	OptionalChainingBaseExpr parser.Expression // For optional chaining guards: the base object expression (e.g., "opts" in "opts?.prop")
 	Instanceof               bool              // an instanceof guard: members narrow by derivation, not assignability
+	Predicate                bool              // a type predicate call: the false branch drops members assignable to NarrowedType
 }
 
 type typePredicateSignature struct {
@@ -191,6 +192,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 								VariableName: argKey,
 								NarrowedType: predSig.predicate.Type,
 								IsNegated:    false,
+								Predicate:    !predSig.predicate.Asserts,
 							}
 							guard.OptionalChainingBaseExpr = extractOptionalChainingBase(arg)
 							return guard
@@ -1294,10 +1296,11 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		}
 		// The else branch of instanceof drops the members derived from the
 		// class.
-		if guard.Instanceof && guard.NarrowedType != nil {
+		if (guard.Instanceof || guard.Predicate) && guard.NarrowedType != nil {
 			var rest []types.Type
 			for _, m := range unionType.Types {
-				if !c.isDerivedFrom(m, guard.NarrowedType) {
+				if guard.Instanceof && !c.isDerivedFrom(m, guard.NarrowedType) ||
+					guard.Predicate && !c.isAssignableWithExpansion(m, guard.NarrowedType) {
 					rest = append(rest, m)
 				}
 			}
