@@ -87,7 +87,11 @@ func (c *Checker) iteratorMethodIsBroken(owner *types.ObjectType, marker string,
 	if !ok || len(fn.CallSigs()) != 1 {
 		return false
 	}
-	ret, ok := types.GetEffectiveType(fn.CallSigs()[0].ReturnType).(*types.ObjectType)
+	retType := fn.CallSigs()[0].ReturnType
+	if tp, isParam := retType.(*types.TypeParameterType); isParam && tp.Parameter == types.PolymorphicThis {
+		retType = owner
+	}
+	ret, ok := types.GetEffectiveType(retType).(*types.ObjectType)
 	if !ok || ret.IsCallable() || len(ret.IndexSigs()) > 0 {
 		return false
 	}

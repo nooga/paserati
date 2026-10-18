@@ -1282,6 +1282,9 @@ func (c *Checker) refineMethodReturnType(owner *types.ObjectType, body *parser.C
 		return
 	}
 	name, known := getMethodKeyString(method.Key)
+	if ck, isComputed := method.Key.(*parser.ComputedPropertyName); !known && isComputed {
+		name, known = c.tryExtractConstantComputedPropertyName(ck.Expr)
+	}
 	if !known {
 		return
 	}
@@ -1300,9 +1303,20 @@ func (c *Checker) refineMethodReturnType(owner *types.ObjectType, body *parser.C
 	if inferred == nil || inferred == types.Any {
 		return
 	}
-	// `return this` has the polymorphic this type in tsc, which is not
-	// modelled: an instance type of this class or a base would be wrong in
+	// `return this` has the polymorphic this type in tsc: a method whose
+	// every return is a bare `this` gets it, as `m(): this` would. Other
+	// returns of an instance type of this class or a base would be wrong in
 	// subclasses, so such methods keep the any return.
+	propType, ok := owner.Props()[name].(*types.ObjectType)
+	if !ok || len(propType.CallSigs()) != 1 || propType == fnType {
+		return
+	}
+	if method.Value.Body != nil && !method.Value.IsGenerator && !method.Value.IsAsync && returnsOnlyThis(method.Value.Body) {
+		if sig := propType.CallSigs()[0]; sig.ReturnType == types.Any {
+			sig.ReturnType = &types.TypeParameterType{Parameter: types.PolymorphicThis}
+		}
+		return
+	}
 	members := []types.Type{inferred}
 	if u, ok := inferred.(*types.UnionType); ok {
 		members = u.Types
@@ -1312,13 +1326,34 @@ func (c *Checker) refineMethodReturnType(owner *types.ObjectType, body *parser.C
 			return
 		}
 	}
-	propType, ok := owner.Props()[name].(*types.ObjectType)
-	if !ok || len(propType.CallSigs()) != 1 || propType == fnType {
-		return
-	}
 	if sig := propType.CallSigs()[0]; sig.ReturnType == types.Any {
 		sig.ReturnType = inferred
 	}
+}
+
+// returnsOnlyThis reports whether a function body returns, and only ever
+// returns, a bare `this` (nested functions and classes are not entered).
+func returnsOnlyThis(body *parser.BlockStatement) bool {
+	sawReturn, onlyThis := false, true
+	var walk func(n parser.Node)
+	walk = func(n parser.Node) {
+		if !onlyThis {
+			return
+		}
+		switch x := n.(type) {
+		case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral, *parser.ClassExpression, *parser.ClassDeclaration:
+			return
+		case *parser.ReturnStatement:
+			if _, isThis := x.ReturnValue.(*parser.ThisExpression); !isThis {
+				onlyThis = false
+			}
+			sawReturn = true
+			return
+		}
+		forEachChildInScope(n, walk)
+	}
+	walk(body)
+	return sawReturn && onlyThis
 }
 
 // checkMethodBodyWithContext checks a method body while preserving class context
