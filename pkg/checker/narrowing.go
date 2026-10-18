@@ -1550,6 +1550,10 @@ func (c *Checker) checkImpossibleComparison(leftType, rightType types.Type, oper
 	if leftType == types.Any || rightType == types.Any || leftType == types.Unknown || rightType == types.Unknown {
 		return
 	}
+	// null and undefined compare with anything (isTypeEqualityComparableTo).
+	if leftType == types.Null || leftType == types.Undefined || rightType == types.Null || rightType == types.Undefined {
+		return
+	}
 
 	// Check if the types have any overlap
 	if !c.typesHaveOverlap(leftType, rightType) {
