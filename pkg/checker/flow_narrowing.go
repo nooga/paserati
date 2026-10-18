@@ -148,6 +148,7 @@ func (f *flowNarrowState) trackVarDeclarationNarrowing(c *Checker, declarators [
 // the new value, or dropping it if the new value isn't a literal); anything
 // else invalidates everything tracked so far.
 func (f *flowNarrowState) observeExpressionStatement(c *Checker, node *parser.ExpressionStatement) {
+	c.markUnusedResult(node.Expression)
 	defer c.applyAssertionNarrowing(node.Expression)
 	assign, isAssign := node.Expression.(*parser.AssignmentExpression)
 	if isAssign && (assign.Operator == "??=" || assign.Operator == "||=") {

@@ -536,6 +536,10 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	outerInGeneratorFunction := c.inGeneratorFunction
 	c.inAsyncFunction = ctx.IsAsync
 	c.inGeneratorFunction = ctx.IsGenerator
+	outerNextTyped := c.generatorNextTyped
+	c.generatorNextTyped = ctx.ReturnTypeAnnotation != nil || (ctx.ContextualReturnType != nil && ctx.ContextualReturnType != types.Any) ||
+		(expectedReturnType != nil && expectedReturnType != types.Any) || c.argumentGenerators[ctx.Body]
+	defer func() { c.generatorNextTyped = outerNextTyped }()
 
 	// Reset loop/switch/label context for new function scope
 	outerLoopDepth := c.loopDepth

@@ -1292,6 +1292,10 @@ func (c *Checker) checkForStatement(node *parser.ForStatement) {
 	debugPrintf("// [Checker ForStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
 
 	// 2. Visit parts within the loop scope
+	if init, ok := node.Initializer.(*parser.ExpressionStatement); ok {
+		c.markUnusedResult(init.Expression)
+	}
+	c.markUnusedResult(node.Update)
 	c.visit(node.Initializer)
 	c.visit(node.Condition)
 	// The update runs after the body, so it sees the body's assignments;

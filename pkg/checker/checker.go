@@ -587,6 +587,10 @@ type Checker struct {
 	mentionScratch            map[types.Type]bool            // objectMayMention's visited set
 	mentionShadowed           map[string]map[types.Type]bool // ... per set of names under a shadowing declaration
 	settlingObjects           map[*types.ObjectType]bool     // objects settleType is settling the members of
+	unusedYields              map[*parser.YieldExpression]bool
+	contextualYields          map[*parser.YieldExpression]bool
+	generatorNextTyped        bool                 // the current generator's next type is known
+	argumentGenerators        map[parser.Node]bool // bodies of generator functions passed as arguments
 }
 
 type deferredComputedKeyCheck struct {
@@ -1933,6 +1937,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 		c.inAsyncFunction = funcLit.IsAsync
 		c.inGeneratorFunction = funcLit.IsGenerator
+		outerNextTyped := c.generatorNextTyped
+		c.generatorNextTyped = funcLit.ReturnTypeAnnotation != nil
+		defer func() { c.generatorNextTyped = outerNextTyped }()
 		outerCrossTargets := c.crossFunctionTargets
 		c.crossFunctionTargets = outerCrossTargets || outerLoopDepth > 0 || c.switchDepth > 0 || len(c.activeLabels) > 0
 		c.loopDepth = 0
@@ -2238,6 +2245,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		for _, check := range c.deferredComputedKeyChecks {
 			c.env = check.env
 			c.currentClassContext = check.classCtx
+			c.markContextualYield(check.expr)
 			c.visit(check.expr)
 			c.validateComputedPropertyNameType(check.expr, check.expr)
 			c.reportThisInComputedName(check.expr)
@@ -2583,6 +2591,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 	case *parser.ExpressionStatement:
+		c.markUnusedResult(node.Expression)
 		c.visit(node.Expression)
 
 		// Special handling for FunctionSignature expressions
@@ -3564,6 +3573,9 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 	case *parser.PrefixExpression:
+		if node.Operator == "void" {
+			c.markUnusedResult(node.Right)
+		}
 		// --- UPDATED: Handle PrefixExpression ---
 		if node.Operator == "++" || node.Operator == "--" {
 			if ident, ok := node.Right.(*parser.Identifier); ok {
@@ -3703,6 +3715,9 @@ func (c *Checker) visit(node parser.Node) {
 		c.checkNonNullExpression(node)
 
 	case *parser.InfixExpression:
+		if node.Operator == "," {
+			c.markUnusedResult(node.Left)
+		}
 		c.checkInfixExpression(node, nil)
 
 	case *parser.IfExpression:
@@ -4783,6 +4798,9 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		return
 	}
 
+	if context != nil {
+		c.noteContextualYield(node, context.ExpectedType)
+	}
 	// If no context provided, fall back to regular visit
 	if context == nil || context.ExpectedType == nil {
 		c.visit(node)

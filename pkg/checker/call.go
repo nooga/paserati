@@ -527,6 +527,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 }
 
 func (c *Checker) checkCallExpression(node *parser.CallExpression) {
+	c.markArgumentGenerators(node.Arguments)
 	// --- UPDATED: Handle CallExpression with Overload Support ---
 	// 1. Check the expression being called
 	debugPrintf("// [Checker CallExpr] Checking call at line %d\n", node.Token.Line)

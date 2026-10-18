@@ -370,6 +370,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 			}
 			continue
 		case *parser.ComputedPropertyName:
+			c.markContextualYield(key.Expr)
 			c.visit(key.Expr)
 			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
 				keyName = literal.Value
@@ -579,6 +580,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			continue
 		case *parser.ComputedPropertyName:
 			// Handle computed properties: [expression]
+			c.markContextualYield(key.Expr)
 			c.visit(key.Expr)
 			// TS2464: computed property name must be string, number, symbol, or any.
 			c.validateComputedPropertyNameType(key.Expr, key)
@@ -3418,6 +3420,7 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 		node.SetComputedType(types.Any)
 		return
 	}
+	c.checkImplicitAnyYield(node)
 
 	// 1. Check the yielded value (if present)
 	var yieldedType types.Type = types.Undefined
