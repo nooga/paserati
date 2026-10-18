@@ -1550,6 +1550,7 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 			if p.peekTokenIs(lexer.SEMICOLON) {
 				p.nextToken()
 			}
+			p.nextToken() // members end past their last token
 			if sig.KeyType == nil || sig.ValueType == nil {
 				return nil
 			}

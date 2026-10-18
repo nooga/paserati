@@ -250,6 +250,7 @@ func (c *Checker) resolveExtendedInterfaceObjectType(t types.Type) (*types.Objec
 
 func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// Called during Pass 1 for interface declarations
+	c.checkImplicitAnyInterfaceMembers(node.Properties)
 
 	// Check that interface name is not a primitive type name (TS2427)
 	switch node.Name.Value {
