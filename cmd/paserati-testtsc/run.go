@@ -163,7 +163,13 @@ func programIsModule(prog *parser.Program) bool {
 // Every setter the driver exposes for TypeScript compiler options is wired here;
 // directives with no setter are reported through unsupportedOptionsFor.
 func createTscPaserati(opts Options) *driver.Paserati {
-	initializers := builtins.GetStandardInitializers()
+	// tsc's lib has no Paserati namespace or global Type interface.
+	var initializers []builtins.BuiltinInitializer
+	for _, init := range builtins.GetStandardInitializers() {
+		if _, paserati := init.(*builtins.PaseratiInitializer); !paserati {
+			initializers = append(initializers, init)
+		}
+	}
 	pas := driver.NewPaseratiWithInitializers(initializers)
 	pas.SetAllowTopLevelReturn(false)
 	// Type checking is ON - that's what we're testing.

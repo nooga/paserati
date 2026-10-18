@@ -672,6 +672,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 					attachDecorators(method)
 					methods = append(methods, method)
 				} else if property, ok := result.(*PropertyDefinition); ok {
+					property.IsDeclare = isDeclare
 					attachDecorators(property)
 					properties = append(properties, property)
 				} else if sig, ok := result.(*ClassIndexSignature); ok && sig != nil {
