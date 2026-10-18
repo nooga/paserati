@@ -66,11 +66,17 @@ func (c *Checker) reportNullishObject(operand parser.Expression, t types.Type) {
 }
 
 func (c *Checker) reportNullishFacts(operand parser.Expression, hasNull, hasUndefined bool) {
-	if !c.strictNullChecks || (!hasNull && !hasUndefined) {
-		return
-	}
+	// A null or undefined literal has its own type even without
+	// strictNullChecks, which only stops variables from holding it.
 	if _, ok := operand.(*parser.NullLiteral); ok {
 		c.addErrorWithCode(operand, errors.TS18050, "The value 'null' cannot be used here.")
+		return
+	}
+	if _, ok := operand.(*parser.UndefinedLiteral); ok {
+		c.addErrorWithCode(operand, errors.TS18050, "The value 'undefined' cannot be used here.")
+		return
+	}
+	if !c.strictNullChecks || (!hasNull && !hasUndefined) {
 		return
 	}
 	name := entityNameText(operand)

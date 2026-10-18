@@ -3615,6 +3615,9 @@ func (c *Checker) visit(node parser.Node) {
 
 		if rightType != nil { // Proceed only if operand type is known
 			widenedRightType := c.rel.GetWidenedType(rightType)
+			if node.Operator == "-" || node.Operator == "+" || node.Operator == "~" {
+				c.reportNullishObject(node.Right, rightType) // checkNonNullType
+			}
 			switch node.Operator {
 			case "-":
 				if widenedRightType == types.Any {
