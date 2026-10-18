@@ -18,6 +18,7 @@ type TypeGuard struct {
 	DiscriminantProp         string            // For discriminated unions: the property being checked (e.g., "kind")
 	DiscriminantValue        types.Type        // For discriminated unions: the value being compared (e.g., literal "num")
 	OptionalChainingBaseExpr parser.Expression // For optional chaining guards: the base object expression (e.g., "opts" in "opts?.prop")
+	Instanceof               bool              // an instanceof guard: members narrow by derivation, not assignability
 }
 
 type typePredicateSignature struct {
@@ -431,6 +432,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 											VariableName: ident.Value,
 											NarrowedType: instanceType,
 											IsNegated:    false,
+											Instanceof:   true,
 										}
 									}
 								}
@@ -909,11 +911,33 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				canNarrow = true
 				narrowedType = guard.NarrowedType
 			} else if c.unionContainsTypeParam(unionType) {
-				// When the union contains a type parameter (generic context),
-				// type predicate narrowing should still work — TypeScript narrows
-				// to the predicate type directly since type params could be anything.
+				// tsc's getNarrowedType, member by member: a member related to
+				// the guard type is kept (T extends C stays T), the guard type
+				// replaces a member it is a subtype of; with neither, the guard
+				// type itself.
 				canNarrow = true
-				narrowedType = guard.NarrowedType
+				var kept []types.Type
+				for _, m := range unionType.Types {
+					if guard.Instanceof {
+						if c.isDerivedFrom(m, guard.NarrowedType) {
+							kept = append(kept, m)
+						}
+						continue
+					}
+					if c.rel.IsAssignable(m, guard.NarrowedType) {
+						kept = append(kept, m)
+					} else if c.rel.IsAssignable(guard.NarrowedType, m) {
+						kept = append(kept, guard.NarrowedType)
+					}
+				}
+				switch len(kept) {
+				case 0:
+					narrowedType = guard.NarrowedType
+				case 1:
+					narrowedType = kept[0]
+				default:
+					narrowedType = types.NewUnionType(kept...)
+				}
 				if checkerDebug {
 					debugPrintf("// [TypeNarrowing] Generic union narrowed to predicate type: %s\n", narrowedType.String())
 				}
@@ -1266,6 +1290,25 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					}
 					return narrowedEnv
 				}
+			}
+		}
+		// The else branch of instanceof drops the members derived from the
+		// class.
+		if guard.Instanceof && guard.NarrowedType != nil {
+			var rest []types.Type
+			for _, m := range unionType.Types {
+				if !c.isDerivedFrom(m, guard.NarrowedType) {
+					rest = append(rest, m)
+				}
+			}
+			if len(rest) > 0 && len(rest) < len(unionType.Types) {
+				narrowedType := rest[0]
+				if len(rest) > 1 {
+					narrowedType = types.NewUnionType(rest...)
+				}
+				narrowedEnv := NewEnclosedEnvironment(c.env)
+				narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+				return narrowedEnv
 			}
 		}
 		// For typeof "function" inverted narrowing, filter out callable members
@@ -2734,4 +2777,49 @@ func (c *Checker) applyAssertionNarrowing(expr parser.Expression) {
 	if env != nil {
 		c.env = env
 	}
+}
+
+// isDerivedFrom is tsc's isTypeDerivedFrom for instanceof narrowing: a type
+// parameter through its constraint, a class instance when the target class
+// is in its base chain, and an object type assignable to a non-class target.
+func (c *Checker) isDerivedFrom(t, target types.Type) bool {
+	switch tt := t.(type) {
+	case *types.TypeParameterType:
+		if tt.Parameter == nil || tt.Parameter.Constraint == nil {
+			return false
+		}
+		return c.isDerivedFrom(tt.Parameter.Constraint, target)
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if c.isDerivedFrom(m, target) {
+				return true
+			}
+		}
+		return false
+	case *types.ObjectType:
+		to, ok := target.(*types.ObjectType)
+		if !ok {
+			return c.rel.IsAssignable(t, target)
+		}
+		if !to.IsClassInstance() {
+			return c.rel.IsAssignable(t, target)
+		}
+		return classChainContains(tt, to, 0)
+	}
+	return false
+}
+
+func classChainContains(t, target *types.ObjectType, depth int) bool {
+	if t == target || (t.IsClassInstance() && t.GetClassName() != "" && t.GetClassName() == target.GetClassName()) {
+		return true
+	}
+	if depth > 32 {
+		return false
+	}
+	for _, b := range t.Bases() {
+		if bo, ok := b.(*types.ObjectType); ok && classChainContains(bo, target, depth+1) {
+			return true
+		}
+	}
+	return false
 }
