@@ -10996,6 +10996,13 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 		}
 	}
 
+	// tsc: a classic for-head `using` declaration still needs an
+	// initializer (checkGrammarVariableDeclaration).
+	if ls, ok := varStmt.(*LetStatement); ok && ls.IsUsing && ls.Value == nil && p.tscDiagnostics &&
+		!p.peekTokenIs(lexer.OF) && !p.peekTokenIs(lexer.IN) && ls.Name != nil && ls.Name.Value != "<pattern>" {
+		p.addGrammarErrorWithCode(ls.Name.Token, errors.TS1155, fmt.Sprintf("%s declarations must be initialized.", usingKind(ls.IsAwaitUsing)))
+	}
+
 	// Parse any additional comma-separated declarators:
 	// for (let x = 1, y = 2; ...) and for (let i = 0, {a} = obj; ...).
 	if kind, declToken, isDecl := forInitDeclKind(varStmt); isDecl {

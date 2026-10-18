@@ -44,6 +44,8 @@ const (
 	TS1346  = "TS1346"  // This parameter is not allowed with 'use strict' directive
 	TS1347  = "TS1347"  // 'use strict' directive cannot be used with non-simple parameter list
 	TS1360  = "TS1360"  // Type 'X' does not satisfy the expected type 'Y'
+	TS1545  = "TS1545"  // 'using' declarations are not allowed in ambient contexts
+	TS1546  = "TS1546"  // 'await using' declarations are not allowed in ambient contexts
 	TS1492  = "TS1492"  // 'using'/'await using' declarations may not have binding patterns
 	TS2300  = "TS2300"  // Duplicate identifier 'X'
 	TS2304  = "TS2304"  // Cannot find name 'X'

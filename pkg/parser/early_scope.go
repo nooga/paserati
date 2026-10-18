@@ -680,7 +680,9 @@ func (p *Parser) parseSubStatement(ctx subStatementContext) Statement {
 		return stmt
 	}
 	if cd, ok := stmt.(*ClassDeclaration); ok && cd != nil {
-		p.addError(startTok, "SyntaxError: Class declaration cannot appear in a single-statement context")
+		if !p.tscDiagnostics {
+			p.addError(startTok, "SyntaxError: Class declaration cannot appear in a single-statement context")
+		}
 		return stmt
 	}
 	if declarationBindings(stmt, func(*Identifier) {}) == lexicalDeclaration {
@@ -704,6 +706,11 @@ func (p *Parser) parseSubStatement(ctx subStatementContext) Statement {
 			return stmt
 		}
 		p.addError(startTok, "SyntaxError: Lexical declaration cannot appear in a single-statement context")
+		return stmt
+	}
+	if p.tscDiagnostics {
+		// tsc reports none of the ECMAScript restrictions on declarations
+		// in statement positions below (only a label there, TS1344).
 		return stmt
 	}
 	if fl := functionDeclarationOf(stmt); fl != nil {

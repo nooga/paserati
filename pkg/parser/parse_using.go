@@ -44,7 +44,7 @@ func (p *Parser) startsUsingDeclaration() bool {
 // never start with `=` or `:` (a TS type annotation on the binding), so
 // either one unambiguously means this is a using-declaration.
 func isUsingOfDisambiguator(t lexer.TokenType) bool {
-	return t == lexer.ASSIGN || t == lexer.COLON
+	return t == lexer.ASSIGN || t == lexer.COLON || t == lexer.SEMICOLON
 }
 
 // startsUsingDeclarationForLoop is startsUsingDeclaration's for-loop-head
@@ -127,6 +127,13 @@ func (p *Parser) parseUsingStatement(startToken *lexer.Token, isAwait bool) Stat
 		IsUsing:      true,
 		IsAwaitUsing: isAwait,
 	}
+	if p.tscDiagnostics && p.usingIsAmbient() {
+		code := errors.TS1545
+		if isAwait {
+			code = errors.TS1546
+		}
+		p.addGrammarErrorWithCode(startToken, code, fmt.Sprintf("%s declarations are not allowed in ambient contexts.", usingKind(isAwait)))
+	}
 
 	for {
 		var declarator *VarDeclarator
@@ -162,12 +169,20 @@ func (p *Parser) parseUsingStatement(startToken *lexer.Token, isAwait bool) Stat
 		}
 
 		// A `using` declaration must be initialized — there is nothing to
-		// dispose otherwise.
-		if !p.expectPeek(lexer.ASSIGN) {
-			return nil
+		// dispose otherwise. tsc parses a missing initializer fine and
+		// reports it as a grammar error (or the ambient-context error,
+		// which takes precedence), so do the same when recovering.
+		if !p.peekTokenIs(lexer.ASSIGN) && p.tscDiagnostics && p.canRecover() {
+			if !p.usingIsAmbient() {
+				p.addGrammarErrorWithCode(declarator.Name.Token, errors.TS1155, fmt.Sprintf("%s declarations must be initialized.", usingKind(isAwait)))
+			}
+		} else {
+			if !p.expectPeek(lexer.ASSIGN) {
+				return nil
+			}
+			p.nextToken() // Consume the token starting the expression
+			declarator.Value = p.parseExpression(COMMA)
 		}
-		p.nextToken() // Consume the token starting the expression
-		declarator.Value = p.parseExpression(COMMA)
 
 		stmt.Declarations = append(stmt.Declarations, declarator)
 
@@ -190,4 +205,17 @@ func (p *Parser) parseUsingStatement(startToken *lexer.Token, isAwait bool) Stat
 	}
 
 	return stmt
+}
+
+// usingIsAmbient reports whether a `using` declaration here is in an ambient
+// context (a declare namespace/module body or a declaration file).
+func (p *Parser) usingIsAmbient() bool {
+	return p.inAmbientContext > 0 || p.ambientFile
+}
+
+func usingKind(isAwait bool) string {
+	if isAwait {
+		return "'await using'"
+	}
+	return "'using'"
 }
