@@ -3578,12 +3578,8 @@ func (c *Checker) visit(node parser.Node) {
 		var elseEnv *Environment
 		if typeGuard != nil {
 			elseEnv = c.applyInvertedTypeNarrowing(typeGuard)
-		} else if or, ok := condition.(*parser.InfixExpression); ok && or.Operator == "||" && node.Alternative != nil {
-			// `A || B` is false when A is false and then B is false.
-			c.applyInvertedOrNarrowing(condition)
-			if c.env != originalEnv {
-				elseEnv = c.env
-			}
+		} else if lg, ok := condition.(*parser.InfixExpression); ok && (lg.Operator == "||" || lg.Operator == "&&") && node.Alternative != nil {
+			elseEnv = c.invertedConditionEnv(condition)
 			c.env = originalEnv
 		}
 		if elseEnv == nil && node.Alternative == nil && joinPossible {

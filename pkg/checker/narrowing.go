@@ -2823,3 +2823,58 @@ func classChainContains(t, target *types.ObjectType, depth int) bool {
 	}
 	return false
 }
+
+// invertedConditionEnv narrows for a condition being false: `A || B` is A
+// false and then B false; `A && B` is A false, or A true and then B false
+// (each binding the union of the two). nil if nothing narrows.
+func (c *Checker) invertedConditionEnv(cond parser.Expression) *Environment {
+	base := c.env
+	defer func() { c.env = base }()
+	if lg, ok := cond.(*parser.InfixExpression); ok {
+		switch lg.Operator {
+		case "||":
+			left := c.invertedConditionEnv(lg.Left)
+			if left != nil {
+				c.env = left
+			}
+			right := c.invertedConditionEnv(lg.Right)
+			if right != nil {
+				return right
+			}
+			return left
+		case "&&":
+			notLeft := c.invertedConditionEnv(lg.Left)
+			pos := c.applyTypeNarrowingFromCondition(lg.Left)
+			if pos != nil {
+				c.env = pos
+			}
+			notRight := c.invertedConditionEnv(lg.Right)
+			c.env = base
+			if notLeft == nil || notRight == nil {
+				return nil
+			}
+			left := narrowedBindings(notLeft, base)
+			right := narrowedBindings(notRight, base)
+			var result *Environment
+			for name, lt := range left {
+				rt, ok := right[name]
+				if !ok {
+					continue
+				}
+				_, isConst, found := base.Resolve(name)
+				if !found {
+					continue
+				}
+				if result == nil {
+					result = NewEnclosedEnvironment(base)
+				}
+				result.Define(name, types.NewUnionType(lt, rt), isConst)
+			}
+			return result
+		}
+	}
+	if guard := c.detectTypeGuard(cond); guard != nil {
+		return c.applyInvertedTypeNarrowing(guard)
+	}
+	return nil
+}
