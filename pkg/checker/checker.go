@@ -702,6 +702,7 @@ func newCheckerInEnv(globalEnv *Environment) *Checker {
 		resolvingTypeAliases:       make(map[string]bool),
 	}
 	c.rel.ExpandMapped = c.expandIfMappedType
+	c.rel.ResolveClassRef = c.resolveParameterizedForwardReference
 	return c
 }
 

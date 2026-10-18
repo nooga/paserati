@@ -4575,6 +4575,18 @@ func (c *Checker) objectMayMention(t types.Type, names map[string]types.Type) (m
 // object's display arguments (GenericArgs) count: instantiations are compared
 // through them.
 func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited map[types.Type]bool, shadowed map[string]map[types.Type]bool) bool {
+	return mayMentionTypeParamNamesAt(t, names, visited, shadowed, 0)
+}
+
+// maxMentionDepth bounds the walk: an infinitely expanding instantiation
+// (interface L<T> { next: L<L<T>> }) yields a fresh lazy object at every
+// level, which visited cannot catch. Past it the answer is "may mention".
+const maxMentionDepth = 64
+
+func mayMentionTypeParamNamesAt(t types.Type, names map[string]types.Type, visited map[types.Type]bool, shadowed map[string]map[types.Type]bool, depth int) bool {
+	if depth > maxMentionDepth {
+		return true
+	}
 	if t == nil {
 		return false
 	}
@@ -4588,19 +4600,19 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 		_, ok := names[tt.Parameter.Name]
 		return ok
 	case *types.ArrayType:
-		return mayMentionTypeParamNames(tt.ElementType, names, visited, shadowed)
+		return mayMentionTypeParamNamesAt(tt.ElementType, names, visited, shadowed, depth+1)
 	case *types.ReadonlyType:
-		return mayMentionTypeParamNames(tt.InnerType, names, visited, shadowed)
+		return mayMentionTypeParamNamesAt(tt.InnerType, names, visited, shadowed, depth+1)
 	case *types.UnionType:
 		for _, m := range tt.Types {
-			if mayMentionTypeParamNames(m, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(m, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
 		return false
 	case *types.IntersectionType:
 		for _, m := range tt.Types {
-			if mayMentionTypeParamNames(m, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(m, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
@@ -4610,7 +4622,7 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 		// only through its arguments. Counting them as mentions made every
 		// object reaching one (all of playwright's) a copy per substitution.
 		for _, a := range tt.TypeArguments {
-			if mayMentionTypeParamNames(a, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(a, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
@@ -4626,7 +4638,7 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 			}
 		}
 		for _, a := range tt.TypeArguments {
-			if mayMentionTypeParamNames(a, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(a, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
@@ -4639,9 +4651,9 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 		// conditional's own `infer T`, not an outer T: playwright's
 		// Unboxed<Arg> (reachable from nearly every object) counted as
 		// mentioning any T, so instantiating anything copied the graph.
-		if mayMentionTypeParamNames(tt.CheckType, names, visited, shadowed) ||
-			mayMentionTypeParamNames(tt.ExtendsType, names, visited, shadowed) ||
-			mayMentionTypeParamNames(tt.FalseType, names, visited, shadowed) {
+		if mayMentionTypeParamNamesAt(tt.CheckType, names, visited, shadowed, depth+1) ||
+			mayMentionTypeParamNamesAt(tt.ExtendsType, names, visited, shadowed, depth+1) ||
+			mayMentionTypeParamNamesAt(tt.FalseType, names, visited, shadowed, depth+1) {
 			return true
 		}
 		var inferred []*types.TypeParameter
@@ -4654,34 +4666,34 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 		if unshadowed, shadows := unshadowedNames(names, inferred); shadows {
 			trueNames, trueVisited = unshadowed, shadowedVisited(shadowed, unshadowed)
 		}
-		return mayMentionTypeParamNames(tt.TrueType, trueNames, trueVisited, shadowed)
+		return mayMentionTypeParamNamesAt(tt.TrueType, trueNames, trueVisited, shadowed, depth+1)
 	case *types.MappedType:
 		// `[key in K]: V` binds its own key in V: hookable's nested mapped
 		// types counted as mentioning every outer `key`, so expanding one
 		// copied tsdown's whole hook graph per key.
-		if mayMentionTypeParamNames(tt.ConstraintType, names, visited, shadowed) {
+		if mayMentionTypeParamNamesAt(tt.ConstraintType, names, visited, shadowed, depth+1) {
 			return true
 		}
 		valueNames, valueVisited := names, visited
 		if unshadowed, shadows := unshadowedNames(names, []*types.TypeParameter{{Name: tt.TypeParameter}}); shadows {
 			valueNames, valueVisited = unshadowed, shadowedVisited(shadowed, unshadowed)
 		}
-		return mayMentionTypeParamNames(tt.ValueType, valueNames, valueVisited, shadowed)
+		return mayMentionTypeParamNamesAt(tt.ValueType, valueNames, valueVisited, shadowed, depth+1)
 	case *types.KeyofType:
-		return mayMentionTypeParamNames(tt.OperandType, names, visited, shadowed)
+		return mayMentionTypeParamNamesAt(tt.OperandType, names, visited, shadowed, depth+1)
 	case *types.IndexedAccessType:
-		return mayMentionTypeParamNames(tt.ObjectType, names, visited, shadowed) ||
-			mayMentionTypeParamNames(tt.IndexType, names, visited, shadowed)
+		return mayMentionTypeParamNamesAt(tt.ObjectType, names, visited, shadowed, depth+1) ||
+			mayMentionTypeParamNamesAt(tt.IndexType, names, visited, shadowed, depth+1)
 	case *types.TupleType:
 		for _, e := range tt.ElementTypes {
-			if mayMentionTypeParamNames(e, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(e, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
-		return mayMentionTypeParamNames(tt.RestElementType, names, visited, shadowed)
+		return mayMentionTypeParamNamesAt(tt.RestElementType, names, visited, shadowed, depth+1)
 	case *types.TemplateLiteralType:
 		for _, part := range tt.Parts {
-			if !part.IsLiteral && mayMentionTypeParamNames(part.Type, names, visited, shadowed) {
+			if !part.IsLiteral && mayMentionTypeParamNamesAt(part.Type, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
@@ -4696,7 +4708,7 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 				return true
 			}
 			for _, a := range tt.GenericArgs {
-				if mayMentionTypeParamNames(a, names, visited, shadowed) {
+				if mayMentionTypeParamNamesAt(a, names, visited, shadowed, depth+1) {
 					return true
 				}
 			}
@@ -4708,7 +4720,7 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 			// puts in. Reading them would fill them in, substituting and so
 			// asking again, on and on through recursive generics.
 			for _, v := range subst {
-				if mayMentionTypeParamNames(v, names, visited, shadowed) {
+				if mayMentionTypeParamNamesAt(v, names, visited, shadowed, depth+1) {
 					return true
 				}
 			}
@@ -4723,7 +4735,7 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 					break
 				}
 			}
-			return len(sourceNames) > 0 && mayMentionTypeParamNames(source, sourceNames, sourceVisited, shadowed)
+			return len(sourceNames) > 0 && mayMentionTypeParamNamesAt(source, sourceNames, sourceVisited, shadowed, depth+1)
 		}
 		if tt.ClassMeta != nil && tt.ClassMeta.IsClassInstance && !tt.Pending {
 			// A class instance mentions outer parameters only through its
@@ -4734,24 +4746,24 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 				return true
 			}
 			for _, a := range tt.GenericArgs {
-				if mayMentionTypeParamNames(a, names, visited, shadowed) {
+				if mayMentionTypeParamNamesAt(a, names, visited, shadowed, depth+1) {
 					return true
 				}
 			}
 			return false
 		}
 		for _, p := range tt.Props() {
-			if mayMentionTypeParamNames(p, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(p, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
 		for _, a := range tt.GenericArgs {
-			if mayMentionTypeParamNames(a, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(a, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
 		for _, b := range tt.Bases() {
-			if mayMentionTypeParamNames(b, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(b, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}
@@ -4767,13 +4779,13 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 					sigNames, sigVisited = unshadowed, shadowedVisited(shadowed, unshadowed)
 				}
 				for _, p := range sig.ParameterTypes {
-					if mayMentionTypeParamNames(p, sigNames, sigVisited, shadowed) {
+					if mayMentionTypeParamNamesAt(p, sigNames, sigVisited, shadowed, depth+1) {
 						return true
 					}
 				}
-				if mayMentionTypeParamNames(sig.ReturnType, sigNames, sigVisited, shadowed) ||
-					mayMentionTypeParamNames(sig.RestParameterType, sigNames, sigVisited, shadowed) ||
-					mayMentionTypeParamNames(sig.ThisType, sigNames, sigVisited, shadowed) {
+				if mayMentionTypeParamNamesAt(sig.ReturnType, sigNames, sigVisited, shadowed, depth+1) ||
+					mayMentionTypeParamNamesAt(sig.RestParameterType, sigNames, sigVisited, shadowed, depth+1) ||
+					mayMentionTypeParamNamesAt(sig.ThisType, sigNames, sigVisited, shadowed, depth+1) {
 					return true
 				}
 				// Not the signature's own type parameters' constraints and
@@ -4783,14 +4795,14 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 			}
 		}
 		for _, sig := range tt.IndexSigs() {
-			if sig != nil && (mayMentionTypeParamNames(sig.KeyType, names, visited, shadowed) || mayMentionTypeParamNames(sig.ValueType, names, visited, shadowed) || mayMentionTypeParamNames(sig.ConstraintType, names, visited, shadowed)) {
+			if sig != nil && (mayMentionTypeParamNamesAt(sig.KeyType, names, visited, shadowed, depth+1) || mayMentionTypeParamNamesAt(sig.ValueType, names, visited, shadowed, depth+1) || mayMentionTypeParamNamesAt(sig.ConstraintType, names, visited, shadowed, depth+1)) {
 				return true
 			}
 		}
 		return false
 	case *types.ParameterizedForwardReferenceType:
 		for _, a := range tt.TypeArguments {
-			if mayMentionTypeParamNames(a, names, visited, shadowed) {
+			if mayMentionTypeParamNamesAt(a, names, visited, shadowed, depth+1) {
 				return true
 			}
 		}

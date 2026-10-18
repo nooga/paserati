@@ -28,7 +28,15 @@ type objectPair struct{ a, b *ObjectType }
 type equalsState struct {
 	proved map[objectPair]bool
 	log    []objectPair
+	// depth counts the object comparisons in progress. An infinitely
+	// expanding instantiation (interface L<T> { next: L<L<T>> }) makes
+	// fresh objects at every level, which the visited pairs cannot catch;
+	// past maxEqualsDepth they are assumed equal, like tsc's deeply nested
+	// types relate as Maybe.
+	depth int
 }
+
+const maxEqualsDepth = 50
 
 // stateEqualer is a type whose Equals passes an equalsState on to the types
 // it contains. A type without it starts a fresh memo below itself, which
@@ -441,8 +449,13 @@ func (ot *ObjectType) equalsIn(other Type, s *equalsState) bool {
 		// The outermost comparison: its memo dies with it.
 		return ot.structurallyEquals(otherOt, &equalsState{})
 	}
+	if s.depth >= maxEqualsDepth {
+		return true
+	}
+	s.depth++
 	logLen := len(s.log)
 	equal := ot.structurallyEquals(otherOt, s)
+	s.depth--
 	if equal {
 		if s.proved == nil {
 			s.proved = make(map[objectPair]bool)

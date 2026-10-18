@@ -31,6 +31,11 @@ type Relation struct {
 	// reaches the relation unexpanded.
 	ExpandMapped func(Type) Type
 
+	// ResolveClassRef resolves a reference a generic class makes to itself
+	// or another class in its own body (List<List<T>>) to the instance type
+	// it names. The checker supplies it.
+	ResolveClassRef func(*ParameterizedForwardReferenceType) Type
+
 	// visited holds the (source, target) pairs isAssignable is relating, so a
 	// recursive type relates to itself by assumption.
 	visited map[assignPair]bool

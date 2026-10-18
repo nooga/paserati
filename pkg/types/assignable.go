@@ -171,6 +171,15 @@ func (r *Relation) isAssignable(source, target Type) bool {
 		if targetParamRef, ok := target.(*ParameterizedForwardReferenceType); ok {
 			// Both are parameterized forward references - check if they're the same class with same type args
 			if sourceParamRef.ClassName != targetParamRef.ClassName {
+				// Different classes relate structurally, as their instances.
+				if r.ResolveClassRef != nil {
+					rs, rt := r.ResolveClassRef(sourceParamRef), r.ResolveClassRef(targetParamRef)
+					if so, ok := rs.(*ObjectType); ok {
+						if to, ok := rt.(*ObjectType); ok {
+							return r.isAssignable(so, to)
+						}
+					}
+				}
 				return false
 			}
 			if len(sourceParamRef.TypeArguments) != len(targetParamRef.TypeArguments) {
