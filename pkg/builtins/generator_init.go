@@ -72,6 +72,14 @@ func (g *GeneratorInitializer) InitTypes(ctx *TypeContext) error {
 	generatorCtorType := types.NewObjectType().
 		WithProperty("prototype", generatorProtoType)
 
+	// The Generator<T, TReturn, TNext> type, the same one inferred for
+	// generator functions.
+	if types.GeneratorGeneric != nil {
+		if err := ctx.DefineTypeAlias("Generator", types.GeneratorGeneric); err != nil {
+			return err
+		}
+	}
+
 	// Define Generator constructor in global environment
 	return ctx.DefineGlobal("Generator", generatorCtorType)
 }

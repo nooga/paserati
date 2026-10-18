@@ -463,6 +463,10 @@ func init() {
 			iteratorResultType,
 			[]bool{true}))
 
+	// lib.es2015.generator: interface Generator<T = unknown, TReturn = any, TNext = any>
+	t.Default, tReturn.Default, tNext.Default = Unknown, Any, Any
+	generatorBody.GenericName = "Generator"
+	generatorBody.GenericArgs = []Type{tType, tReturnType, tNextType}
 	GeneratorGeneric = NewGenericType("Generator", []*TypeParameter{t, tReturn, tNext}, generatorBody)
 
 	// Create AsyncGenerator<T, TReturn, TNext> generic type

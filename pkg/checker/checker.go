@@ -333,6 +333,10 @@ type Checker struct {
 	// --- NEW: Context for checking function bodies ---
 	// Expected return type of the function currently being checked (set by explicit annotation).
 	currentExpectedReturnType types.Type
+	// currentGeneratorAnnotation is the declared return type of the
+	// generator function whose body is being checked (Generator<Y, R, N>),
+	// nil outside one or without an annotation.
+	currentGeneratorAnnotation types.Type
 	// List of types found in return statements within the current function (used for inference).
 	currentInferredReturnTypes []types.Type
 	// List of types found in yield expressions within the current generator function (used for inference).
@@ -1956,6 +1960,14 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		outerActiveLabels := c.activeLabels
 
 		c.currentExpectedReturnType = funcSignature.ReturnType // Use return type from initial signature
+		outerGeneratorAnnotation := c.currentGeneratorAnnotation
+		c.currentGeneratorAnnotation = nil
+		if funcLit.IsGenerator {
+			// A generator's body returns TReturn of its annotation.
+			c.checkGeneratorAnnotation(funcLit.ReturnTypeAnnotation, funcSignature.ReturnType, funcLit.IsAsync)
+			c.currentGeneratorAnnotation = funcSignature.ReturnType
+			c.currentExpectedReturnType = generatorBodyReturnType(funcSignature.ReturnType)
+		}
 		defer func(prev map[string]bool) { c.stableParams = prev }(c.stableParams)
 		c.stableParams = stableParameters(funcLit.Parameters, funcLit.Body)
 		c.currentInferredReturnTypes = nil
@@ -2154,7 +2166,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 
 		// Handle async generator functions (both flags) first
-		if funcLit.IsAsync && funcLit.IsGenerator {
+		if funcLit.IsGenerator && funcSignature.ReturnType != nil {
+			// The annotation is the generator's type already.
+		} else if funcLit.IsAsync && funcLit.IsGenerator {
 			debugPrintf("// [Checker Pass 3] Async generator function detected, wrapping return type in AsyncGenerator\n")
 			asyncGeneratorType := c.createAsyncGeneratorType(actualReturnType, c.currentInferredYieldTypes)
 			actualReturnType = asyncGeneratorType
@@ -2244,6 +2258,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// Restore outer environment and context
 		c.env = originalEnv
+		c.currentGeneratorAnnotation = outerGeneratorAnnotation
 		c.currentExpectedReturnType = outerExpectedReturnType
 		c.currentInferredReturnTypes = outerInferredReturnTypes
 		c.currentInferredYieldTypes = outerInferredYieldTypes

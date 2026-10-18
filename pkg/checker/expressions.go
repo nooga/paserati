@@ -3454,15 +3454,35 @@ func (c *Checker) instantiateGenericMethod(methodType types.Type, elementType ty
 // yieldResultType is the value a plain `yield` evaluates to: the TNext of
 // the generator's annotated return type, or any without one.
 func (c *Checker) yieldResultType() types.Type {
-	if inst, ok := c.currentExpectedReturnType.(*types.InstantiatedType); ok && inst.Generic != nil {
-		switch inst.Generic.Name {
-		case "Generator", "AsyncGenerator", "Iterator", "AsyncIterator":
-			if len(inst.TypeArguments) >= 3 && inst.TypeArguments[2] != nil {
-				return inst.TypeArguments[2]
-			}
+	annotation := c.currentGeneratorAnnotation
+	if annotation == nil {
+		annotation = c.currentExpectedReturnType
+	}
+	switch name, args := generatorTypeArgs(annotation); name {
+	case "Generator", "AsyncGenerator", "Iterator", "AsyncIterator":
+		if len(args) >= 3 && args[2] != nil {
+			return args[2]
 		}
 	}
 	return types.Any
+}
+
+// declaredYieldType is the yield type of the enclosing generator's return
+// annotation (Generator<Y, R, N>, Iterable<Y>, ...), or nil when there is
+// none or it is not one we model.
+func (c *Checker) declaredYieldType() types.Type {
+	name, args := generatorTypeArgs(c.currentGeneratorAnnotation)
+	if len(args) == 0 {
+		return nil
+	}
+	switch name {
+	case "Generator", "AsyncGenerator", "Iterator", "AsyncIterator", "Iterable", "AsyncIterable",
+		"IterableIterator", "AsyncIterableIterator", "IteratorObject":
+		if y := args[0]; y != nil && y != types.Any {
+			return y
+		}
+	}
+	return nil
 }
 
 func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
@@ -3480,8 +3500,13 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 
 	// 1. Check the yielded value (if present)
 	var yieldedType types.Type = types.Undefined
+	declaredYield := c.declaredYieldType()
 	if node.Value != nil {
-		c.visit(node.Value)
+		if declaredYield != nil && !node.Delegate {
+			c.visitWithContext(node.Value, &ContextualType{ExpectedType: declaredYield, IsContextual: true})
+		} else {
+			c.visit(node.Value)
+		}
 		valueType := node.Value.GetComputedType()
 		if valueType == nil {
 			valueType = types.Any
@@ -3593,11 +3618,30 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 	}
 
 setYieldedType:
+	// A yielded value must be assignable to the yield type the generator's
+	// return annotation declares (a bare yield yields undefined).
+	if declaredYield != nil && !node.Delegate && yieldedType != nil && !c.isAssignableWithExpansion(yieldedType, declaredYield) {
+		var at parser.Node = node
+		if node.Value != nil {
+			at = node.Value
+		}
+		c.addErrorWithCode(at, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", yieldedType.String(), declaredYield.String()))
+	}
 	// 2. For now, set the computed type to the yielded value type
 	// In a full implementation, this would be IteratorResult<T, TReturn>
 	// but for basic functionality, we'll use the yielded type
 	if node.Delegate {
-		node.SetComputedType(yieldedType)
+		// yield* evaluates to the delegate's return value.
+		resultType := yieldedType
+		if node.Value != nil {
+			switch name, args := generatorTypeArgs(node.Value.GetComputedType()); name {
+			case "Generator", "AsyncGenerator", "Iterator", "AsyncIterator":
+				if len(args) >= 2 && args[1] != nil {
+					resultType = args[1]
+				}
+			}
+		}
+		node.SetComputedType(resultType)
 	} else {
 		node.SetComputedType(c.yieldResultType())
 	}

@@ -1,6 +1,9 @@
 package checker
 
 import (
+	"fmt"
+
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -48,16 +51,8 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		// For generators, we want to check the body against the inner return type
 		if preliminarySignature.ReturnType != nil {
 			// If there's an explicit return type annotation, extract TReturn from Generator<T, TReturn, TNext>
-			if instType, ok := preliminarySignature.ReturnType.(*types.InstantiatedType); ok {
-				if instType.Generic.Name == "Generator" && len(instType.TypeArguments) >= 2 {
-					innerReturnTypeFromAnnotation = instType.TypeArguments[1] // TReturn parameter
-					expectedReturnTypeForBody = innerReturnTypeFromAnnotation
-					if checkerDebug {
-						debugPrintf("// [Checker FuncLit] Generator function: using TReturn type %s for body checking\n",
-							expectedReturnTypeForBody.String())
-					}
-				}
-			}
+			innerReturnTypeFromAnnotation = generatorBodyReturnType(preliminarySignature.ReturnType)
+			expectedReturnTypeForBody = innerReturnTypeFromAnnotation
 		} else {
 			// No explicit return type annotation - use nil to allow inference
 			expectedReturnTypeForBody = nil
@@ -65,7 +60,14 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		}
 	}
 
+	outerGeneratorAnnotation := c.currentGeneratorAnnotation
+	c.currentGeneratorAnnotation = nil
+	if node.IsGenerator {
+		c.currentGeneratorAnnotation = preliminarySignature.ReturnType
+		c.checkGeneratorAnnotation(node.ReturnTypeAnnotation, preliminarySignature.ReturnType, node.IsAsync)
+	}
 	finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBody)
+	c.currentGeneratorAnnotation = outerGeneratorAnnotation
 
 	// 4. Handle async generator functions (both flags) - wrap in AsyncGenerator<T, TReturn, TNext>
 	if node.IsAsync && node.IsGenerator {
@@ -274,5 +276,63 @@ func (c *Checker) checkMethodDefinition(node *parser.MethodDefinition) {
 	} else {
 		// No function value (shouldn't happen in practice)
 		node.SetComputedType(types.Any)
+	}
+}
+
+// generatorTypeArgs names the generic a generator's return annotation
+// instantiates and its type arguments, whether it is still an
+// instantiation or already substituted.
+func generatorTypeArgs(t types.Type) (string, []types.Type) {
+	switch tt := t.(type) {
+	case *types.InstantiatedType:
+		if tt.Generic != nil {
+			return tt.Generic.Name, tt.TypeArguments
+		}
+	case *types.ObjectType:
+		if tt.Instantiates != nil {
+			return tt.Instantiates.Name, tt.GenericArgs
+		}
+	}
+	return "", nil
+}
+
+// generatorBodyReturnType is the type a generator body's return statements
+// are checked against: TReturn of Generator<Y, R, N> (and its async and
+// iterator kin); any for an Iterable annotation; the annotation itself when
+// it is not one we model.
+func generatorBodyReturnType(annotation types.Type) types.Type {
+	name, args := generatorTypeArgs(annotation)
+	switch name {
+	case "Generator", "AsyncGenerator", "Iterator", "AsyncIterator", "IterableIterator", "AsyncIterableIterator", "IteratorObject":
+		if len(args) >= 2 && args[1] != nil {
+			return args[1]
+		}
+		return types.Any
+	case "Iterable", "AsyncIterable":
+		return types.Any
+	}
+	// Not modelled (a lib iterator interface we only know by name): the
+	// annotation itself, as before generators were understood.
+	return annotation
+}
+
+// checkGeneratorAnnotation reports TS2322 on a generator's return annotation
+// that a generator object cannot be assigned to. Only primitive annotations
+// are judged: the lib iterator interfaces are not all modelled.
+func (c *Checker) checkGeneratorAnnotation(annotation parser.Expression, declared types.Type, isAsync bool) {
+	if annotation == nil || declared == nil || isAsync || types.GeneratorGeneric == nil {
+		return
+	}
+	switch declared.(type) {
+	case *types.Primitive, *types.LiteralType:
+	default:
+		return
+	}
+	if declared == types.Any || declared == types.Unknown {
+		return
+	}
+	gen := types.NewInstantiatedType(types.GeneratorGeneric, []types.Type{types.Any, types.Any, types.Unknown})
+	if !c.isAssignableWithExpansion(gen, declared) {
+		c.addErrorWithCode(annotation, errors.TS2322, fmt.Sprintf("Type 'Generator<any, any, unknown>' is not assignable to type '%s'.", declared.String()))
 	}
 }

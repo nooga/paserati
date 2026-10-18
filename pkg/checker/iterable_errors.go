@@ -35,6 +35,10 @@ func (c *Checker) isDefinitelyNotIterable(t types.Type) bool {
 		if len(tt.IndexSigs()) > 0 || len(tt.ConstructSigs()) > 0 {
 			return false
 		}
+		// A generator is its own iterator.
+		if name, _ := generatorTypeArgs(tt); name == "Generator" || name == "AsyncGenerator" {
+			return false
+		}
 		for _, marker := range iterableMarkerProperties {
 			if pt, ok := tt.EffectiveProperty(marker); ok {
 				return c.iteratorMethodIsBroken(tt, marker, pt)
