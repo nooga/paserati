@@ -8,6 +8,7 @@ import (
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // deferredMethodBodyCheck stores the information needed to check class method bodies
@@ -273,6 +274,42 @@ func (c *Checker) tryExtractConstantComputedPropertyName(expr parser.Expression)
 			}
 		}
 		debugPrintf("// [Checker Class] MemberExpression not Symbol.iterator: %T.%T\n", e.Object, e.Property)
+		return "", false
+	case *parser.Identifier:
+		// A constant whose type is a string or number literal names the
+		// member statically.
+		if t, _, ok := c.env.Resolve(e.Value); ok {
+			if lit, isLit := t.(*types.LiteralType); isLit {
+				switch lit.Value.Type() {
+				case vm.TypeString:
+					return lit.Value.ToString(), true
+				case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+					return parser.CanonicalNumericName(lit.Value.ToString()), true
+				}
+			}
+			return "", false
+		}
+		// Not bound yet: a top-level `const NAME = <literal>` written later
+		// in pass order still names the member.
+		if c.program != nil {
+			for _, stmt := range c.program.Statements {
+				cs, ok := stmt.(*parser.ConstStatement)
+				if !ok {
+					continue
+				}
+				for _, d := range cs.Declarations {
+					if d == nil || d.Name == nil || d.Name.Value != e.Value || d.TypeAnnotation != nil {
+						continue
+					}
+					switch v := d.Value.(type) {
+					case *parser.StringLiteral:
+						return v.Value, true
+					case *parser.NumberLiteral:
+						return parser.CanonicalNumericName(v.Token.Literal), true
+					}
+				}
+			}
+		}
 		return "", false
 	default:
 		debugPrintf("// [Checker Class] Non-constant computed property expression: %T\n", expr)
@@ -858,10 +895,23 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	getters := make(map[string]*parser.MethodDefinition)
 	setters := make(map[string]*parser.MethodDefinition)
 
+	// A member key's `this` is the member's own class (see
+	// deferredComputedKeyCheck); the entries added here are tagged with it
+	// once the class is built.
+	firstKeyCheck := len(c.deferredComputedKeyChecks)
+	defer func() {
+		for i := firstKeyCheck; i < len(c.deferredComputedKeyChecks); i++ {
+			if c.deferredComputedKeyChecks[i].className == "" {
+				c.deferredComputedKeyChecks[i].className = className
+				c.deferredComputedKeyChecks[i].instanceThis = instanceType
+			}
+		}
+	}()
+
 	// Static members' computed keys are checked like instance ones.
 	deferStaticKey := func(key parser.Expression) {
 		if computedKey, isComputed := key.(*parser.ComputedPropertyName); isComputed {
-			c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
+			c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), static: true})
 		}
 	}
 	for _, method := range body.Methods {
@@ -881,7 +931,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	for _, prop := range body.Properties {
 		if prop.IsStatic {
 			if computedKey, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), propertyKey: computedKey})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), propertyKey: computedKey, static: true})
 			}
 		}
 	}
@@ -991,10 +1041,6 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 		}
 	}
 
-	// Track computed properties for index signatures
-	var hasComputedProperties bool
-	var computedValueTypes []types.Type
-
 	// Add regular methods to instance type (excluding constructor, static methods, getters, and setters)
 	for _, method := range body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic && method.Kind != "getter" && method.Kind != "setter" {
@@ -1019,14 +1065,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 						debugPrintf("// [Checker Class] Added constant computed method '%s' to instance type: %s (%s)\n",
 							constantName, methodType.String(), accessLevel.String())
 					}
-				} else {
-					// This is a dynamic computed property - add to index signature
-					hasComputedProperties = true
-					computedValueTypes = append(computedValueTypes, methodType)
-					if checkerDebug {
-						debugPrintf("// [Checker Class] Found dynamic computed method, adding to index signature: %s\n", methodType.String())
-					}
 				}
+				// A dynamic computed name adds no member and no index signature.
 			} else {
 				// Add method with access control metadata
 				methodName := c.extractPropertyName(method.Key)
@@ -1106,14 +1146,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 						debugPrintf("// [Checker Class] Added constant computed property '%s' to instance type: %s (%s)\n",
 							constantName, propType.String(), accessLevel.String())
 					}
-				} else {
-					// This is a dynamic computed property - add to index signature
-					hasComputedProperties = true
-					computedValueTypes = append(computedValueTypes, propType)
-					if checkerDebug {
-						debugPrintf("// [Checker Class] Found dynamic computed property, adding to index signature: %s\n", propType.String())
-					}
 				}
+				// A dynamic computed name adds no member and no index signature.
 			} else {
 				// Add property with access control metadata
 				propName := c.extractPropertyName(prop.Key)
@@ -1134,31 +1168,6 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 	c.orderInstanceMembersBySource(instanceType, body)
 	c.addClassIndexSignatures(body, instanceType, false)
-
-	// If class has computed properties, create index signatures
-	if hasComputedProperties && !hasDeclaredStringIndex(instanceType) {
-		// Create a union type of all computed property value types
-		var indexValueType types.Type
-		if len(computedValueTypes) == 1 {
-			indexValueType = computedValueTypes[0]
-		} else if len(computedValueTypes) > 1 {
-			indexValueType = &types.UnionType{Types: computedValueTypes}
-		} else {
-			indexValueType = types.Any
-		}
-
-		// Add index signature: [key: string]: ComputedValueType
-		instanceType.Materialize()
-		instanceType.IndexSignatures = append(instanceType.IndexSigs(), &types.IndexSignature{
-			KeyType:   types.String,
-			ValueType: indexValueType,
-			Synthetic: true,
-		})
-
-		if checkerDebug {
-			debugPrintf("// [Checker Class] Added index signature for computed properties: [key: string]: %s\n", indexValueType.String())
-		}
-	}
 
 	// FINAL PASS: Check method bodies now that all properties and methods are in the instance type
 	// Note: This may report errors for forward references to variables declared after the class.

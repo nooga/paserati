@@ -604,6 +604,26 @@ type deferredComputedKeyCheck struct {
 	classCtx *types.AccessContext
 	// propertyKey is set for a class property's key, which TS1166 limits.
 	propertyKey *parser.ComputedPropertyName
+	// A class member key's `this` (an error, TS2465) is typed as the
+	// member's own class: the constructor for a static member, else the
+	// instance type.
+	className    string
+	instanceThis types.Type
+	static       bool
+}
+
+// thisType is the type tsc gives `this` in the key.
+func (k deferredComputedKeyCheck) thisType() types.Type {
+	if k.className == "" {
+		return nil
+	}
+	if !k.static {
+		return k.instanceThis
+	}
+	if ctor, _, ok := k.env.Resolve(k.className); ok {
+		return ctor
+	}
+	return nil
 }
 
 // computedKeyClassContext is the access context of a computed member key of
@@ -2251,7 +2271,12 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.env = check.env
 			c.currentClassContext = check.classCtx
 			c.markContextualYield(check.expr)
+			savedThis := c.currentThisType
+			if t := check.thisType(); t != nil {
+				c.currentThisType = t
+			}
 			c.visit(check.expr)
+			c.currentThisType = savedThis
 			c.validateComputedPropertyNameType(check.expr, check.expr)
 			if check.propertyKey != nil {
 				c.checkClassPropertyComputedName(check.propertyKey)

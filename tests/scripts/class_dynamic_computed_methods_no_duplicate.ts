@@ -13,4 +13,4 @@ class C {
 }
 
 let c = new C();
-c.a() + c.b();
+(c as any).a() + (c as any).b();
