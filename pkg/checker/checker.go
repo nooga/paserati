@@ -404,6 +404,9 @@ type Checker struct {
 	// loopEntryTypes holds the straight-line narrowings a loop about to be
 	// checked is entered with (its writes drop them from the overlay).
 	loopEntryTypes map[string]types.Type
+	// annotatedPattern is set while the binding pattern of a declaration with
+	// a type annotation is checked: its defaults must fit the annotation.
+	annotatedPattern bool
 	// blockEndEnvs holds, for the if arms being joined, the scope each
 	// block ended in (with its early-exit narrowings).
 	blockEndEnvs map[*parser.BlockStatement]*Environment
@@ -4732,6 +4735,9 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	if node == nil {
 		return
 	}
+	savedAnnotated := c.annotatedPattern
+	c.annotatedPattern = node.TypeAnnotation != nil
+	defer func() { c.annotatedPattern = savedAnnotated }()
 
 	// Check if we have an initializer (required for const, optional for let/var)
 	if node.Value == nil {
@@ -4863,7 +4869,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 
 		// Handle default value if present
 		if prop.Default != nil {
-			c.visit(prop.Default)
+			c.visitPatternDefault(prop.Default, propType)
 			defaultType := prop.Default.GetComputedType()
 			if defaultType == nil {
 				defaultType = types.Any

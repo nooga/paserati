@@ -1530,6 +1530,13 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 							loopEnv.Define(ident.Value, reduced, false)
 						}
 						ident.SetComputedType(elementType)
+					} else if isPropertyTarget(exprStmt.Expression) {
+						// for (o.p of xs): each element is assigned to o.p.
+						c.visit(exprStmt.Expression)
+						// `of []` iterates never (tsc's never[]).
+						if target := exprStmt.Expression.GetComputedType(); target != nil && !isEmptyArrayLiteral(node.Iterable) && !c.isAssignableWithExpansion(elementType, target) {
+							c.reportNotAssignable(exprStmt.Expression, nil, elementType, target, headAssign)
+						}
 					} else {
 						c.checkForOfAssignmentPattern(exprStmt.Expression, elementType)
 					}
@@ -2112,4 +2119,13 @@ func (c *Checker) checkForOfAssignmentPattern(pattern parser.Expression, sourceT
 			assign(target, def, part)
 		}
 	}
+}
+
+// isPropertyTarget reports whether e is a property access (o.p or o[k]).
+func isPropertyTarget(e parser.Expression) bool {
+	switch e.(type) {
+	case *parser.MemberExpression, *parser.IndexExpression:
+		return true
+	}
+	return false
 }

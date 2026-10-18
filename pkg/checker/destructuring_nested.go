@@ -68,7 +68,7 @@ func (c *Checker) unwrapNestedPatternTarget(target parser.Expression, expectedTy
 	case *parser.AssignmentExpression:
 		// Nested default: `{h: {i = 7}}` / `[[m = 4]]`.
 		if t.Value != nil {
-			c.visit(t.Value)
+			c.visitPatternDefault(t.Value, expectedType)
 			defaultType := t.Value.GetComputedType()
 			if defaultType == nil {
 				defaultType = types.Any
@@ -791,5 +791,20 @@ func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parse
 				c.checkDestructuringTargetForDeclaration(prop.Key, types.Any, isConst, isVar)
 			}
 		}
+	}
+}
+
+// visitPatternDefault checks a binding element's default. Under a type
+// annotation the default is contextually typed by, and must be assignable to,
+// the element's declared type (tsc checks every binding initializer against
+// it; without an annotation the default only widens the binding).
+func (c *Checker) visitPatternDefault(def parser.Expression, declared types.Type) {
+	if !c.annotatedPattern || declared == nil || declared == types.Any || declared == types.Undefined || declared == types.Unknown {
+		c.visit(def)
+		return
+	}
+	c.visitWithContext(def, &ContextualType{ExpectedType: declared, IsContextual: true})
+	if t := def.GetComputedType(); t != nil && !c.isAssignableWithExpansion(t, declared) {
+		c.reportNotAssignable(def, def, t, declared, headAssign)
 	}
 }
