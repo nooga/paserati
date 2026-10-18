@@ -18,7 +18,7 @@ let r = /test/i;
 console.log("Assignment context:", r);
 
 // Test in conditional context
-if (/pattern/) {
+if (/pattern/.test("pattern")) {
     console.log("Conditional context works");
 }
 

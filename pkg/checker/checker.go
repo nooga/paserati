@@ -2173,6 +2173,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// ComputedType has been resolved by the passes above.
 	c.checkDefiniteAssignment(program)
 	c.checkParameterReferences(program)
+	c.checkSyntacticTruthiness(program)
 
 	c.reportImplicitAnyParameters()
 

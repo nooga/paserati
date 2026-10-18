@@ -36,12 +36,12 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "PrefixMinusZero", input: "-0;", expect: "0"}, // JS: String(-0) === "0"
 		{name: "PrefixNotTrue", input: "!true;", expect: "false"},
 		{name: "PrefixNotFalse", input: "!false;", expect: "true"},
-		{name: "PrefixNotNull", input: "!null;", expect: "true"},
-		{name: "PrefixNotUndefined", input: "let u; !u;", expect: "true"}, // Need VM/Value check for undefined truthiness
-		{name: "PrefixNotZero", input: "!0;", expect: "true"},             // number 0 is falsey
-		{name: "PrefixNotNum", input: "!12;", expect: "false"},            // other numbers truthy
-		{name: "PrefixNotEMPTYStr", input: `!"";`, expect: "true"},        // empty string falsey
-		{name: "PrefixNotStr", input: `!"a";`, expect: "false"},           // non-empty string truthy
+		{name: "PrefixNotNull", input: "let v = null; !v;", expect: "true"},
+		{name: "PrefixNotUndefined", input: "let u; !u;", expect: "true"},     // Need VM/Value check for undefined truthiness
+		{name: "PrefixNotZero", input: "!0;", expect: "true"},                 // number 0 is falsey
+		{name: "PrefixNotNum", input: "let v = 12; !v;", expect: "false"},     // other numbers truthy
+		{name: "PrefixNotEMPTYStr", input: `let v = ""; !v;`, expect: "true"}, // empty string falsey
+		{name: "PrefixNotStr", input: `let v = "a"; !v;`, expect: "false"},    // non-empty string truthy
 
 		// Infix Arithmetic
 		{name: "InfixAddNum", input: "5 + 10;", expect: "15"},
@@ -127,15 +127,15 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "Logical OR True R", input: "false || true;", expect: "true"},
 		{name: "Logical OR False", input: "false || false;", expect: "false"},
 		{name: "Logical OR ShortCircuit", input: "true || (1/0);", expect: "true"}, // Should not divide by zero
-		{name: "Logical OR Truthy Value L", input: `"a" || false;`, expect: "a"},
+		{name: "Logical OR Truthy Value L", input: `let v = "a"; v || false;`, expect: "a"},
 		{name: "Logical OR Truthy Value R", input: `false || "b";`, expect: "b"},
 		{name: "Logical OR Falsey Values", input: `0 || "";`, expect: ""}, // Returns last falsey
 
 		{name: "Logical AND True", input: "true && true;", expect: "true"},
 		{name: "Logical AND False L", input: "false && true;", expect: "false"},
 		{name: "Logical AND False R", input: "true && false;", expect: "false"},
-		{name: "Logical AND ShortCircuit", input: "false && (1/0);", expect: "false"}, // Should not divide by zero
-		{name: "Logical AND Truthy Values", input: `"a" && 1;`, expect: "1"},          // Returns last truthy
+		{name: "Logical AND ShortCircuit", input: "false && (1/0);", expect: "false"},   // Should not divide by zero
+		{name: "Logical AND Truthy Values", input: `let v = "a"; v && 1;`, expect: "1"}, // Returns last truthy
 		{name: "Logical AND Falsey Value L", input: `0 && true;`, expect: "0"},
 		{name: "Logical AND Falsey Value R", input: `true && "";`, expect: ""},
 
