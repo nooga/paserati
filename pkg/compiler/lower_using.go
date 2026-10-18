@@ -52,7 +52,7 @@ func lowerUsingInNode(node parser.Node) {
 		for _, s := range n.Statements {
 			lowerUsingInNode(s)
 		}
-		n.Statements = lowerUsingInStatements(n.Statements)
+		n.Statements = lowerUsingInStatements(hoistTopLevelBindings(n.Statements))
 	case *parser.BlockStatement:
 		for _, s := range n.Statements {
 			lowerUsingInNode(s)
@@ -206,6 +206,77 @@ func lowerUsingInStatements(stmts []parser.Statement) []parser.Statement {
 		return append(lowered, buildUsingScope(ls, 0, rest)...)
 	}
 	return stmts
+}
+
+// hoistTopLevelBindings keeps the let and const bindings declared after a
+// top-level `using` at top level, where exports and other code expect them:
+// lowering moves those statements into a try block, so each becomes a `let`
+// declared ahead of the using and an assignment where it stood (as tsc's
+// downlevel emit does). Exported bindings stay exported.
+func hoistTopLevelBindings(stmts []parser.Statement) []parser.Statement {
+	first := -1
+	for i, s := range stmts {
+		if ls, ok := s.(*parser.LetStatement); ok && ls.IsUsing {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return stmts
+	}
+	var hoisted, rest []parser.Statement
+	for _, s := range stmts[first+1:] {
+		var export *parser.ExportNamedDeclaration
+		decl := s
+		if ex, ok := s.(*parser.ExportNamedDeclaration); ok && ex.Declaration != nil {
+			export, decl = ex, ex.Declaration
+		}
+		var tok *lexer.Token
+		var decls []*parser.VarDeclarator
+		switch d := decl.(type) {
+		case *parser.LetStatement:
+			if !d.IsUsing && !d.Declare {
+				tok, decls = d.Token, d.Declarations
+			}
+		case *parser.ConstStatement:
+			if !d.Declare {
+				tok, decls = d.Token, d.Declarations
+			}
+		}
+		if len(decls) == 0 || !simpleDeclarators(decls) {
+			rest = append(rest, s)
+			continue
+		}
+		names := make([]*parser.VarDeclarator, len(decls))
+		for i, d := range decls {
+			names[i] = &parser.VarDeclarator{Name: &parser.Identifier{Token: d.Name.Token, Value: d.Name.Value}, TypeAnnotation: d.TypeAnnotation, ComputedType: d.ComputedType}
+		}
+		var binding parser.Statement = &parser.LetStatement{Token: tok, Declarations: names, Name: names[0].Name, TypeAnnotation: names[0].TypeAnnotation}
+		if export != nil {
+			binding = &parser.ExportNamedDeclaration{Token: export.Token, Declaration: binding}
+		}
+		hoisted = append(hoisted, binding)
+		for _, d := range decls {
+			if d.Value != nil {
+				rest = append(rest, &parser.ExpressionStatement{Token: tok, Expression: &parser.AssignmentExpression{Token: tok, Operator: "=", Left: d.Name, Value: d.Value}})
+			}
+		}
+	}
+	out := make([]parser.Statement, 0, len(stmts)+len(hoisted))
+	out = append(out, stmts[:first]...)
+	out = append(out, hoisted...)
+	out = append(out, stmts[first])
+	return append(out, rest...)
+}
+
+// simpleDeclarators reports whether every declarator binds a plain name.
+func simpleDeclarators(decls []*parser.VarDeclarator) bool {
+	for _, d := range decls {
+		if d == nil || d.Name == nil || d.Name.Value == "" || d.Name.Value[0] == '<' {
+			return false
+		}
+	}
+	return true
 }
 
 // lowerUsingInForInitializer handles `for (using d = e; cond; upd) body`, where
