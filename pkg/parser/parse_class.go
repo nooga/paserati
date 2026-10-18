@@ -425,6 +425,15 @@ func (p *Parser) parseClassBody() *ClassBody {
 			continue
 		}
 
+		// tsc's parseList(ClassMembers): a token that cannot start a member is
+		// reported and either skipped or ends the class body.
+		if p.canRecover() && !p.isClassMemberStart() {
+			if p.recoverClassMember() {
+				break
+			}
+			continue
+		}
+
 		// Parse decorators on class elements: @dec method() {} or @dec field = val
 		var memberDecorators []*Decorator
 		if p.curTokenIs(lexer.AT) {
@@ -803,8 +812,16 @@ func (p *Parser) parseClassBody() *ClassBody {
 
 	flushDoc()
 	if !p.curTokenIs(lexer.RBRACE) {
-		p.addError(p.curToken, "expected '}' to close class body")
-		return nil
+		if !p.canRecover() {
+			p.addError(p.curToken, "expected '}' to close class body")
+			return nil
+		}
+		// tsc's parseExpected('}'): report and end the body here; the token is
+		// left for the enclosing construct.
+		p.missingCloseBrace()
+		if !p.curTokenIs(lexer.EOF) && !p.stepBackForMissing() {
+			return nil
+		}
 	}
 
 	// The class body parsing is complete. We don't advance past the '}' here

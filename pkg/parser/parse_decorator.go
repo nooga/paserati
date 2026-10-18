@@ -165,6 +165,15 @@ func (p *Parser) parseDecorator() *Decorator {
 			return nil
 		}
 		p.nextToken() // consume ')'
+	} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.NEW) || p.isKeywordThatCanBeIdentifier(p.curToken.Type) {
+		// tsc parses any LeftHandSideExpression here (without element access,
+		// which would be ambiguous with a computed member name) and its checker
+		// rejects the forms outside the decorator grammar.
+		expr = p.parseDecoratorLHS()
+		if expr == nil {
+			return nil
+		}
+		return &Decorator{Token: atToken, Expression: expr}
 	} else {
 		// DecoratorMemberExpression: @identifier or @a.b.c
 		// DecoratorCallExpression: @identifier() or @a.b.c()
@@ -284,4 +293,96 @@ func (p *Parser) parseDecoratorSuffixes(expr Expression) Expression {
 // peekIsMemberName reports whether the token after the current one can name a property.
 func (p *Parser) peekIsMemberName() bool {
 	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.PRIVATE_IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
+}
+
+// Decorator expression link kinds, for checkGrammarDecorator.
+const (
+	decoLinkCall = iota
+	decoLinkProperty
+	decoLinkOther
+)
+
+// parseDecoratorLHS parses a decorator's LeftHandSideExpression (tsc's
+// parseDecoratorExpression in a decorator context). cur is its first token on
+// entry and the token after it on return. Forms outside the decorator grammar
+// get tsc's checkGrammarDecorator error (TS1497).
+func (p *Parser) parseDecoratorLHS() Expression {
+	start := p.curToken
+	var expr Expression
+	invalid := false
+	if p.curTokenIs(lexer.NEW) {
+		expr = p.parseNewExpression()
+		if expr == nil {
+			return nil
+		}
+		invalid = true
+	} else {
+		expr = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
+	var links []int
+loop:
+	for {
+		switch {
+		case p.peekTokenIs(lexer.DOT), p.peekTokenIs(lexer.LPAREN), p.peekTokenIs(lexer.OPTIONAL_CHAINING), p.peekTokenIs(lexer.TEMPLATE_START):
+			kind := decoLinkOther
+			switch p.peekToken.Type {
+			case lexer.DOT:
+				kind = decoLinkProperty
+			case lexer.LPAREN:
+				kind = decoLinkCall
+			case lexer.OPTIONAL_CHAINING:
+				invalid = true // tsc errors at the '?.' token
+			}
+			p.nextToken()
+			expr = p.infixParseFns[p.curToken.Type](expr)
+			if expr == nil {
+				return nil
+			}
+			links = append(links, kind)
+		case p.peekTokenIs(lexer.BANG) && p.peekToken.Line == p.curToken.Line:
+			p.nextToken()
+			expr = &NonNullExpression{Token: p.curToken, Expression: expr}
+		case p.peekTokenIs(lexer.LT):
+			var targs []Expression
+			p.speculatively(func() { targs = p.tryParseTypeArguments() })
+			if targs == nil {
+				break loop
+			}
+			if p.peekTokenIs(lexer.LPAREN) {
+				p.nextToken()
+				call := p.parseCallExpression(expr)
+				if ce, ok := call.(*CallExpression); ok {
+					ce.TypeArguments = targs
+				}
+				if call == nil {
+					return nil
+				}
+				expr = call
+				links = append(links, decoLinkCall)
+			}
+		default:
+			break loop
+		}
+	}
+	p.nextToken()
+	// checkGrammarDecorator: from the outermost link inwards, only one call
+	// (the outermost) and property accesses may wrap an identifier.
+	canCall := true
+	for i := len(links) - 1; i >= 0 && !invalid; i-- {
+		switch links[i] {
+		case decoLinkCall:
+			if !canCall {
+				invalid = true
+			}
+			canCall = false
+		case decoLinkProperty:
+			canCall = false
+		default:
+			invalid = true
+		}
+	}
+	if invalid {
+		p.addGrammarErrorWithCode(start, "TS1497", "Expression must be enclosed in parentheses to be used as a decorator.")
+	}
+	return expr
 }
