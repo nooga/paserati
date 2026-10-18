@@ -261,6 +261,12 @@ type ContextualType struct {
 type Checker struct {
 	// rel relates types under this checker's options and built-ins.
 	rel *types.Relation
+
+	// wideningLiterals are the literal types of unannotated consts
+	// initialized by literal syntax: tsc's widening literal types, which
+	// stay literal on the const but widen where they initialize a mutable
+	// location.
+	wideningLiterals map[*types.LiteralType]bool
 	// builtinEnv is the global environment the checker started from.
 	builtinEnv *Environment
 
@@ -1197,7 +1203,9 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 		} else if isConstAssertion(initializer) {
 			// `as const` opts out of widening (#638).
 			finalInferredType = computedInitializerType
-		} else if _, isBareLiteral := computedInitializerType.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) {
+		} else if _, isBareLiteral := computedInitializerType.(*types.LiteralType); isBareLiteral && isConstVarLikeName(varName, globalEnv) {
+			finalInferredType = c.constLiteralType(initializer, computedInitializerType)
+		} else if _, isBareLiteral := computedInitializerType.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) && !c.isWideningLiteral(computedInitializerType) {
 			// A bare literal type computed from something other than literal
 			// syntax (e.g. `a || "foo"` collapsing via subtype reduction) isn't
 			// fresh, so it doesn't widen — see isFreshLiteralExpression.
@@ -2496,7 +2504,7 @@ func (c *Checker) visit(node parser.Node) {
 			} else {
 				// --- No annotation: Infer type ---
 				if computedInitializerType != nil {
-					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && isFreshLiteralExpression(declarator.Value) {
+					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && (isFreshLiteralExpression(declarator.Value) || c.isWideningLiteral(computedInitializerType)) {
 						finalVariableType = c.rel.GetWidenedType(computedInitializerType)
 						if checkerDebug {
 							debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
@@ -2664,7 +2672,7 @@ func (c *Checker) visit(node parser.Node) {
 
 				// Only widen literal types
 				if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
-					finalType = c.rel.GetWidenedType(computedInitializerType)
+					finalType = c.constLiteralType(declarator.Value, computedInitializerType)
 				} else {
 					// Use the computed type directly for non-literals (functions, arrays, etc.)
 					finalType = computedInitializerType
@@ -2811,7 +2819,7 @@ func (c *Checker) visit(node parser.Node) {
 			} else {
 				// --- No annotation: Infer type ---
 				if computedInitializerType != nil {
-					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && isFreshLiteralExpression(declarator.Value) {
+					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && (isFreshLiteralExpression(declarator.Value) || c.isWideningLiteral(computedInitializerType)) {
 						finalVariableType = c.rel.GetWidenedType(computedInitializerType)
 						if checkerDebug {
 							debugPrintf("// [Checker VarStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)

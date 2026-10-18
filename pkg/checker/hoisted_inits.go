@@ -102,7 +102,10 @@ func (c *Checker) widenedDeclarationType(initializer parser.Expression, computed
 	if isConstAssertion(initializer) {
 		return computed
 	}
-	if _, isBareLiteral := computed.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) {
+	if _, isBareLiteral := computed.(*types.LiteralType); isBareLiteral && isConstVarLikeName(name, env) {
+		return c.constLiteralType(initializer, computed)
+	}
+	if _, isBareLiteral := computed.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) && !c.isWideningLiteral(computed) {
 		return computed
 	}
 	widened := c.rel.DeeplyWidenType(computed)

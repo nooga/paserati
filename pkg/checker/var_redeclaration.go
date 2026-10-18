@@ -186,7 +186,7 @@ func (c *Checker) checkSecondaryTopLevelVar(name *parser.Identifier, typeAnnotat
 		switch {
 		case initType == nil:
 			declType = types.Any
-		case isFreshLiteralExpression(initializer):
+		case isFreshLiteralExpression(initializer) || c.isWideningLiteral(initType):
 			declType = c.rel.GetWidenedType(initType)
 		default:
 			declType = c.rel.DeeplyWidenType(initType)

@@ -33,6 +33,27 @@ func isFreshLiteralExpression(node parser.Node) bool {
 	return false
 }
 
+// constLiteralType is the type of an unannotated const whose initializer has
+// literal type computed: a fresh literal becomes a widening literal type.
+func (c *Checker) constLiteralType(initializer parser.Node, computed types.Type) types.Type {
+	lt, ok := computed.(*types.LiteralType)
+	if !ok || !isFreshLiteralExpression(initializer) {
+		return computed
+	}
+	w := &types.LiteralType{Value: lt.Value}
+	if c.wideningLiterals == nil {
+		c.wideningLiterals = map[*types.LiteralType]bool{}
+	}
+	c.wideningLiterals[w] = true
+	return w
+}
+
+// isWideningLiteral reports whether t is a const's widening literal type.
+func (c *Checker) isWideningLiteral(t types.Type) bool {
+	lt, ok := t.(*types.LiteralType)
+	return ok && c.wideningLiterals[lt]
+}
+
 // getBuiltinType looks up a builtin type by name in the global environment
 func (c *Checker) getBuiltinType(name string) types.Type {
 	if typ, _, found := c.env.Resolve(name); found {
