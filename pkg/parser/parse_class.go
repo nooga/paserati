@@ -534,8 +534,13 @@ func (p *Parser) parseClassBody() *ClassBody {
 				p.nextToken()
 			} else if p.curTokenIs(lexer.EXPORT) && !isFieldName() {
 				// 'export' is not a valid class element modifier
-				p.addError(p.curToken, "'export' modifier cannot appear on class elements of this kind.")
+				exportTok := p.curToken
 				p.nextToken()
+				if p.curTokenIs(lexer.LBRACKET) && p.isUnambiguouslyIndexSignature() {
+					p.addError(exportTok, "'export' modifier cannot appear on an index signature.")
+				} else {
+					p.addError(exportTok, "'export' modifier cannot appear on class elements of this kind.")
+				}
 			} else if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "declare" && !isFieldName() {
 				// 'declare' modifier on class member (valid for properties; only error if method has body)
 				isDeclare = true

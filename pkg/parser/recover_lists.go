@@ -264,10 +264,16 @@ func (p *Parser) startsParameter(tok *lexer.Token) bool {
 // reported (TS1138) and skipped, or ends the list when an enclosing construct
 // can use it. On return cur is the ')' (synthesized if missing).
 func (p *Parser) parseParameterListRecover(allowParameterProperties bool) ([]*Parameter, *RestParameter, error) {
+	return p.parseParamsUntil(allowParameterProperties, lexer.RPAREN)
+}
+
+// parseParamsUntil is parseParameterListRecover for a list closed by close
+// (')' for parameters, ']' for an index signature's).
+func (p *Parser) parseParamsUntil(allowParameterProperties bool, close lexer.TokenType) ([]*Parameter, *RestParameter, error) {
 	params := []*Parameter{}
 	var rest *RestParameter
 	first := true
-	for !p.peekTokenIs(lexer.RPAREN) && !p.peekTokenIs(lexer.EOF) {
+	for !p.peekTokenIs(close) && !p.peekTokenIs(lexer.EOF) {
 		if !p.startsParameter(p.peekToken) {
 			p.addErrorWithCode(p.peekToken, "TS1138", "Parameter declaration expected.")
 			if p.peekTokenIs(lexer.RBRACKET) || listAbortsAt(p.peekToken) {
@@ -324,7 +330,7 @@ func (p *Parser) parseParameterListRecover(allowParameterProperties bool) ([]*Pa
 			break
 		}
 	}
-	if !p.expectPeekRecover(lexer.RPAREN) {
+	if !p.expectPeekRecover(close) {
 		return nil, nil, fmt.Errorf("expected closing parenthesis after parameters")
 	}
 	return params, rest, nil
@@ -388,4 +394,143 @@ func (p *Parser) parseArrowParameterListTsc() ([]*Parameter, *RestParameter, err
 		return nil, nil, fmt.Errorf("expected closing parenthesis after parameters")
 	}
 	return params, rest, nil
+}
+
+// isUnambiguouslyIndexSignature is tsc's lookahead from a '[' for an index
+// signature (rather than a computed property name): `[id:`, and for error
+// recovery `[...`, `[]`, `[id,`, `[id?:`, `[id?,`, `[id?]` and `[modifier id`.
+func (p *Parser) isUnambiguouslyIndexSignature() bool {
+	toks := p.tokensAhead(5)
+	at := func(i int) *lexer.Token {
+		if i < len(toks) {
+			return &toks[i]
+		}
+		return &toks[len(toks)-1]
+	}
+	isIdent := func(t *lexer.Token) bool {
+		return t.Type == lexer.IDENT || isContextualKeywordType(t.Type) || t.Type == lexer.YIELD || t.Type == lexer.AWAIT || t.Type == lexer.LET
+	}
+	i := 1
+	switch {
+	case at(i).Type == lexer.SPREAD || at(i).Type == lexer.RBRACKET:
+		return true
+	case isTscModifier(at(i)) || isTscClassMemberModifier(at(i)):
+		i++
+		if isIdent(at(i)) {
+			return true
+		}
+	case !isIdent(at(i)):
+		return false
+	default:
+		i++
+	}
+	switch at(i).Type {
+	case lexer.COLON, lexer.COMMA:
+		return true
+	case lexer.QUESTION:
+		switch at(i + 1).Type {
+		case lexer.COLON, lexer.COMMA, lexer.RBRACKET:
+			return true
+		}
+	}
+	return false
+}
+
+// parseIndexSignatureTsc parses an index signature the way tsc does (cur is
+// the '['; on return cur is its last token): a bracketed parameter list and
+// an optional type annotation, with the checker's grammar errors for
+// everything but exactly one plain, typed key parameter.
+func (p *Parser) parseIndexSignatureTsc() (key *Identifier, keyType, valueType Expression, ok bool) {
+	open := p.curToken
+	params, rest, err := p.parseParamsUntil(false, lexer.RBRACKET)
+	if err != nil {
+		return nil, nil, nil, false
+	}
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken()
+		p.nextToken()
+		valueType = p.parseTypeExpression()
+		if valueType == nil {
+			return nil, nil, nil, false
+		}
+	}
+	anyType := func(tok *lexer.Token) Expression {
+		return &Identifier{Token: &lexer.Token{Type: lexer.IDENT, Literal: "any", Line: tok.Line, Column: tok.Column, StartPos: tok.StartPos, EndPos: tok.StartPos}, Value: "any"}
+	}
+	var param *Parameter
+	if len(params) > 0 {
+		param = params[0]
+	}
+	nameTok := open
+	if param != nil && param.Name != nil {
+		nameTok = param.Name.Token
+		key = param.Name
+		keyType = param.TypeAnnotation
+	} else if param == nil && rest != nil && rest.Name != nil {
+		nameTok = rest.Name.Token
+		key = rest.Name
+	}
+	if key == nil {
+		key = &Identifier{Token: nameTok, Value: "key"}
+	}
+	if keyType == nil {
+		keyType = &Identifier{Token: &lexer.Token{Type: lexer.IDENT, Literal: "string", Line: nameTok.Line, Column: nameTok.Column}, Value: "string"}
+	}
+	missingValueType := valueType == nil
+	if missingValueType {
+		valueType = anyType(open)
+	}
+	// tsc's checkGrammarIndexSignatureParameters, in its order.
+	n := len(params)
+	if rest != nil {
+		n++
+	}
+	switch {
+	case n != 1:
+		p.addGrammarErrorWithCode(nameTok, "TS1096", "An index signature must have exactly one parameter.")
+	case rest != nil:
+		p.addGrammarErrorWithCode(rest.Token, "TS1017", "An index signature cannot have a rest parameter.")
+	case param.IsPublic || param.IsPrivate || param.IsProtected || param.IsReadonly:
+		p.addGrammarErrorWithCode(nameTok, "TS1018", "An index signature parameter cannot have an accessibility modifier.")
+	case param.Optional:
+		p.addGrammarErrorWithCode(nameTok, "TS1019", "An index signature parameter cannot have a question mark.")
+	case param.DefaultValue != nil:
+		p.addGrammarErrorWithCode(nameTok, "TS1020", "An index signature parameter cannot have an initializer.")
+	case param.TypeAnnotation == nil:
+		p.addGrammarErrorWithCode(nameTok, "TS1022", "An index signature parameter must have a type annotation.")
+	case indexKeyTypeIsLiteral(param.TypeAnnotation):
+		p.addGrammarErrorWithCode(nameTok, "TS1337", "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead.")
+	case indexKeyTypeIsInvalid(param.TypeAnnotation):
+		p.addGrammarErrorWithCode(nameTok, "TS1268", "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type.")
+	case missingValueType:
+		p.addGrammarErrorWithCode(open, "TS1021", "An index signature must have a type annotation.")
+	}
+	return key, keyType, valueType, true
+}
+
+// indexKeyTypeIsLiteral reports a literal key type (tsc's TS1337).
+func indexKeyTypeIsLiteral(t Expression) bool {
+	switch n := t.(type) {
+	case *StringLiteral, *NumberLiteral:
+		return true
+	case *UnionTypeExpression:
+		return indexKeyTypeIsLiteral(n.Left) || indexKeyTypeIsLiteral(n.Right)
+	}
+	return false
+}
+
+// indexKeyTypeIsInvalid reports a key type that is certainly not string,
+// number, symbol or a template literal type: a keyword type other than those.
+// Type references are left to the checker.
+func indexKeyTypeIsInvalid(t Expression) bool {
+	switch n := t.(type) {
+	case *Identifier:
+		switch n.Value {
+		case "any", "unknown", "never", "boolean", "object", "bigint", "void", "undefined", "null":
+			return true
+		}
+	case *UnionTypeExpression:
+		return indexKeyTypeIsInvalid(n.Left) || indexKeyTypeIsInvalid(n.Right)
+	}
+	return false
 }

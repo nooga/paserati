@@ -9277,8 +9277,13 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		!p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.QUESTION) &&
 		!p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.SEMICOLON) &&
 		!p.peekTokenIs(lexer.RBRACE) && p.peekToken.Line == p.curToken.Line {
-		p.addError(p.curToken, fmt.Sprintf("'%s' modifier cannot appear on a type member.", p.curToken.Literal))
+		modTok := p.curToken
 		p.nextToken() // consume the invalid modifier and continue parsing the actual member
+		if p.curTokenIs(lexer.LBRACKET) && p.isUnambiguouslyIndexSignature() {
+			p.addError(modTok, fmt.Sprintf("'%s' modifier cannot appear on an index signature.", modTok.Literal))
+		} else {
+			p.addError(modTok, fmt.Sprintf("'%s' modifier cannot appear on a type member.", modTok.Literal))
+		}
 	}
 
 	// Check for constructor signature first: `new (): T` or `new <T>(): T`
@@ -9432,6 +9437,13 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 
 // parseInterfaceBracketProperty parses both index signatures and computed property names
 func (p *Parser) parseInterfaceBracketProperty() *InterfaceProperty {
+	if p.tscDiagnostics && p.canRecover() && p.isUnambiguouslyIndexSignature() {
+		key, keyType, valueType, ok := p.parseIndexSignatureTsc()
+		if !ok {
+			return nil
+		}
+		return &InterfaceProperty{IsIndexSignature: true, KeyName: key, KeyType: keyType, ValueType: valueType}
+	}
 	// We're currently at '[', move to the content
 	p.nextToken()
 
@@ -13491,6 +13503,13 @@ func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
 
 // parseObjectTypeBracketProperty parses both index signatures and computed property names in object types
 func (p *Parser) parseObjectTypeBracketProperty() *ObjectTypeProperty {
+	if p.tscDiagnostics && p.canRecover() && p.isUnambiguouslyIndexSignature() {
+		key, keyType, valueType, ok := p.parseIndexSignatureTsc()
+		if !ok {
+			return nil
+		}
+		return &ObjectTypeProperty{IsIndexSignature: true, KeyName: key, KeyType: keyType, ValueType: valueType}
+	}
 	// We're currently at '[', move to the content
 	p.nextToken()
 
