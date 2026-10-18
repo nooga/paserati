@@ -153,6 +153,26 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 
 	// Pattern 0: Type predicate function calls like isString(x) or Array.isArray(x)
 	if callExpr, ok := condition.(*parser.CallExpression); ok {
+		// A method declared `this is T` narrows its receiver: x.isT().
+		if memberFunc, ok := callExpr.Function.(*parser.MemberExpression); ok {
+			if key := expressionToNarrowingKey(memberFunc.Object); key != "" {
+				functionType := callExpr.Function.GetComputedType()
+				if functionType == nil {
+					if objType := memberFunc.Object.GetComputedType(); objType != nil {
+						if obj, ok := c.rel.GetWidenedType(objType).(*types.ObjectType); ok {
+							functionType, _ = obj.EffectiveProperty(c.extractPropertyName(memberFunc.Property))
+						}
+					}
+				}
+				if predSig := extractTypePredicateFromType(functionType); predSig != nil && predSig.predicate.ParameterName == "this" && predSig.predicate.Type != nil {
+					return &TypeGuard{
+						VariableName: key,
+						NarrowedType: predSig.predicate.Type,
+						Predicate:    !predSig.predicate.Asserts,
+					}
+				}
+			}
+		}
 		if len(callExpr.Arguments) > 0 {
 			// Resolve the function's type — try computed type, then environment
 			functionType := callExpr.Function.GetComputedType()
