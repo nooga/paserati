@@ -194,6 +194,7 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	pas.SetStrictBindCallApply(opts.strictFamily("strictbindcallapply"))
 	pas.SetNoImplicitAny(opts.strictFamily("noimplicitany"))
 	pas.SetNoImplicitThis(opts.strictFamily("noimplicitthis"))
+	pas.SetTopLevelAwaitDisallowed(topLevelAwaitDisallowed(opts))
 	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(opts))
 	pas.SetTscCompatibleDiagnostics(true)
 	pas.SetAlwaysStrict(alwaysStrictEnabled(opts))
@@ -262,6 +263,21 @@ func targetLevel(o Options) int {
 		}
 	}
 	return 9999
+}
+
+// topLevelAwaitDisallowed reports whether an explicit --module and the
+// target rule out top-level await: it needs module es2022, esnext, system,
+// node16-20, nodenext or preserve, and target es2017 or later.
+func topLevelAwaitDisallowed(o Options) bool {
+	module := strings.ToLower(strings.TrimSpace(o["module"]))
+	if module == "" {
+		return false
+	}
+	switch module {
+	case "es2022", "esnext", "system", "node16", "node18", "node20", "nodenext", "preserve":
+		return targetLevel(o) < 2017
+	}
+	return true
 }
 
 // legacyModuleFormat is tsc's name for an explicit pre-ES2015 --module.

@@ -178,6 +178,12 @@ func (p *Paserati) SetExperimentalDecorators(enabled bool) {
 	p.checker.SetExperimentalDecorators(enabled)
 }
 
+// SetTopLevelAwaitDisallowed records that the module and target options do
+// not permit top-level await.
+func (p *Paserati) SetTopLevelAwaitDisallowed(disallowed bool) {
+	p.checker.SetTopLevelAwaitDisallowed(disallowed)
+}
+
 // SetNoImplicitThis mirrors --noImplicitThis (TS2683).
 func (p *Paserati) SetNoImplicitThis(enabled bool) {
 	p.checker.SetNoImplicitThis(enabled)

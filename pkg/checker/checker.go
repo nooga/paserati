@@ -482,6 +482,8 @@ type Checker struct {
 	checkedParameterDefaults    map[*parser.Parameter]bool
 	namespaceBodyDepth          int  // > 0 while checking a namespace body
 	isModule                    bool // Source is a module, so strict mode comes from the module (TS1214)
+	// topLevelAwaitDisallowed: see SetTopLevelAwaitDisallowed.
+	topLevelAwaitDisallowed bool
 	// Identifiers already reported as strict-mode reserved words, so narrowing
 	// re-visits do not report them twice.
 	reportedStrictReserved map[*parser.Identifier]bool
@@ -829,6 +831,30 @@ func (c *Checker) SetIsModule(isModule bool) {
 // TS7006 and TS7019. Default false: Paserati also runs untyped JavaScript.
 func (c *Checker) SetNoImplicitAny(enabled bool) {
 	c.noImplicitAny = enabled
+}
+
+// SetTopLevelAwaitDisallowed records that the module and target options do
+// not permit top-level await (tsc's TS1378/TS2854).
+func (c *Checker) SetTopLevelAwaitDisallowed(disallowed bool) {
+	c.topLevelAwaitDisallowed = disallowed
+}
+
+// checkTopLevelAwaitUsing reports a top-level `await using` in a file that
+// is not a module (TS2853), or whose module and target options do not allow
+// top-level await (TS2854).
+func (c *Checker) checkTopLevelAwaitUsing(program *parser.Program) {
+	forEachNodeInScope(program, func(n parser.Node) {
+		ls, ok := n.(*parser.LetStatement)
+		if !ok || !ls.IsAwaitUsing {
+			return
+		}
+		switch {
+		case !c.isModule:
+			c.addErrorWithCode(ls, "TS2853", "'await using' statements are only allowed at the top level of a file when that file is a module, but this file has no imports or exports. Consider adding an empty 'export {}' to make this file a module.")
+		case c.topLevelAwaitDisallowed:
+			c.addErrorWithCode(ls, "TS2854", "Top-level 'await using' statements are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', 'node18', 'node20', 'nodenext', or 'preserve', and the 'target' option is set to 'es2017' or higher.")
+		}
+	})
 }
 
 // SetNoImplicitThis mirrors --noImplicitThis.
@@ -2145,6 +2171,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 	// --- Pass 4.5: Check decorator types (after all declarations are in scope) ---
 	c.checkAllDecorators(program)
+	c.checkTopLevelAwaitUsing(program)
 
 	// --- Pass 5: Final Check of Remaining Statements & Initializers ---
 	debugPrintf("\n// --- Checker - Pass 5: Final Checks & Remaining Statements ---\n")
