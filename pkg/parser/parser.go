@@ -1259,12 +1259,11 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		}
 		return p.parseExpressionStatement()
 	case lexer.ILLEGAL:
-		// Handle ILLEGAL tokens by adding error and advancing (unless the
-		// scanner already reported it)
+		// Report an ILLEGAL token (unless the scanner already did)
 		if len(p.curToken.Diags) == 0 {
 			p.addErrorWithCode(p.curToken, errors.TS1127, illegalTokenMessage(p.curToken))
 		}
-		p.nextToken() // Advance past the ILLEGAL token to avoid infinite loop
+		// Statements end on their last token; the enclosing loop advances.
 		return nil
 	default:
 		if cannotStartStatement(p.curToken.Type) {

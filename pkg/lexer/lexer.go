@@ -1627,7 +1627,15 @@ func (l *Lexer) NextToken() Token {
 		} else {
 			// Illegal character
 			literal := charString(l.ch)
-			l.readChar() // Consume the illegal character
+			size := 1
+			if l.ch >= utf8.RuneSelf {
+				// A non-ASCII character is one token, whatever its byte length.
+				r, n := utf8.DecodeRuneInString(l.input[l.position:])
+				literal, size = string(r), n
+			}
+			for i := 0; i < size; i++ {
+				l.readChar() // Consume the illegal character
+			}
 			tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	}
