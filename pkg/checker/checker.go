@@ -439,12 +439,12 @@ type Checker struct {
 	noStandardClassFields bool
 	// targetYear mirrors --target as a year (5 for ES5); 0 means the default,
 	// ES2025.
-	targetYear       int
+	targetYear int
 	// legacyModuleFormat names --module when it is a pre-ES2015 format
 	// (CommonJS, AMD, UMD or System); "" otherwise.
 	legacyModuleFormat string
-	classNameNode    *parser.Identifier // class being declared, for diagnostics reported on its name
-	strictNullChecks bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
+	classNameNode      *parser.Identifier // class being declared, for diagnostics reported on its name
+	strictNullChecks   bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
 	// reportedRelationDiagnostics dedupes relation diagnostics reported at the
 	// same position more than once (see addErrorAtStart).
 	reportedRelationDiagnostics map[string]bool
