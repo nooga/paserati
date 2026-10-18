@@ -100,6 +100,10 @@ func isSimpleStructure(t Type) bool {
 func (r *Relation) comparableObjects(s, t *ObjectType, depth int) bool {
 	sProps := s.GetEffectiveProperties()
 	for name, tp := range t.GetEffectiveProperties() {
+		// Private and protected members are nominal for comparability too.
+		if declaring, ok := nonPublicMemberOwner(t, name, 0); ok && !classDerivesFrom(s, declaring, 0) {
+			return false
+		}
 		sp, ok := sProps[name]
 		if !ok {
 			if t.IsPropertyOptional(name) {

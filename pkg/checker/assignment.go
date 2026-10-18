@@ -60,6 +60,17 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		validOperands = false
 	}
 
+	// checkAssignmentOperator: the target must be a variable or property
+	// access, and a name that is not a variable is an error of its own.
+	// tsc only gets here for compound arithmetic when both operands were ok.
+	if c.checkAssignmentTargetName(node.Left) {
+		validOperands = false
+	} else if validOperands && !c.checkReferenceExpression(node.Left,
+		errors.TS2364, "The left-hand side of an assignment expression must be a variable or a property access.",
+		errors.TS2779, "The left-hand side of an assignment expression may not be an optional property access.") {
+		validOperands = false
+	}
+
 	// --- Check LHS const status ---
 	// ... (keep existing const check) ...
 	if identLHS, ok := node.Left.(*parser.Identifier); ok {

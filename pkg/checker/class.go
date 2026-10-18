@@ -279,6 +279,9 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 
 // checkClassDeclaration handles type checking for class declarations
 func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
+	if node.Name != nil {
+		c.env.MarkBindingKind(node.Name.Value, BindingClass)
+	}
 	debugPrintf("// [Checker Class] Checking class declaration '%s'\n", node.Name.Value)
 
 	// Validate class member constraints before type-building.

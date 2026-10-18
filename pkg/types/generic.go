@@ -304,6 +304,10 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 			args[i] = substituteTypeMemo(a, substitutions, memo)
 		}
 		return &GenericTypeAliasForwardReference{AliasName: t.AliasName, TypeArguments: args, Scope: t.Scope}
+	case *GenericType:
+		// Substitute the outer parameters inside a generic method's body; its
+		// own type parameters stay generic.
+		return &GenericType{Name: t.Name, TypeParameters: t.TypeParameters, Body: substituteTypeMemo(t.Body, substitutions, memo)}
 	case *TemplateLiteralType:
 		parts := make([]TemplateLiteralPart, len(t.Parts))
 		for i, part := range t.Parts {
@@ -657,6 +661,10 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited, know
 		return mentionsTypeParameter(tt.ObjectType, params, visited, known, target) || mentionsTypeParameter(tt.IndexType, params, visited, known, target)
 	case *KeyofType:
 		return mentionsTypeParameter(tt.OperandType, params, visited, known, target)
+	case *GenericType:
+		// A generic method of a generic interface (Iterator<T>.map<U>)
+		// mentions the outer parameters in its body.
+		return mentionsTypeParameter(tt.Body, params, visited, known, target)
 	case *GenericTypeAliasForwardReference:
 		for _, a := range tt.TypeArguments {
 			if mentionsTypeParameter(a, params, visited, known, target) {

@@ -3622,7 +3622,6 @@ func (c *Checker) visit(node parser.Node) {
 		c.checkObjectDestructuringAssignment(node)
 
 	case *parser.UpdateExpression:
-		// --- NEW: Handle UpdateExpression ---
 		if ident, ok := node.Argument.(*parser.Identifier); ok {
 			if ident.Value == "eval" || ident.Value == "arguments" {
 				c.addErrorWithCode(ident, errors.TS2630, fmt.Sprintf("Cannot assign to '%s' because it is a function.", ident.Value))
@@ -3630,30 +3629,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 		c.visit(node.Argument)
 		c.checkReadonlyAssignmentTarget(node.Argument)
-		argType := node.Argument.GetComputedType()
-		resultType := types.Number // Default result is number
-
-		if argType == nil {
-			argType = types.Any // Handle nil from visit error
-		}
-
-		widenedArgType := c.rel.GetWidenedType(argType)
-
-		// JavaScript allows ++/-- on any type that can be coerced to number
-		// This includes: number, boolean, null, undefined, string
-		// BigInt is special: ++/-- on bigint stays bigint (no conversion to number)
-		// Objects/Arrays will coerce via ToPrimitive at runtime
-		if widenedArgType == types.BigInt {
-			// BigInt increment/decrement stays as BigInt
-			resultType = types.BigInt
-		}
-		// For all other types (including boolean, string, null, undefined, any, objects),
-		// allow them - they will be coerced to number at runtime
-
-		// TODO: Check if the argument is assignable (e.g., not a literal 5++)
-		// This might belong in a later compilation/resolution stage or require LHS checks here.
-
-		node.SetComputedType(resultType)
+		node.SetComputedType(c.checkUpdateOperand(node.Argument, node.Argument.GetComputedType()))
 
 	// --- NEW: Array/Index Type Checking ---
 	case *parser.ArrayLiteral:

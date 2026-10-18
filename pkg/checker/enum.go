@@ -59,6 +59,7 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	if !merged {
 		c.env.Define(enumName, enumType, false)
 	}
+	c.env.MarkBindingKind(enumName, BindingEnum)
 
 	// Every member name of this declaration is in scope while initializers are
 	// checked; referring to one declared later is reported (TS2651) instead of

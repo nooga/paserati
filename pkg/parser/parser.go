@@ -48,6 +48,11 @@ type Parser struct {
 	l      *lexer.Lexer
 	source *source.SourceFile // cached from lexer
 	errors []errors.PaseratiError
+
+	// checkerReportsInvalidTargets leaves invalid assignment and ++/--
+	// targets to the type checker (TS2364/TS2357), as tsc's parser does.
+	checkerReportsInvalidTargets bool
+
 	// JS redeclaration early errors, re-labelled by finishBinding.
 	redeclarationErrors []*errors.SyntaxError
 
@@ -540,6 +545,14 @@ func (p *Parser) Errors() []errors.PaseratiError {
 
 // SetDisallowSuper sets whether super expressions should be disallowed.
 // When true, parsing super will emit a SyntaxError (used for indirect eval).
+// SetCheckerReportsInvalidTargets makes the parser accept any expression as
+// the target of an assignment or ++/--, building the node and leaving the
+// diagnostic to the type checker as tsc does. Only for callers that type-check
+// and do not run the program: the early SyntaxError is not raised.
+func (p *Parser) SetCheckerReportsInvalidTargets(on bool) {
+	p.checkerReportsInvalidTargets = on
+}
+
 func (p *Parser) SetDisallowSuper(disallow bool) {
 	p.disallowSuper = disallow
 }
@@ -6147,7 +6160,11 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	expr.Left = left
 
 	// Check if the left side is assignable using the shared utility function
-	if !p.isValidLValue(left) {
+	if _, isSuper := left.(*SuperExpression); isSuper {
+		p.addErrorWithCode(expr.Token, "TS1034", "'super' must be followed by an argument list or member access.")
+		return nil
+	}
+	if !p.isValidLValue(left) && (!p.checkerReportsInvalidTargets || !isSyntacticLHSExpression(left)) {
 		msg := fmt.Sprintf("invalid left-hand side in assignment: %s", left.String())
 		p.addError(expr.Token, msg)
 		return nil
@@ -7247,6 +7264,20 @@ func (p *Parser) isValidLValue(expr Expression) bool {
 	}
 }
 
+// isSyntacticLHSExpression reports whether expr has the shape of a
+// LeftHandSideExpression. tsc only parses `x = y` when x does; for anything
+// else (`1 >> = 2`, `a + b = c`) the `=` is a syntax error, not an assignment
+// with an invalid target.
+func isSyntacticLHSExpression(expr Expression) bool {
+	switch expr.(type) {
+	case *InfixExpression, *PrefixExpression, *UpdateExpression, *TernaryExpression,
+		*AssignmentExpression, *ArrowFunctionLiteral, *YieldExpression, *AwaitExpression,
+		*TypeofExpression:
+		return false
+	}
+	return expr != nil
+}
+
 // UnwrapTypeAssertions strips the TypeScript-only `as`, `satisfies` and `!`
 // wrappers around an expression, which have no runtime effect.
 func UnwrapTypeAssertions(expr Expression) Expression {
@@ -7270,11 +7301,16 @@ func (p *Parser) parsePrefixUpdateExpression() Expression {
 		Operator: p.curToken.Literal,
 		Prefix:   true,
 	}
-	p.nextToken()                             // Consume ++ or --
-	expr.Argument = p.parseExpression(PREFIX) // Parse argument with PREFIX precedence
+	p.nextToken() // Consume ++ or --
+	// The operand is a LeftHandSideExpression: it does not take a postfix
+	// ++/-- of its own, so `++a++` is a syntax error, as in tsc.
+	expr.Argument = p.parseExpression(POSTFIX)
 
 	// Check if argument is assignable (Identifier, IndexExpression, or MemberExpression)
-	if !p.isValidLValue(expr.Argument) {
+	if expr.Argument == nil {
+		return nil
+	}
+	if !p.isValidLValue(expr.Argument) && !p.checkerReportsInvalidTargets {
 		msg := fmt.Sprintf("invalid argument for prefix %s: expected identifier, member expression, or index expression, got %T",
 			expr.Operator, expr.Argument)
 		p.addError(expr.Token, msg)
@@ -7293,7 +7329,7 @@ func (p *Parser) parsePostfixUpdateExpression(left Expression) Expression {
 	}
 
 	// Check if argument is assignable (Identifier, IndexExpression, or MemberExpression)
-	if !p.isValidLValue(expr.Argument) {
+	if !p.isValidLValue(expr.Argument) && !p.checkerReportsInvalidTargets {
 		msg := fmt.Sprintf("invalid argument for postfix %s: expected identifier, member expression, or index expression, got %T",
 			expr.Operator, expr.Argument)
 		p.addError(expr.Token, msg)

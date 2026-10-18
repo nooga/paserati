@@ -54,6 +54,49 @@ type Environment struct {
 
 	// builtinNames lists names bound by the built-in initializers (global env only).
 	builtinNames map[string]bool
+
+	// kinds records, for names bound by a class, enum or namespace
+	// declaration, which kind of declaration it was. tsc refuses to assign to
+	// those (TS2628/TS2629/TS2631), unlike variables holding the same values.
+	kinds map[string]BindingKind
+}
+
+// BindingKind classifies a value binding by the declaration that made it.
+type BindingKind uint8
+
+const (
+	BindingVariable BindingKind = iota
+	BindingEnum
+	BindingClass
+	BindingNamespace
+	BindingFunction
+)
+
+// MarkBindingKind records the declaration kind of a name bound in this scope.
+// When a name merges several declarations (a class and a namespace), the kind
+// tsc reports first wins: enum, then class, then namespace, then function.
+func (e *Environment) MarkBindingKind(name string, kind BindingKind) {
+	if e.kinds == nil {
+		e.kinds = make(map[string]BindingKind)
+	}
+	if prev, ok := e.kinds[name]; ok && prev != BindingVariable && prev < kind {
+		return
+	}
+	e.kinds[name] = kind
+}
+
+// ResolveBindingKind returns the declaration kind of the nearest binding of
+// name, or BindingVariable if it is a plain variable or unknown.
+func (e *Environment) ResolveBindingKind(name string) BindingKind {
+	for cur := e; cur != nil; cur = cur.outer {
+		if k, ok := cur.kinds[name]; ok {
+			return k
+		}
+		if _, ok := cur.symbols[name]; ok {
+			return BindingVariable
+		}
+	}
+	return BindingVariable
 }
 
 // NewEnvironment creates a new top-level type environment.

@@ -85,6 +85,7 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		// Bind ValueShape in value env so `N.x` member access resolves through
 		// ordinary ObjectType property lookup.
 		c.env.Define(name, nsType.ValueShape, false)
+		c.env.MarkBindingKind(name, BindingNamespace)
 	}
 
 	if parser.IsInstantiatedNamespace(node.Body) {

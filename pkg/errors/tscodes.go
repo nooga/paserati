@@ -116,6 +116,15 @@ const (
 	TS2571  = "TS2571"  // Object is of type 'unknown'
 	TS2575  = "TS2575"  // No overload expects N arguments, but overloads do exist that expect either A or B arguments
 	TS2588  = "TS2588"  // Cannot assign to 'X' because it is a constant
+	TS2356  = "TS2356"  // An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type
+	TS2357  = "TS2357"  // The operand of an increment or decrement operator must be a variable or a property access
+	TS2364  = "TS2364"  // The left-hand side of an assignment expression must be a variable or a property access
+	TS2539  = "TS2539"  // Cannot assign to 'X' because it is not a variable
+	TS2628  = "TS2628"  // Cannot assign to 'X' because it is an enum
+	TS2629  = "TS2629"  // Cannot assign to 'X' because it is a class
+	TS2631  = "TS2631"  // Cannot assign to 'X' because it is a namespace
+	TS2777  = "TS2777"  // The operand of an increment or decrement operator may not be an optional property access
+	TS2779  = "TS2779"  // The left-hand side of an assignment expression may not be an optional property access
 	TS2630  = "TS2630"  // Cannot assign to 'X' because it is a function
 	TS2654  = "TS2654"  // Non-abstract class 'C' is missing implementations for the following members of 'B': ...
 	TS2655  = "TS2655"  // Non-abstract class 'C' is missing implementations ... and N more

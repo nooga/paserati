@@ -53,9 +53,6 @@ func (c *Checker) checkNullishOperandsForOperator(node *parser.InfixExpression, 
 	// Without strictNullChecks, `null` and `undefined` are assignable to
 	// everything, so TypeScript never singles out a nullish operand — it falls
 	// through to TS2365 about the operand pair instead.
-	if !c.strictNullChecks {
-		return false
-	}
 	switch node.Operator {
 	case "-", "*", "/", "%", "**", "<<", ">>", ">>>", "&", "|", "^", "<", ">", "<=", ">=":
 		// Both operands are always checked.

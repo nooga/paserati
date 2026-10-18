@@ -80,7 +80,6 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 	debugPrintf("// [Checker Infix Pre-Check] Check Condition: %v\n", widenedLeftType != nil && widenedRightType != nil)
 
 	var resultType types.Type = types.Any // Default to Any on error
-	isAnyOperand := widenedLeftType == types.Any || widenedRightType == types.Any
 
 	// A `null` or `undefined` written directly as an operand of an
 	// arithmetic, bitwise or relational operator is TS18050. TypeScript
@@ -95,81 +94,13 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 		debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
 		switch node.Operator {
 		case "+":
-			leftIsNumeric := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
-			rightIsNumeric := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
-			if isAnyOperand {
-				resultType = types.Any
-			} else if widenedLeftType == types.Never || widenedRightType == types.Never {
-				// never is assignable to every operand kind, so the other
-				// operand decides: "x" + never is string, never + never number.
-				if widenedLeftType == types.String || widenedRightType == types.String {
-					resultType = types.String
-				} else if widenedLeftType == types.BigInt || widenedRightType == types.BigInt {
-					resultType = types.BigInt
-				} else {
-					resultType = types.Number
-				}
-			} else if leftIsNumeric && rightIsNumeric {
-				resultType = types.Number
-			} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
-				resultType = types.BigInt
-			} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
-				(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
-				c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
-				// Keep resultType = types.Any (default)
-			} else if widenedLeftType == types.String && widenedRightType == types.String {
-				resultType = types.String
-				// <<< NEW: Handle String + Number/BigInt Coercion >>>
-			} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
-				(widenedLeftType == types.Number && widenedRightType == types.String) {
-				resultType = types.String
-			} else if (widenedLeftType == types.String && widenedRightType == types.BigInt) ||
-				(widenedLeftType == types.BigInt && widenedRightType == types.String) {
-				resultType = types.String
-			} else if (widenedLeftType == types.String && widenedRightType == types.Boolean) ||
-				(widenedLeftType == types.Boolean && widenedRightType == types.String) {
-				resultType = types.String
-			} else if (widenedLeftType == types.String && c.isStringConcatenatable(rightType)) ||
-				(c.isStringConcatenatable(leftType) && widenedRightType == types.String) {
-				// TypeScript allows string concatenation with most types (including unions)
-				resultType = types.String
-			} else if (widenedLeftType == types.Boolean || widenedLeftType == types.Null || widenedLeftType == types.Undefined) &&
-				(widenedRightType == types.Boolean || widenedRightType == types.Null || widenedRightType == types.Undefined || widenedRightType == types.Number) {
-				// JavaScript allows boolean/null/undefined in addition, they're coerced to numbers
-				// true → 1, false → 0, null → 0, undefined → NaN
-				resultType = types.Number
-			} else if (widenedRightType == types.Boolean || widenedRightType == types.Null || widenedRightType == types.Undefined) &&
-				(widenedLeftType == types.Number) {
-				// Number + boolean/null/undefined → number
-				resultType = types.Number
-			} else if (widenedLeftType == types.String && widenedRightType != types.Symbol) ||
-				(widenedRightType == types.String && widenedLeftType != types.Symbol) {
-				// string + anything concatenates
-				resultType = types.String
-			} else if c.typeContainsTypeParameter(widenedLeftType) || c.typeContainsTypeParameter(widenedRightType) {
-				// A type parameter (often a built-in's imperfectly typed
-				// callback parameter) may be anything: stay lenient.
-				resultType = types.Any
-			} else {
-				c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
-				// Keep resultType = types.Any (default)
-			}
+			resultType = c.checkAdditionOperator(infixOperands(node), leftType, rightType)
 		case "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>":
-			resultType = c.checkArithmeticOperator(node, leftType, rightType)
+			resultType = c.checkArithmeticOperator(infixOperands(node), leftType, rightType)
 
 		case "<", ">", "<=", ">=":
-			leftIsNumericCmp := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
-			rightIsNumericCmp := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
-			if isAnyOperand {
-				resultType = types.Boolean
-			} else if leftIsNumericCmp && rightIsNumericCmp {
-				resultType = types.Boolean
-			} else if widenedLeftType == types.String && widenedRightType == types.String {
-				resultType = types.Boolean
-			} else {
-				c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
-				resultType = types.Boolean
-			}
+			c.checkRelationalOperator(infixOperands(node), leftType, rightType)
+			resultType = types.Boolean
 		case "==", "!=", "===", "!==":
 			// Check for impossible comparisons before setting result type
 			c.checkImpossibleComparison(leftType, rightType, node.Operator, node)
