@@ -401,6 +401,9 @@ type Checker struct {
 	// used before being assigned (collectUnassignedReads).
 	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
 	daCollectOnly   bool
+	// loopEntryTypes holds the straight-line narrowings a loop about to be
+	// checked is entered with (its writes drop them from the overlay).
+	loopEntryTypes map[string]types.Type
 	// blockEndEnvs holds, for the if arms being joined, the scope each
 	// block ended in (with its early-exit narrowings).
 	blockEndEnvs map[*parser.BlockStatement]*Environment
@@ -3349,6 +3352,7 @@ func (c *Checker) visit(node parser.Node) {
 			case *parser.ExpressionStatement:
 				flow.observeExpressionStatement(c, s)
 			default:
+				c.noteLoopEntryTypes(stmt)
 				flow.dropAssignedIn(stmt)
 				c.visit(stmt)
 			}

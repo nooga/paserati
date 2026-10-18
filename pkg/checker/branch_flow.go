@@ -279,9 +279,20 @@ func (c *Checker) checkLoop(loop parser.Node, cond parser.Expression, check func
 		check()
 		return
 	}
-	if env := c.seedBranchEnvWith(nil, keys, true); env != nil {
+	seeds := c.loopFixpointSeeds(loop, keys, originalEnv, check)
+	c.loopEntryTypes = nil
+	enter := func() {
+		env := NewEnclosedEnvironment(originalEnv)
+		for key, t := range seeds {
+			_, isConst, _ := originalEnv.Resolve(key)
+			env.Define(key, t, isConst)
+		}
+		if seeded := c.seedBranchEnvWith(env, keys, true); seeded != nil {
+			env = seeded
+		}
 		c.env = env
 	}
+	enter()
 	check()
 	c.env = originalEnv
 
@@ -289,6 +300,10 @@ func (c *Checker) checkLoop(loop parser.Node, cond parser.Expression, check func
 	changed := false
 	for _, key := range keys {
 		declared := c.declaredTypeOfRef(key)
+		if seed, ok := seeds[key]; ok {
+			// After the loop: what it was entered with or assigned.
+			declared = seed
+		}
 		current := typeOfRefIn(originalEnv, key)
 		if declared == nil || current == nil || c.typesEqual(declared, current) {
 			continue
@@ -473,4 +488,179 @@ func earlyExitRefKeys(c *Checker, arms ...parser.Statement) []string {
 		}
 	}
 	return keys
+}
+
+// loopFixpointSeeds computes, for the plain variables of a declared union type
+// that the loop writes only by `x = ...` in its own code, the type tsc's loop
+// flow analysis gives them inside the loop: the type the loop is entered
+// with, joined with every type assigned in it, iterated (speculatively, a few
+// times) until it is stable. Other written references keep their declared
+// types.
+func (c *Checker) loopFixpointSeeds(loop parser.Node, keys []string, originalEnv *Environment, check func()) map[string]types.Type {
+	assigns := map[string][]*parser.AssignmentExpression{}
+	seeds := map[string]types.Type{}
+	for _, key := range keys {
+		if strings.Contains(key, ".") {
+			continue
+		}
+		declared := c.declaredTypeOfRef(key)
+		if _, isUnion := declared.(*types.UnionType); !isUnion {
+			continue
+		}
+		entry := typeOfRefIn(originalEnv, key)
+		if t, ok := c.loopEntryTypes[key]; ok {
+			// A straight-line narrowing the loop's writes dropped, as the
+			// declared members it narrowed to.
+			entry = t
+			if reduced := c.assignmentReducedType(declared, c.rel.GetWidenedType(t)); reduced != nil {
+				entry = reduced
+			}
+		}
+		if entry == nil || c.typesEqual(entry, declared) {
+			continue
+		}
+		list, ok := simpleLoopAssignments(loop, key)
+		if !ok {
+			continue
+		}
+		assigns[key] = list
+		seeds[key] = entry
+	}
+	if len(seeds) == 0 {
+		return nil
+	}
+	for iter := 0; iter < 3; iter++ {
+		c.speculate(func() {
+			env := NewEnclosedEnvironment(originalEnv)
+			for key, t := range seeds {
+				_, isConst, _ := originalEnv.Resolve(key)
+				env.Define(key, t, isConst)
+			}
+			if seeded := c.seedBranchEnvWith(env, keys, true); seeded != nil {
+				env = seeded
+			}
+			c.env = env
+			check()
+			c.env = originalEnv
+		})
+		stable := true
+		for key, list := range assigns {
+			declared := c.declaredTypeOfRef(key)
+			next := seeds[key]
+			for _, a := range list {
+				rhs := a.Value.GetComputedType()
+				if rhs == nil {
+					next = declared
+					break
+				}
+				assigned := c.assignmentReducedType(declared, c.rel.GetWidenedType(rhs))
+				if assigned == nil {
+					assigned = declared
+				}
+				next = c.computeMergedType(next, assigned)
+			}
+			if !c.typesEqual(next, seeds[key]) {
+				seeds[key] = next
+				stable = false
+			}
+		}
+		if stable {
+			break
+		}
+	}
+	return seeds
+}
+
+// simpleLoopAssignments lists the `key = ...` assignments in loop, or reports
+// false when key is written any other way (compound or destructuring
+// assignment, ++, a declaration, a loop head) or from a nested function.
+func simpleLoopAssignments(loop parser.Node, key string) ([]*parser.AssignmentExpression, bool) {
+	var list []*parser.AssignmentExpression
+	ok := true
+	var walk func(n parser.Node, nested bool)
+	walk = func(n parser.Node, nested bool) {
+		if !ok || isNilNode(n) {
+			return
+		}
+		switch w := n.(type) {
+		case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral, *parser.ShorthandMethod,
+			*parser.ClassExpression, *parser.ClassDeclaration:
+			nested = true
+		case *parser.AssignmentExpression:
+			if id, isIdent := w.Left.(*parser.Identifier); isIdent && id.Value == key {
+				if nested || w.Operator != "=" {
+					ok = false
+					return
+				}
+				list = append(list, w)
+			}
+		case *parser.UpdateExpression:
+			if id, isIdent := w.Argument.(*parser.Identifier); isIdent && id.Value == key {
+				ok = false
+				return
+			}
+		}
+		forEachChildInScope(n, func(child parser.Node) { walk(child, nested) })
+	}
+	walk(loop, false)
+	if !ok {
+		return nil, false
+	}
+	// Any write the walk did not see (a declaration, destructuring, a loop
+	// head) makes the variable's flow unknown here.
+	others := map[string]bool{}
+	unionSyntacticWrites(others, loop)
+	if others[key] && len(list) == 0 {
+		return nil, false
+	}
+	return list, writesOnlyByAssignment(loop, key)
+}
+
+// writesOnlyByAssignment reports whether every write of key in node is a
+// plain assignment expression.
+func writesOnlyByAssignment(node parser.Node, key string) bool {
+	ok := true
+	forEachDescendant(node, func(n parser.Node) {
+		switch w := n.(type) {
+		case *parser.LetStatement:
+			for _, d := range w.Declarations {
+				if d != nil && d.Name != nil && d.Name.Value == key {
+					ok = false
+				}
+			}
+		case *parser.VarStatement:
+			for _, d := range w.Declarations {
+				if d != nil && d.Name != nil && d.Name.Value == key {
+					ok = false
+				}
+			}
+		case *parser.ArrayDestructuringAssignment, *parser.ObjectDestructuringAssignment, *parser.ForOfStatement, *parser.ForInStatement:
+			set := map[string]bool{}
+			unionSyntacticWrites(set, n)
+			if set[key] {
+				ok = false
+			}
+		}
+	})
+	return ok
+}
+
+// noteLoopEntryTypes records, before a loop statement is checked, the
+// straight-line narrowings of the variables it writes.
+func (c *Checker) noteLoopEntryTypes(stmt parser.Statement) {
+	switch stmt.(type) {
+	case *parser.WhileStatement, *parser.DoWhileStatement, *parser.ForStatement,
+		*parser.ForOfStatement, *parser.ForInStatement:
+	default:
+		return
+	}
+	c.loopEntryTypes = nil
+	for _, key := range writtenRefs(stmt) {
+		if t, ok := c.flowNarrowOverlay[key]; ok {
+			if c.loopEntryTypes == nil {
+				c.loopEntryTypes = map[string]types.Type{}
+			}
+			c.loopEntryTypes[key] = t
+		}
+	}
 }
