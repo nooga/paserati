@@ -545,8 +545,16 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	}
 
 	c.noteIndirectCallCallee(node.Function)
-	c.visit(node.Function)
-	funcNodeType := node.Function.GetComputedType()
+	var funcNodeType types.Type
+	if node.Function == c.presetCallee && c.presetCalleeType != nil {
+		// `new` checked as a call of the construct signatures; the
+		// constructor expression has been visited.
+		funcNodeType = c.presetCalleeType
+		c.presetCallee = nil
+	} else {
+		c.visit(node.Function)
+		funcNodeType = node.Function.GetComputedType()
+	}
 
 	// The receiver a method call passes as `this`, for signatures that
 	// declare an explicit `this` parameter.
@@ -1161,7 +1169,19 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 		// No matching signature found
 		c.reportOverloadFailure(node, argTypes, objType.CallSigs())
 
-		node.SetComputedType(types.Any)
+		// With one overload taking this many arguments, the call has its
+		// return type (tsc's candidateForArgumentError).
+		var result types.Type = types.Any
+		var withArity []*types.Signature
+		for _, sig := range objType.CallSigs() {
+			if len(argTypes) >= requiredParameterCount(sig) && (sig.IsVariadic || len(argTypes) <= len(sig.ParameterTypes)) {
+				withArity = append(withArity, sig)
+			}
+		}
+		if len(withArity) == 1 && withArity[0].ReturnType != nil && !c.typeContainsTypeParameter(withArity[0].ReturnType) {
+			result = withArity[0].ReturnType
+		}
+		node.SetComputedType(result)
 		return
 	}
 

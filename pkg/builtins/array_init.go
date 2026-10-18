@@ -220,14 +220,28 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 	}
 
 	// Create Array constructor type
+	// tsc's ArrayConstructor: (arrayLength?: number): any[],
+	// <T>(arrayLength: number): T[] and <T>(...items: T[]): T[], each both
+	// called and constructed.
+	anyArray := &types.ArrayType{ElementType: types.Any}
+	lengthOnly := &types.Signature{ParameterTypes: []types.Type{types.Number}, ParameterNames: []string{"arrayLength"}, OptionalParams: []bool{true}, ReturnType: anyArray}
+	elemParam := func() (*types.TypeParameter, *types.ArrayType) {
+		tp := &types.TypeParameter{Name: "T"}
+		return tp, &types.ArrayType{ElementType: &types.TypeParameterType{Parameter: tp}}
+	}
+	lengthT, lengthTArr := elemParam()
+	typedLength := &types.Signature{TypeParameters: []*types.TypeParameter{lengthT}, ParameterTypes: []types.Type{types.Number}, ParameterNames: []string{"arrayLength"}, ReturnType: lengthTArr}
+	itemsT, itemsTArr := elemParam()
+	items := &types.Signature{TypeParameters: []*types.TypeParameter{itemsT}, ParameterNames: []string{"items"}, IsVariadic: true, RestParameterType: itemsTArr, ReturnType: itemsTArr}
+	ofT, ofTArr := elemParam()
+	ofSig := &types.Signature{TypeParameters: []*types.TypeParameter{ofT}, ParameterNames: []string{"items"}, IsVariadic: true, RestParameterType: ofTArr, ReturnType: ofTArr}
 	arrayCtorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{}, &types.ArrayType{ElementType: types.Any}).                                             // Array() -> array
-		WithSimpleCallSignature([]types.Type{types.Number}, &types.ArrayType{ElementType: types.Any}).                                 // Array(length) -> array
-		WithVariadicCallSignature([]types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}). // Array(...elements) -> array
+		WithCallSignature(lengthOnly).WithCallSignature(typedLength).WithCallSignature(items).
+		WithConstructSignature(lengthOnly).WithConstructSignature(typedLength).WithConstructSignature(items).
 		WithProperty("isArray", types.NewSimpleFunction([]types.Type{types.Any}, &types.TypePredicateType{ParameterName: "arg", Type: &types.ArrayType{ElementType: types.Any}})).
 		WithProperty("from", types.NewOptionalFunction([]types.Type{types.Any, types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Any)}, &types.ArrayType{ElementType: types.Any}, []bool{false, true})).
 		WithProperty("fromAsync", types.NewOptionalFunction([]types.Type{types.Any, types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Any), types.Any}, fromAsyncReturnType, []bool{false, true, true})).
-		WithVariadicProperty("of", []types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
+		WithProperty("of", types.NewObjectType().WithCallSignature(ofSig)).
 		WithProperty("prototype", arrayProtoType)
 
 	// Define Array constructor in global environment

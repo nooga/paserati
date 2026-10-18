@@ -46,6 +46,10 @@ func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []
 			c.addErrorWithCode(node.Arguments[i], errors.TS2345, fmt.Sprintf(
 				"Argument of type '%s' is not assignable to parameter of type '%s'.", argTypes[i].String(), sig.ParameterTypes[i].String()))
 			return
+		} else if arr, isArr := sig.RestParameterType.(*types.ArrayType); isArr && i >= 0 && i < len(node.Arguments) {
+			c.addErrorWithCode(node.Arguments[i], errors.TS2345, fmt.Sprintf(
+				"Argument of type '%s' is not assignable to parameter of type '%s'.", argTypes[i].String(), arr.ElementType.String()))
+			return
 		}
 		c.addErrorWithCode(node, errors.TS2769, noOverloadMessage)
 		return

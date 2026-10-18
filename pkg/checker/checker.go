@@ -401,6 +401,10 @@ type Checker struct {
 	// used before being assigned (collectUnassignedReads).
 	unassignedReads map[*parser.Identifier]*parser.VarDeclarator
 	daCollectOnly   bool
+	// presetCallee is a `new` expression's constructor, checked as the
+	// callee of a call whose type is presetCalleeType.
+	presetCallee     parser.Expression
+	presetCalleeType types.Type
 	// inferSpreadArgs marks the spread arguments of the call being inferred.
 	inferSpreadArgs map[int]bool
 	// everWritten holds every name the program writes anywhere.

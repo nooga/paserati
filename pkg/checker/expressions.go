@@ -2826,6 +2826,41 @@ func (c *Checker) reportFirstUnassignableArgument(args []parser.Expression, gene
 	}
 }
 
+// newThroughConstructSignatures checks `new C(...)` on a declared constructor
+// type (not a class) whose construct signatures are overloaded or generic as
+// a call of those signatures: overload resolution and type argument
+// inference are the call's (tsc's resolveNewExpression shares them).
+func (c *Checker) newThroughConstructSignatures(node *parser.NewExpression, ctor types.Type) bool {
+	obj, ok := ctor.(*types.ObjectType)
+	if !ok || obj.ClassMeta != nil || len(obj.ConstructSigs()) == 0 {
+		return false
+	}
+	sigs := obj.ConstructSigs()
+	generic := false
+	for _, sig := range sigs {
+		if len(sig.TypeParameters) > 0 {
+			generic = true
+		}
+	}
+	if len(sigs) == 1 && !generic {
+		return false
+	}
+	callee := types.NewObjectType()
+	callee.Materialize()
+	callee.CallSignatures = sigs
+	call := &parser.CallExpression{Token: node.Token, Function: node.Constructor, TypeArguments: node.TypeArguments, Arguments: node.Arguments}
+	savedCallee, savedType := c.presetCallee, c.presetCalleeType
+	c.presetCallee, c.presetCalleeType = node.Constructor, callee
+	c.checkCallExpression(call)
+	c.presetCallee, c.presetCalleeType = savedCallee, savedType
+	result := call.GetComputedType()
+	if result == nil {
+		result = types.Any
+	}
+	node.SetComputedType(result)
+	return true
+}
+
 func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	if checkerDebug {
 		debugPrintf("// [Checker NewExpression] Checking new expression with %d type arguments\n", len(node.TypeArguments))
@@ -2885,6 +2920,10 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			node.SetComputedType(types.Any)
 			return
 		}
+	}
+
+	if c.newThroughConstructSignatures(node, constructorType) {
+		return
 	}
 
 	// Check if constructor is a generic type without explicit type arguments

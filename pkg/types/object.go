@@ -790,6 +790,10 @@ func (ot *ObjectType) WithCallSignature(sig *Signature) *ObjectType {
 
 // WithSimpleCallSignature adds a simple call signature (params->return) and returns the same instance for chaining
 func (ot *ObjectType) WithSimpleCallSignature(paramTypes []Type, returnType Type) *ObjectType {
+	if prev := extendableSimpleSignature(ot.CallSigs(), paramTypes, returnType); prev != nil {
+		extendWithOptionalParams(prev, paramTypes)
+		return ot
+	}
 	sig := &Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
@@ -798,6 +802,39 @@ func (ot *ObjectType) WithSimpleCallSignature(paramTypes []Type, returnType Type
 		RestParameterType: nil,
 	}
 	return ot.WithCallSignature(sig)
+}
+
+// extendableSimpleSignature returns the last of sigs when paramTypes extends
+// its parameters with the same return type: builtins write `f()`, `f(a)`,
+// `f(a, b)` for what tsc's lib declares as one signature with optional
+// trailing parameters, which (unlike the overloads) also accepts undefined.
+func extendableSimpleSignature(sigs []*Signature, paramTypes []Type, returnType Type) *Signature {
+	if len(sigs) == 0 {
+		return nil
+	}
+	prev := sigs[len(sigs)-1]
+	if prev.IsVariadic || len(prev.TypeParameters) > 0 || prev.ThisType != nil || len(paramTypes) <= len(prev.ParameterTypes) {
+		return nil
+	}
+	if prev.ReturnType != returnType && (prev.ReturnType == nil || returnType == nil || !prev.ReturnType.Equals(returnType)) {
+		return nil
+	}
+	for i, p := range prev.ParameterTypes {
+		if p != paramTypes[i] && (p == nil || paramTypes[i] == nil || !p.Equals(paramTypes[i])) {
+			return nil
+		}
+	}
+	return prev
+}
+
+func extendWithOptionalParams(sig *Signature, paramTypes []Type) {
+	optional := make([]bool, len(paramTypes))
+	copy(optional, sig.OptionalParams)
+	for i := len(sig.ParameterTypes); i < len(paramTypes); i++ {
+		optional[i] = true
+	}
+	sig.ParameterTypes = append(append([]Type(nil), sig.ParameterTypes...), paramTypes[len(sig.ParameterTypes):]...)
+	sig.OptionalParams = optional
 }
 
 // WithVariadicCallSignature adds a variadic call signature and returns the same instance for chaining
@@ -821,6 +858,10 @@ func (ot *ObjectType) WithConstructSignature(sig *Signature) *ObjectType {
 
 // WithSimpleConstructSignature adds a simple constructor signature and returns the same instance for chaining
 func (ot *ObjectType) WithSimpleConstructSignature(paramTypes []Type, returnType Type) *ObjectType {
+	if prev := extendableSimpleSignature(ot.ConstructSigs(), paramTypes, returnType); prev != nil {
+		extendWithOptionalParams(prev, paramTypes)
+		return ot
+	}
 	sig := &Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
