@@ -498,9 +498,15 @@ type Checker struct {
 	// in the REPL, bindings from earlier evaluations. A `var` redeclaring one of
 	// these merges with it, so definite assignment analysis leaves them alone.
 	preexistingGlobals map[string]bool
-	contextualParams   map[parser.Node]bool             // parameters of function arguments that a callee types
-	implicitAnyParams  map[parser.Node]implicitAnyParam // noImplicitAny candidates, reported when checking ends
-	noImplicitAny      bool                             // Mirrors --noImplicitAny; when true, TS7006/TS7019 are emitted
+	// flattenedSpreads holds object literal types that spread a union of
+	// object types into one object, where tsc distributes the spread into a
+	// union of objects.
+	flattenedSpreads map[parser.Node]bool
+	// spreadFlattened is set by mergeSpread when it flattens such a union.
+	spreadFlattened   bool
+	contextualParams  map[parser.Node]bool             // parameters of function arguments that a callee types
+	implicitAnyParams map[parser.Node]implicitAnyParam // noImplicitAny candidates, reported when checking ends
+	noImplicitAny     bool                             // Mirrors --noImplicitAny; when true, TS7006/TS7019 are emitted
 	// noImplicitThis mirrors --noImplicitThis; implicitAnyThis is set inside
 	// a function whose this is any only for want of any context (TS2683).
 	noImplicitThis  bool

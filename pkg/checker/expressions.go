@@ -342,6 +342,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 
 	// Process the object literal with contextual typing for property values
 	fields := make(map[string]types.Type)
+	spreadOptional := map[string]bool{}
 	seenKeys := make(map[string]bool)
 	seenProtoColon := false
 
@@ -364,12 +365,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 			if argType == nil {
 				argType = types.Any
 			}
-			widenedType := c.rel.GetWidenedType(argType)
-			if spreadObjType, ok := widenedType.(*types.ObjectType); ok {
-				for propName, propType := range spreadObjType.Props() {
-					fields[propName] = propType
-				}
-			}
+			c.mergeSpreadOperand(fields, spreadOptional, c.apparentType(c.rel.GetWidenedType(argType)))
 			continue
 		case *parser.ComputedPropertyName:
 			c.markContextualYield(key.Expr)
@@ -384,6 +380,8 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 		default:
 			keyName = "__UNKNOWN_KEY__"
 		}
+
+		delete(spreadOptional, keyName)
 
 		// Check for duplicate keys
 		isShorthand := false
@@ -469,6 +467,13 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 
 	// Create the result type
 	resultType := &types.ObjectType{Properties: fields}
+	c.noteFlattenedSpread(node)
+	for key := range spreadOptional {
+		if resultType.OptionalProperties == nil {
+			resultType.OptionalProperties = map[string]bool{}
+		}
+		resultType.OptionalProperties[key] = true
+	}
 	node.SetComputedType(resultType)
 	if checkerDebug {
 		debugPrintf("// [Checker ObjectLitContext] Result type: %s\n", resultType.String())
@@ -481,16 +486,44 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 // properties, and a falsy/nullish member — the short-circuit branch of the
 // `&&`/`||`/`??` that produced the union — contributes nothing, exactly as
 // it would at runtime.
-func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type) bool {
+func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, optional map[string]bool, t types.Type) bool {
+	return c.mergeSpread(fields, optional, t, false)
+}
+
+// noteFlattenedSpread records an object literal checked while
+// spreadFlattened was set, and clears the flag.
+func (c *Checker) noteFlattenedSpread(t *parser.ObjectLiteral) {
+	if !c.spreadFlattened {
+		return
+	}
+	c.spreadFlattened = false
+	if c.flattenedSpreads == nil {
+		c.flattenedSpreads = map[parser.Node]bool{}
+	}
+	c.flattenedSpreads[t] = true
+}
+
+// mergeSpread merges a spread operand's properties into fields. A property
+// the operand may lack (optional, or from an operand that may be null or
+// undefined) stays optional and keeps the earlier property's type alongside
+// its own (tsc's getSpreadType).
+func (c *Checker) mergeSpread(fields map[string]types.Type, optional map[string]bool, t types.Type, mayLack bool) bool {
 	switch spreadType := t.(type) {
 	case *types.ObjectType:
 		if checkerDebug {
 			debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadType.String())
 		}
 		for propName, propType := range spreadableProps(spreadType) {
-			fields[propName] = propType // Later properties override earlier ones
-			if checkerDebug {
-				debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
+			if !mayLack && !spreadType.IsPropertyOptional(propName) {
+				fields[propName] = propType // Later properties override earlier ones
+				delete(optional, propName)
+				continue
+			}
+			if earlier, ok := fields[propName]; ok {
+				fields[propName] = types.NewUnionType(earlier, propType)
+			} else {
+				fields[propName] = propType
+				optional[propName] = true
 			}
 		}
 		return true
@@ -500,8 +533,23 @@ func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type)
 		debugPrintf("// [Checker ObjectLit Spread] Spreading array type (no properties added)\n")
 		return true
 	case *types.UnionType:
+		// An operand that may be null or undefined spreads nothing then.
+		nullable := mayLack
+		objects := 0
 		for _, member := range spreadType.Types {
-			if !c.mergeSpreadOperand(fields, member) {
+			if member == types.Undefined || member == types.Null {
+				nullable = true
+			} else if _, isObj := member.(*types.ObjectType); isObj {
+				objects++
+			}
+		}
+		if objects > 1 {
+			// FIXME: tsc distributes the spread over the union's members
+			// ({ ...(A | B) } is { ...A } | { ...B }); this merges them.
+			c.spreadFlattened = true
+		}
+		for _, member := range spreadType.Types {
+			if !c.mergeSpread(fields, optional, member, nullable) {
 				return false
 			}
 		}
@@ -511,7 +559,7 @@ func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type)
 		// (#616); the constraint's known properties carry over when it has
 		// object shape.
 		if p := spreadType.Parameter; p != nil && p.Constraint != nil {
-			c.mergeSpreadOperand(fields, c.rel.GetWidenedType(p.Constraint))
+			c.mergeSpread(fields, optional, c.rel.GetWidenedType(p.Constraint), mayLack)
 		}
 		return true
 	case *types.LiteralType:
@@ -574,6 +622,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	seenKeys := make(map[string]bool)
 	seenProtoColon := false // Track if we've seen __proto__: value (colon syntax)
 	spreadsAny := false     // `{ ...anyValue }` is any, as in tsc
+	spreadOptional := map[string]bool{}
 
 	// --- NEW: Create preliminary object type for 'this' context ---
 	// We need to construct the object type first so function methods can reference it
@@ -608,7 +657,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if widenedType == types.Any {
 				spreadsAny = true
 			}
-			if !c.mergeSpreadOperand(fields, widenedType) {
+			if !c.mergeSpreadOperand(fields, spreadOptional, widenedType) {
 				c.addErrorWithCode(key.Argument, errors.TS2698, "Spread types may only be created from object types.")
 			}
 			// Skip the rest of the property processing for spread elements
@@ -663,6 +712,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			c.addError(prop.Key, fmt.Sprintf("unsupported object literal key type: %T", prop.Key))
 			keyName = "__UNKNOWN_KEY__"
 		}
+
+		delete(spreadOptional, keyName)
 
 		// Detect if this is shorthand property syntax ({x} instead of {x: value})
 		isShorthand := false
@@ -1078,6 +1129,15 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 	// Create the final ObjectType
 	objType := &types.ObjectType{Properties: finalFields}
+	c.noteFlattenedSpread(node)
+	for key := range spreadOptional {
+		if _, ok := finalFields[key]; ok {
+			if objType.OptionalProperties == nil {
+				objType.OptionalProperties = map[string]bool{}
+			}
+			objType.OptionalProperties[key] = true
+		}
+	}
 	// A getter without a setter is a read-only property.
 	for key := range finalFields {
 		if name, ok := strings.CutPrefix(key, "__get__"); ok {

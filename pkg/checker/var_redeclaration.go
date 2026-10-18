@@ -129,6 +129,8 @@ func (c *Checker) reportSubsequentVarDeclaration(name *parser.Identifier, first 
 		}
 	} else if !c.varTypesClearlyDiffer(first.typ, laterType, first.annotated && laterAnnotated) {
 		return
+	} else if lit, isLit := laterInitializer.(*parser.ObjectLiteral); isLit && c.flattenedSpreads[lit] {
+		return // its type merges a union spread tsc would distribute
 	}
 	c.addErrorWithCode(name, tsSubsequentVarDecl, fmt.Sprintf(
 		"Subsequent variable declarations must have the same type.  Variable '%s' must be of type '%s', but here has type '%s'.",
@@ -160,6 +162,11 @@ func (c *Checker) varTypesClearlyDiffer(a, b types.Type, bothAnnotated bool) boo
 			}
 		}
 	}
+	if objectUnionVersusObject(a, b) || objectUnionVersusObject(b, a) {
+		// Identity never reduces a union: `A | B` is not `A`, even when B is
+		// a subtype of A.
+		return true
+	}
 	ka, kb := identityKind(a), identityKind(b)
 	if ka == "" || kb == "" {
 		return false // object-like types: structural identity is beyond what we model
@@ -184,6 +191,22 @@ func (c *Checker) varTypesClearlyDiffer(a, b types.Type, bothAnnotated bool) boo
 		return !c.isAssignableWithExpansion(a, b) || !c.isAssignableWithExpansion(b, a)
 	}
 	return false
+}
+
+// objectUnionVersusObject reports whether u is a union of several object
+// types and o a single object type.
+func objectUnionVersusObject(u, o types.Type) bool {
+	union, ok := u.(*types.UnionType)
+	if !ok || len(union.Types) < 2 {
+		return false
+	}
+	for _, m := range union.Types {
+		if _, isObj := m.(*types.ObjectType); !isObj {
+			return false
+		}
+	}
+	_, isObj := o.(*types.ObjectType)
+	return isObj
 }
 
 // identityKind classifies a type for the identity comparison of a redeclared
