@@ -1698,7 +1698,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				c.checkEnumDeclaration(enumDecl)
 				nodesProcessedPass1[exprStmt] = true
 				nodesProcessedPass2[exprStmt] = true // Also mark for Pass 2 skip
-			} else if classExpr, isClassExpr := exprStmt.Expression.(*parser.ClassExpression); isClassExpr && classExpr.Name != nil {
+			} else if classExpr, isClassExpr := exprStmt.Expression.(*parser.ClassExpression); isClassExpr && classExpr.Name != nil && !c.env.HasLocalSymbol(classExpr.Name.Value) {
 				debugPrintf("// [Checker Pass 1] Processing Class Expression: %s\n", classExpr.Name.Value)
 				// Convert to ClassDeclaration for checking
 				classDecl := &parser.ClassDeclaration{
@@ -4336,6 +4336,13 @@ func (c *Checker) visit(node parser.Node) {
 			Body:           node.Body,
 			IsAbstract:     node.IsAbstract,
 		}
+		// A class expression's name is in scope only inside it.
+		outerEnv := c.env
+		if node.Name != nil {
+			if _, _, shadows := outerEnv.Resolve(node.Name.Value); shadows {
+				c.env = NewEnclosedEnvironment(outerEnv)
+			}
+		}
 		c.checkClassDeclaration(classDecl)
 		// Set the computed type on the expression node as well
 		// Class expressions evaluate to their constructor function
@@ -4344,6 +4351,7 @@ func (c *Checker) visit(node parser.Node) {
 		} else {
 			node.SetComputedType(types.Any)
 		}
+		c.env = outerEnv
 
 	// --- Enum Declarations ---
 	case *parser.EnumDeclaration:

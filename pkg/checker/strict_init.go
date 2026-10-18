@@ -34,6 +34,13 @@ func (c *Checker) checkStrictPropertyInit(node *parser.ClassDeclaration) {
 	}
 
 	assigned := collectStrictInitAssignments(node.Body)
+	// A `this` property type is the polymorphic this, which needs an
+	// initializer like any other non-undefined type.
+	savedThis := c.currentThisType
+	if savedThis == nil {
+		c.currentThisType = &types.TypeParameterType{Parameter: types.PolymorphicThis}
+	}
+	defer func() { c.currentThisType = savedThis }()
 
 	for _, prop := range node.Body.Properties {
 		if !shouldEmitStrictInit(prop) {
