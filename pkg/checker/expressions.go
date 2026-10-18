@@ -2380,7 +2380,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		case *types.EnumType:
 			// Handle index access on enum types (reverse mapping for numeric enums)
 			// Check if this is a numeric index access
-			if c.rel.IsAssignable(indexType, types.Number) {
+			if member, isMember := base.Members[indexStringValue]; isIndexStringLiteral && isMember {
+				resultType = member // E["a"] is E.a
+			} else if c.rel.IsAssignable(indexType, types.Number) {
 				// Allow reverse mapping for numeric indices (works for both numeric and heterogeneous enums)
 				resultType = types.String // Reverse mapping returns string member name
 				debugPrintf("// [Checker IndexExpr] Enum reverse mapping: %s[number] -> string\n", base.Name)
