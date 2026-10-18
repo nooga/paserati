@@ -129,6 +129,8 @@ type bindScope struct {
 	locals   bindTable // block-scoped container: let/const/class/function/enum/interface/type
 	varTable bindTable // function/file/namespace body: var, namespace
 	exports  bindTable // exported declarations (module files and namespace bodies); nil otherwise
+	// topLevel is set outside any function, class or namespace body.
+	topLevel bool
 }
 
 type bindDiag struct {
@@ -144,6 +146,7 @@ type binder struct {
 	seen      map[string]bool
 	syms      []*bindSymbol
 	src       interface{}
+	module    bool
 }
 
 func (b *binder) report(tok *lexer.Token, code, msg string) {
@@ -218,7 +221,8 @@ func bindDeclarations(program *Program) []bindDiag {
 		}
 	}
 	locals := bindTable{}
-	sc := &bindScope{locals: locals, varTable: locals}
+	sc := &bindScope{locals: locals, varTable: locals, topLevel: true}
+	b.module = isModule
 	if isModule {
 		sc.exports = bindTable{}
 	}
@@ -411,6 +415,9 @@ func (b *binder) tableFor(sc *bindScope, exported bool, own bindTable) bindTable
 }
 
 func (b *binder) bindDeclaration(s Statement, sc *bindScope, exported bool) {
+	if b.module && sc.topLevel {
+		b.checkTopLevelAwaitBindings(s)
+	}
 	if fl, sig, ok := functionDeclInfo(s); ok {
 		b.bindFunctionDecl(fl, sig, sc, exported)
 		return
@@ -460,7 +467,7 @@ func (b *binder) bindDeclaration(s Statement, sc *bindScope, exported bool) {
 		}
 	case *BlockStatement:
 		if n != nil {
-			b.bindList(n.Statements, &bindScope{locals: bindTable{}, varTable: sc.varTable})
+			b.bindList(n.Statements, &bindScope{locals: bindTable{}, varTable: sc.varTable, topLevel: sc.topLevel})
 		}
 	case *IfStatement:
 		if n != nil {
@@ -477,19 +484,19 @@ func (b *binder) bindDeclaration(s Statement, sc *bindScope, exported bool) {
 		}
 	case *ForStatement:
 		if n != nil {
-			inner := &bindScope{locals: bindTable{}, varTable: sc.varTable}
+			inner := &bindScope{locals: bindTable{}, varTable: sc.varTable, topLevel: sc.topLevel}
 			b.bindLoopHead(n.Initializer, inner)
 			b.bindBlock(n.Body, inner)
 		}
 	case *ForInStatement:
 		if n != nil {
-			inner := &bindScope{locals: bindTable{}, varTable: sc.varTable}
+			inner := &bindScope{locals: bindTable{}, varTable: sc.varTable, topLevel: sc.topLevel}
 			b.bindLoopHead(n.Variable, inner)
 			b.bindBlock(n.Body, inner)
 		}
 	case *ForOfStatement:
 		if n != nil {
-			inner := &bindScope{locals: bindTable{}, varTable: sc.varTable}
+			inner := &bindScope{locals: bindTable{}, varTable: sc.varTable, topLevel: sc.topLevel}
 			b.bindLoopHead(n.Variable, inner)
 			b.bindBlock(n.Body, inner)
 		}
@@ -512,7 +519,7 @@ func (b *binder) bindDeclaration(s Statement, sc *bindScope, exported bool) {
 	case *SwitchStatement:
 		if n != nil {
 			// The whole CaseBlock is one block scope.
-			inner := &bindScope{locals: bindTable{}, varTable: sc.varTable}
+			inner := &bindScope{locals: bindTable{}, varTable: sc.varTable, topLevel: sc.topLevel}
 			for _, c := range n.Cases {
 				if c != nil && c.Body != nil {
 					b.bindList(c.Body.Statements, inner)
@@ -526,7 +533,7 @@ func (b *binder) bindBlock(blk *BlockStatement, sc *bindScope) {
 	if blk == nil {
 		return
 	}
-	b.bindList(blk.Statements, &bindScope{locals: bindTable{}, varTable: sc.varTable})
+	b.bindList(blk.Statements, &bindScope{locals: bindTable{}, varTable: sc.varTable, topLevel: sc.topLevel})
 }
 
 // bindLoopHead declares the bindings a for/for-in/for-of head introduces.
@@ -1141,5 +1148,52 @@ func (p *Parser) finishBinding(program *Program) {
 			Msg:       d.msg,
 			ErrorCode: d.code,
 		})
+	}
+}
+
+// checkTopLevelAwaitBindings reports bindings named `await` at the top level
+// of a module, where it is reserved (tsc's checkContextualIdentifier).
+func (b *binder) checkTopLevelAwaitBindings(s Statement) {
+	check := func(id *Identifier) {
+		if id != nil && id.Value == "await" {
+			b.report(id.Token, "TS1262", "Identifier expected. 'await' is a reserved word at the top-level of a module.")
+		}
+	}
+	if fl, sig, ok := functionDeclInfo(s); ok {
+		if fl != nil {
+			check(fl.Name)
+		} else if sig != nil && !sig.Declare {
+			check(sig.Name)
+		}
+		return
+	}
+	switch n := s.(type) {
+	case *ClassDeclaration:
+		if n != nil && !n.Declare {
+			check(n.Name)
+		}
+	case *ImportEqualsDeclaration:
+		if n != nil {
+			check(n.Name)
+		}
+	case *ImportDeclaration:
+		if n == nil {
+			return
+		}
+		for _, spec := range n.Specifiers {
+			switch sp := spec.(type) {
+			case *ImportDefaultSpecifier:
+				check(sp.Local)
+			case *ImportNamedSpecifier:
+				check(sp.Local)
+			case *ImportNamespaceSpecifier:
+				check(sp.Local)
+			}
+		}
+	case *LetStatement, *ConstStatement, *VarStatement, *ArrayDestructuringDeclaration, *ObjectDestructuringDeclaration, *DeclarationGroup:
+		names, _ := declaredNameIdents(n)
+		for _, id := range names {
+			check(id)
+		}
 	}
 }
