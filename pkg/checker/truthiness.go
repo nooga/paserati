@@ -3,6 +3,7 @@ package checker
 import (
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // truthySemantics mirrors tsc's PredicateSemantics: whether an expression,
@@ -88,6 +89,10 @@ func (c *Checker) checkSyntacticTruthiness(program *parser.Program) {
 			c.addErrorAtStart(e, errors.TS2872, "This kind of expression is always truthy.")
 		case truthyNever:
 			c.addErrorAtStart(e, errors.TS2873, "This kind of expression is always falsy.")
+		}
+		// checkTruthinessOfType: void has no truthiness to test.
+		if !isNilNode(e) && e.GetComputedType() == types.Void {
+			c.addErrorAtStart(e, errors.TS1345, "An expression of type 'void' cannot be tested for truthiness.")
 		}
 	}
 	var walk func(n parser.Node)
