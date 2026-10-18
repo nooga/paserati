@@ -1017,8 +1017,74 @@ func (c *Checker) validateMemberAccess(objectType types.Type, memberName string,
 		// Check if member is accessible from current context
 		if !objType.IsAccessibleFrom(memberName, c.currentClassContext) {
 			c.createAccessError(objType, memberName, accessLocation)
+		} else if strings.HasPrefix(memberName, "#") {
+			c.checkPrivateNameShadowed(objType, memberName, accessLocation)
 		}
 	}
+}
+
+// checkPrivateNameShadowed reports TS18014 when a #name of an outer class is
+// read inside a nested class that declares the same #name: the name then
+// means the inner class's member, which the outer type does not have.
+func (c *Checker) checkPrivateNameShadowed(objType *types.ObjectType, memberName string, node parser.Node) {
+	ctx := c.currentClassContext
+	target := declaringClassName(objType, memberName)
+	if ctx == nil || target == "" || ctx.CurrentClassName == target {
+		return
+	}
+	inner := append([]string{ctx.CurrentClassName}, reversed(ctx.OuterClassNames)...)
+	for _, name := range inner {
+		if name == target {
+			return
+		}
+		if c.classDeclaresMember(name, memberName) {
+			c.addErrorWithCode(node, errors.TS18014, fmt.Sprintf("The property '%s' cannot be accessed on type '%s' within this class because it is shadowed by another private identifier with the same spelling.", memberName, objType.String()))
+			return
+		}
+	}
+}
+
+// declaringClassName is the class in objType's hierarchy that declares
+// memberName.
+func declaringClassName(objType *types.ObjectType, memberName string) string {
+	if objType.ClassMeta == nil {
+		return ""
+	}
+	if objType.ClassMeta.HasMember(memberName) {
+		return objType.ClassMeta.SourceClassName
+	}
+	for _, base := range objType.Bases() {
+		if b, ok := base.(*types.ObjectType); ok {
+			if name := declaringClassName(b, memberName); name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func reversed(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[len(names)-1-i] = n
+	}
+	return out
+}
+
+// classDeclaresMember reports whether the class named className declares
+// memberName as an instance or static member.
+func (c *Checker) classDeclaresMember(className, memberName string) bool {
+	if t, ok := c.env.ResolveType(className); ok {
+		if obj, isObj := t.(*types.ObjectType); isObj && obj.GetMemberAccessInfo(memberName) != nil {
+			return true
+		}
+	}
+	if t, _, ok := c.env.Resolve(className); ok {
+		if obj, isObj := t.(*types.ObjectType); isObj && obj.GetMemberAccessInfo(memberName) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // createAccessError creates a TypeScript-style access control error
