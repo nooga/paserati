@@ -1397,7 +1397,12 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 				expected = fmt.Sprintf("%d-%d", minTypeArgs, len(typeParams))
 			}
 			c.addErrorWithCode(callNode.TypeArguments[0], errors.TS2558, fmt.Sprintf("Expected %s type arguments, but got %d.", expected, n))
-			return nil
+			// An error call: its arguments are not related to anything.
+			erased := make(map[*types.TypeParameter]types.Type, len(typeParams))
+			for _, tp := range typeParams {
+				erased[tp] = types.Any
+			}
+			return c.substituteTypeParameters(genericSig, erased)
 		}
 
 		// Build solution from explicit type arguments
