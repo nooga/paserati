@@ -267,6 +267,10 @@ type Checker struct {
 	// stay literal on the const but widen where they initialize a mutable
 	// location.
 	wideningLiterals map[*types.LiteralType]bool
+
+	// inDestructuringAssignment is set while checking the targets of a
+	// destructuring assignment, whose identifiers are existing variables.
+	inDestructuringAssignment bool
 	// builtinEnv is the global environment the checker started from.
 	builtinEnv *Environment
 
@@ -4379,6 +4383,10 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 
 	if node.TypeAnnotation == nil {
 		c.checkDestructuringExcess(node.Properties, node.RestProperty != nil, node.Value)
+		// Literal properties of an object literal widen in the bindings.
+		if _, isLit := node.Value.(*parser.ObjectLiteral); isLit {
+			valueType = c.rel.DeeplyWidenType(valueType)
+		}
 	}
 
 	// Check if we have a type annotation

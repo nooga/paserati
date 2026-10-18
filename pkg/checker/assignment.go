@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"github.com/nooga/paserati/pkg/errors"
+	"slices"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
@@ -273,6 +274,9 @@ func (c *Checker) isThisExpression(expr parser.Expression) bool {
 
 // checkArrayDestructuringAssignment handles array destructuring assignments like [a, b, c] = expr
 func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructuringAssignment) {
+	saved := c.inDestructuringAssignment
+	c.inDestructuringAssignment = true
+	defer func() { c.inDestructuringAssignment = saved }()
 	// 1. Check RHS expression
 	c.visit(node.Value)
 	rhsType := node.Value.GetComputedType()
@@ -282,6 +286,12 @@ func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructur
 
 	// 2. Validate that RHS is array-like type
 	widenedRhsType := c.rel.GetWidenedType(rhsType)
+	if lit, ok := node.Value.(*parser.ArrayLiteral); ok {
+		// An array literal destructured in place is a tuple of its elements.
+		if tuple := c.arrayLiteralTuple(lit); tuple != nil {
+			widenedRhsType = tuple
+		}
+	}
 	var elementType types.Type
 
 	if arrayType, ok := widenedRhsType.(*types.ArrayType); ok {
@@ -294,6 +304,8 @@ func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructur
 	} else if widenedRhsType == types.Any {
 		// Allow destructuring of 'any' type
 		elementType = types.Any
+	} else if c.isGeneratorType(widenedRhsType) || c.isSpreadableIterableType(widenedRhsType) {
+		elementType = c.getSpreadElementType(widenedRhsType)
 	} else {
 		// RHS is not array-like
 		c.reportNotIterable(node.Value, rhsType)
@@ -333,8 +345,11 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 
 		var targetType types.Type
 		if element.IsRest {
-			// Rest element gets an array of remaining tuple elements
-			if i < len(tupleType.ElementTypes) {
+			// Rest element gets the remaining tuple elements
+			if tupleType.RestElementType == nil && !slices.Contains(tupleType.OptionalElements, true) {
+				remaining := tupleType.ElementTypes[min(i, len(tupleType.ElementTypes)):]
+				targetType = &types.TupleType{ElementTypes: append([]types.Type(nil), remaining...)}
+			} else if i < len(tupleType.ElementTypes) {
 				// Create an array type with union of remaining elements
 				remainingTypes := tupleType.ElementTypes[i:]
 				if len(remainingTypes) == 0 {
@@ -398,6 +413,9 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 
 // checkObjectDestructuringAssignment handles object destructuring assignments like {a, b} = expr
 func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestructuringAssignment) {
+	saved := c.inDestructuringAssignment
+	c.inDestructuringAssignment = true
+	defer func() { c.inDestructuringAssignment = saved }()
 	// 1. Check RHS expression
 	c.visit(node.Value)
 	rhsType := node.Value.GetComputedType()
@@ -577,4 +595,24 @@ func (c *Checker) dropMemberNarrowings(name string) {
 			}
 		}
 	}
+}
+
+// arrayLiteralTuple is the tuple type of an array literal without spreads or
+// holes, with widened element types; nil otherwise.
+func (c *Checker) arrayLiteralTuple(lit *parser.ArrayLiteral) *types.TupleType {
+	elems := make([]types.Type, 0, len(lit.Elements))
+	for _, e := range lit.Elements {
+		if isNilNode(e) {
+			return nil
+		}
+		if _, spread := e.(*parser.SpreadElement); spread {
+			return nil
+		}
+		t := e.GetComputedType()
+		if t == nil {
+			return nil
+		}
+		elems = append(elems, c.rel.GetWidenedType(t))
+	}
+	return &types.TupleType{ElementTypes: elems}
 }

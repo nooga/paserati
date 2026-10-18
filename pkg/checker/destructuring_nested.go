@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -239,6 +240,21 @@ func (c *Checker) checkIdentifierTarget(target *parser.Identifier, expectedType 
 				finalType = memberType
 				break
 			}
+		}
+	}
+
+	// A destructuring assignment target is an existing variable: the value
+	// must fit its declared type.
+	if c.inDestructuringAssignment {
+		if declared, _, ok := c.env.Resolve(target.Value); ok && declared != nil && declared != types.Any &&
+			!c.rel.IsAssignable(finalType, declared) {
+			c.addErrorWithCode(target, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", finalType.String(), declared.String()))
+			target.SetComputedType(declared)
+			return
+		} else if ok && declared != nil && declared != types.Any {
+			// The variable keeps its declared type.
+			target.SetComputedType(finalType)
+			return
 		}
 	}
 
