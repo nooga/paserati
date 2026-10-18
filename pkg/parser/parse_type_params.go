@@ -70,6 +70,7 @@ func (p *Parser) skipBalancedPattern() {
 // type or method signature.
 type typeSigParams struct {
 	params   []Expression
+	names    []*Identifier // the named parameters, for duplicate checks
 	optional []bool
 	rest     Expression
 	// this is the type of an explicit `this` parameter, which is not part of
@@ -89,6 +90,11 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 		p.addError(p.curToken, "expected '(' for parameter list")
 		return res, false
 	}
+	defer func() {
+		if ok && p.tscDiagnostics {
+			reportDuplicateParams(p, res.names)
+		}
+	}()
 	if p.peekTokenIs(lexer.RPAREN) {
 		p.nextToken()
 		return res, true
@@ -156,6 +162,9 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 			p.nextToken()
 		case p.isTypeParamNameToken(p.curToken):
 			isIdent := p.curTokenIs(lexer.IDENT)
+			if p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) || (isIdent && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN))) {
+				res.names = append(res.names, &Identifier{Token: p.curToken, Value: p.curToken.Literal})
+			}
 			if p.peekTokenIs(lexer.COLON) {
 				p.nextToken()
 				p.nextToken()

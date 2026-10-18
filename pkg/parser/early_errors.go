@@ -762,6 +762,11 @@ func (w *eeWalker) params(params []*Parameter, rest *RestParameter, directive *l
 	}
 	w.collect = saved
 
+	if w.p.tscDiagnostics {
+		// tsc's binder reports every declaration of a repeated parameter.
+		reportDuplicateParams(w.p, names)
+		return
+	}
 	if noDuplicates || !simple {
 		seen := make(map[string]bool, len(names))
 		for _, id := range names {
@@ -770,6 +775,29 @@ func (w *eeWalker) params(params []*Parameter, rest *RestParameter, directive *l
 			}
 			seen[id.Value] = true
 		}
+	}
+}
+
+// reportDuplicateParams reports TS2300 on each declaration of a name that
+// a parameter list declares more than once.
+func reportDuplicateParams(p *Parser, names []*Identifier) {
+	first := make(map[string]*Identifier, len(names))
+	reported := make(map[string]bool)
+	for _, id := range names {
+		if id == nil || id.Token == nil {
+			continue
+		}
+		prev, seen := first[id.Value]
+		if !seen {
+			first[id.Value] = id
+			continue
+		}
+		msg := "Duplicate identifier '" + id.Value + "'."
+		if !reported[id.Value] {
+			p.addSemanticErrorWithCode(prev.Token, errors.TS2300, msg)
+			reported[id.Value] = true
+		}
+		p.addSemanticErrorWithCode(id.Token, errors.TS2300, msg)
 	}
 }
 

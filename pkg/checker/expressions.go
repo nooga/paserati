@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
@@ -3099,37 +3100,52 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 }
 
 func (c *Checker) checkDuplicateTypeAssertionProperties(targetType parser.Expression) {
-	objectType, ok := targetType.(*parser.ObjectTypeExpression)
-	if !ok {
+	if objectType, ok := targetType.(*parser.ObjectTypeExpression); ok {
+		c.checkDuplicateTypeLiteralMembers(objectType)
+	}
+}
+
+// checkDuplicateTypeLiteralMembers reports TS2300 on every declaration of a
+// property a type literal declares more than once (method signatures are
+// overloads). Numeric names are compared by value.
+func (c *Checker) checkDuplicateTypeLiteralMembers(objectType *parser.ObjectTypeExpression) {
+	if c.checkedTypeLiterals == nil {
+		c.checkedTypeLiterals = make(map[*parser.ObjectTypeExpression]bool)
+	}
+	if c.checkedTypeLiterals[objectType] {
 		return
 	}
+	c.checkedTypeLiterals[objectType] = true
 
-	seen := make(map[string]parser.Expression)
-	seenName := make(map[string]*parser.Identifier)
+	isMethod := func(t parser.Expression) bool {
+		fn, ok := t.(*parser.FunctionTypeExpression)
+		return ok && fn.IsMethodSignature
+	}
+	seen := make(map[string]*parser.ObjectTypeProperty)
 	reported := make(map[string]bool)
 	for _, prop := range objectType.Properties {
-		if prop.Name == nil || prop.IsCallSignature || prop.IsConstructSignature || prop.IsIndexSignature || prop.IsComputedProperty {
+		if prop.Name == nil || prop.IsCallSignature || prop.IsConstructSignature || prop.IsIndexSignature {
 			continue
 		}
-
-		if previousType, exists := seen[prop.Name.Value]; exists {
-			if _, previousIsFunction := previousType.(*parser.FunctionTypeExpression); previousIsFunction {
-				if _, currentIsFunction := prop.Type.(*parser.FunctionTypeExpression); currentIsFunction {
-					continue
-				}
-			}
-			// TypeScript flags every occurrence of the duplicated identifier,
-			// including the first one (only once).
-			if !reported[prop.Name.Value] {
-				c.addErrorWithCode(seenName[prop.Name.Value], errors.TS2300, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
-				reported[prop.Name.Value] = true
-			}
-			c.addErrorWithCode(prop.Name, errors.TS2300, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
+		name := prop.Name.Value
+		if prop.Name.Token != nil && prop.Name.Token.Type == lexer.NUMBER {
+			name = parser.CanonicalNumericName(name)
+		}
+		first, exists := seen[name]
+		if !exists {
+			seen[name] = prop
 			continue
 		}
-
-		seen[prop.Name.Value] = prop.Type
-		seenName[prop.Name.Value] = prop.Name
+		if isMethod(first.Type) && isMethod(prop.Type) {
+			continue
+		}
+		msg := fmt.Sprintf("Duplicate identifier '%s'.", name)
+		// Every occurrence is flagged, the first one once.
+		if !reported[name] {
+			c.addErrorWithCode(first.Name, errors.TS2300, msg)
+			reported[name] = true
+		}
+		c.addErrorWithCode(prop.Name, errors.TS2300, msg)
 	}
 }
 

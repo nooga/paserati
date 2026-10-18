@@ -592,6 +592,7 @@ type Checker struct {
 	generatorNextTyped        bool                 // the current generator's next type is known
 	argumentGenerators        map[parser.Node]bool // bodies of generator functions passed as arguments
 	implicitAnyMembers        map[parser.Node]bool // member names reported TS7008
+	checkedTypeLiterals       map[*parser.ObjectTypeExpression]bool
 }
 
 type deferredComputedKeyCheck struct {

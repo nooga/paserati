@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
@@ -675,6 +676,15 @@ func (b *binder) bindTypeParams(tps []*TypeParameter) {
 
 // --- Classes ------------------------------------------------------------------
 
+// displayName is the member's name as tsc prints it in a duplicate
+// diagnostic: a numeric key as written.
+func (m *classMember) displayName() string {
+	if m.tok != nil && m.tok.Type == lexer.NUMBER {
+		return m.tok.Literal
+	}
+	return m.name
+}
+
 type classMember struct {
 	pos      int
 	tok      *lexer.Token
@@ -710,6 +720,9 @@ func (b *binder) bindClassDecl(cd *ClassDeclaration, sc *bindScope, exported boo
 func propertyKeyName(key Expression) (name string, tok *lexer.Token, private bool) {
 	switch k := key.(type) {
 	case *Identifier:
+		if k.Token != nil && k.Token.Type == lexer.NUMBER {
+			return CanonicalNumericName(k.Value), k.Token, false
+		}
 		return k.Value, k.Token, false
 	case *StringLiteral:
 		if looksNumeric(k.Value) {
@@ -729,6 +742,16 @@ func propertyKeyName(key Expression) (name string, tok *lexer.Token, private boo
 		}
 	}
 	return "", nil, false
+}
+
+// CanonicalNumericName is the property name a numeric literal key denotes
+// (its ToString): `1.0`, `1.` and `1.00` all name "1".
+func CanonicalNumericName(literal string) string {
+	f, err := strconv.ParseFloat(strings.ReplaceAll(literal, "_", ""), 64)
+	if err != nil {
+		return literal
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
 }
 
 func looksNumeric(s string) bool {
@@ -884,10 +907,10 @@ func (b *binder) bindClassBody(body *ClassBody, sym *bindSymbol, ambient bool) {
 		prevIsMethod, isMethod := prev&dmMethod != 0, meaning&dmMethod != 0
 		if prevIsMethod || isMethod {
 			if prevIsMethod != isMethod {
-				b.report(it.tok, "TS2300", fmt.Sprintf("Duplicate identifier '%s'.", it.name))
+				b.report(it.tok, "TS2300", fmt.Sprintf("Duplicate identifier '%s'.", it.displayName()))
 			}
 		} else if prev&meaning&^dmPrivateStatic != 0 {
-			b.report(it.tok, "TS2300", fmt.Sprintf("Duplicate identifier '%s'.", it.name))
+			b.report(it.tok, "TS2300", fmt.Sprintf("Duplicate identifier '%s'.", it.displayName()))
 		} else {
 			names[it.name] = prev | meaning
 		}
@@ -936,7 +959,7 @@ func (b *binder) bindInterfaceMembers(n *InterfaceDeclaration, sym *bindSymbol) 
 		var name string
 		var tok *lexer.Token
 		if p.Name != nil {
-			name, tok = p.Name.Value, p.Name.Token
+			name, tok, _ = propertyKeyName(p.Name)
 		} else if p.ComputedName != nil {
 			name, tok, _ = propertyKeyName(&ComputedPropertyName{Expr: p.ComputedName})
 		}

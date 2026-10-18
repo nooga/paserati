@@ -908,7 +908,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	// Identifier/strict-mode early errors need the whole tree (strictness and
 	// function kinds are only known once bodies are parsed); skip them when
 	// parsing already failed, since the tree may be partial.
-	if len(p.errors) == 0 {
+	if !p.hasSyntaxErrors() {
 		p.checkEarlyErrors(program, initialStrict)
 	}
 	p.safeFinishBinding(program)

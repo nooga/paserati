@@ -275,6 +275,17 @@ func (p *Parser) addGrammarErrorWithCode(tok *lexer.Token, code, msg string) {
 // addSemanticErrorWithCode reports a diagnostic tsc raises from the checker's
 // plain error() (not a grammar check): it is neither suppressed by parse errors
 // nor counted as one.
+// hasSyntaxErrors reports whether parsing recorded an error other than a
+// semantic one (which leaves the tree whole).
+func (p *Parser) hasSyntaxErrors() bool {
+	for _, e := range p.errors {
+		if se, ok := e.(*errors.SyntaxError); !ok || !se.Semantic {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Parser) addSemanticErrorWithCode(tok *lexer.Token, code, msg string) {
 	before := len(p.errors)
 	p.addErrorWithCode(tok, code, msg)

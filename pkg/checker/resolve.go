@@ -1186,6 +1186,7 @@ func strictSignatureCopies(sigs []*types.Signature, typeParams []*types.TypePara
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
 func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
 	c.checkImplicitAnyTypeLiteralMembers(node.Properties)
+	c.checkDuplicateTypeLiteralMembers(node)
 	properties := make(map[string]types.Type)
 	var propertyOrder []string
 	propertyDocs := make(map[string]string)
