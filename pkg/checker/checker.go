@@ -272,6 +272,12 @@ type Checker struct {
 	// destructuring assignment, whose identifiers are existing variables.
 	inDestructuringAssignment bool
 
+	// expandoNames maps the names of function declarations and of consts
+	// initialized by a function, whose types property assignments may
+	// extend, to the property names assigned through them.
+	expandoNames map[string]map[string]bool
+	expandoProps map[expandoKey]bool
+
 	// inferTopParam and inferSig describe the parameter and the
 	// signature an inference is collecting candidates for: a literal argument
 	// inferred for a parameter that is the type parameter itself keeps its
@@ -1255,6 +1261,7 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
 	c.constAliases = collectConstAliases(program)
+	c.expandoNames = collectExpandoNames(program)
 	c.source = program.Source           // Cache source for error reporting
 	c.errors = []errors.PaseratiError{} // Reset errors
 	c.reportedErrors = nil

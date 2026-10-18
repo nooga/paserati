@@ -1259,6 +1259,9 @@ func (c *Checker) instantiateAliasReferenceUncached(ref *types.GenericTypeAliasF
 }
 
 func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
+	if len(c.expandoNames) > 0 {
+		c.declareExpandoRead(node)
+	}
 	// Check if there's a narrowed type for this member expression
 	memberKey := expressionToNarrowingKey(node)
 	if memberKey != "" {

@@ -11,6 +11,15 @@ import (
 )
 
 func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
+	expando, expandoName := c.expandoAssignmentTarget(node)
+	if expando != nil {
+		// The property exists from its first assignment on; its type is
+		// filled in below from the assigned value.
+		if _, has := expando.Props()[expandoName]; !has {
+			expando.WithProperty(expandoName, types.Any)
+		}
+	}
+
 	// Visit LHS (Identifier, IndexExpr, MemberExpr)
 	c.visit(node.Left)
 	lhsType := node.Left.GetComputedType()
@@ -26,11 +35,27 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			contextType = declared
 		}
 	}
-	c.visitWithContext(node.Value, &ContextualType{ExpectedType: contextType})
+	if expando != nil {
+		contextType = nil
+	}
+	if contextType != nil {
+		c.visitWithContext(node.Value, &ContextualType{ExpectedType: contextType})
+	} else {
+		c.visit(node.Value)
+	}
 	rhsType := node.Value.GetComputedType()
 	if rhsType == nil {
 		rhsType = types.Any
 	} // Handle nil from error
+	if expando != nil {
+		widened := c.rel.DeeplyWidenType(rhsType)
+		if prev := expando.Props()[expandoName]; prev != nil && prev != types.Any {
+			widened = types.NewUnionType(prev, widened)
+		}
+		expando.WithProperty(expandoName, widened)
+		node.SetComputedType(rhsType)
+		return
+	}
 
 	// Widen types for operator checks
 	widenedLhsType := c.rel.GetWidenedType(lhsType) // Needed for operator checks AND assignability target
@@ -620,4 +645,142 @@ func (c *Checker) arrayLiteralTuple(lit *parser.ArrayLiteral) *types.TupleType {
 		elems = append(elems, c.rel.GetWidenedType(t))
 	}
 	return &types.TupleType{ElementTypes: elems}
+}
+
+// collectExpandoNames returns the names of function declarations and of
+// consts initialized by a function or arrow function anywhere in program.
+func collectExpandoNames(program *parser.Program) map[string]map[string]bool {
+	names := map[string]map[string]bool{}
+	assigned := map[string]map[string]bool{}
+	declare := func(name string) {
+		if names[name] == nil {
+			names[name] = map[string]bool{}
+		}
+	}
+	var walk func(n parser.Node)
+	walk = func(n parser.Node) {
+		switch d := n.(type) {
+		case *parser.ExportDefaultDeclaration:
+			if fn, ok := d.Declaration.(*parser.FunctionLiteral); ok && d.IsDeclaration && fn.Name != nil {
+				declare(fn.Name.Value)
+			}
+		case *parser.NamespaceDeclaration:
+			if d.Body != nil {
+				walk(d.Body)
+			}
+			return
+		case *parser.ExpressionStatement:
+			if fn, ok := d.Expression.(*parser.FunctionLiteral); ok && fn.Name != nil {
+				declare(fn.Name.Value)
+			}
+			if ns, ok := d.Expression.(*parser.NamespaceDeclaration); ok {
+				walk(ns)
+				return
+			}
+			if as, ok := d.Expression.(*parser.AssignmentExpression); ok && as.Operator == "=" {
+				if m, ok := as.Left.(*parser.MemberExpression); ok {
+					obj, ok1 := m.Object.(*parser.Identifier)
+					prop, ok2 := m.Property.(*parser.Identifier)
+					if ok1 && ok2 {
+						if assigned[obj.Value] == nil {
+							assigned[obj.Value] = map[string]bool{}
+						}
+						assigned[obj.Value][prop.Value] = true
+					}
+				}
+			}
+		case *parser.ConstStatement:
+			for _, decl := range d.Declarations {
+				switch decl.Value.(type) {
+				case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
+					if decl.Name != nil {
+						declare(decl.Name.Value)
+					}
+				}
+			}
+		}
+		forEachChildInScope(n, walk)
+	}
+	walk(program)
+	for name, props := range names {
+		for p := range assigned[name] {
+			props[p] = true
+		}
+	}
+	return names
+}
+
+// declareExpandoRead gives a function's expando property a placeholder
+// before its assignment is checked, for reads checked earlier (a hoisted
+// function body reading its own expando property).
+func (c *Checker) declareExpandoRead(node *parser.MemberExpression) {
+	obj, ok := node.Object.(*parser.Identifier)
+	if !ok {
+		return
+	}
+	prop, ok := node.Property.(*parser.Identifier)
+	if !ok || !c.expandoNames[obj.Value][prop.Value] {
+		return
+	}
+	t, _, found := c.env.Resolve(obj.Value)
+	if !found {
+		return
+	}
+	ot, ok := t.(*types.ObjectType)
+	if !ok || !ot.IsCallable() || ot.IsClassConstructor() {
+		return
+	}
+	if _, has := ot.Props()[prop.Value]; !has {
+		ot.WithProperty(prop.Value, types.Any)
+		if c.expandoProps == nil {
+			c.expandoProps = map[expandoKey]bool{}
+		}
+		c.expandoProps[expandoKey{ot, prop.Value}] = true
+	}
+}
+
+// expandoAssignmentTarget returns the function type and property name of an
+// expando assignment `f.prop = value`, where f is a function declaration or
+// a const initialized by a function and prop is not one of its declared
+// members.
+func (c *Checker) expandoAssignmentTarget(node *parser.AssignmentExpression) (*types.ObjectType, string) {
+	if node.Operator != "=" || len(c.expandoNames) == 0 {
+		return nil, ""
+	}
+	m, ok := node.Left.(*parser.MemberExpression)
+	if !ok {
+		return nil, ""
+	}
+	obj, ok := m.Object.(*parser.Identifier)
+	if !ok {
+		return nil, ""
+	}
+	prop, ok := m.Property.(*parser.Identifier)
+	if !ok {
+		return nil, ""
+	}
+	if c.expandoNames[obj.Value] == nil {
+		return nil, ""
+	}
+	t, _, found := c.env.Resolve(obj.Value)
+	if !found {
+		return nil, ""
+	}
+	ot, ok := t.(*types.ObjectType)
+	if !ok || !ot.IsCallable() || ot.IsClassConstructor() {
+		return nil, ""
+	}
+	if pt, has := ot.Props()[prop.Value]; has && pt != types.Any && !c.expandoProps[expandoKey{ot, prop.Value}] {
+		return nil, ""
+	}
+	if c.expandoProps == nil {
+		c.expandoProps = map[expandoKey]bool{}
+	}
+	c.expandoProps[expandoKey{ot, prop.Value}] = true
+	return ot, prop.Value
+}
+
+type expandoKey struct {
+	fn   *types.ObjectType
+	name string
 }
