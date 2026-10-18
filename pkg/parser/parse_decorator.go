@@ -24,6 +24,7 @@ func (p *Parser) parseDecoratedStatement() Statement {
 			p.addError(p.curToken, "expected 'class' after 'abstract' in decorated statement")
 			return nil
 		}
+		p.abstractClassPending = true
 		stmt := p.parseClassDeclaration()
 		if classDecl, ok := stmt.(*ClassDeclaration); ok {
 			classDecl.IsAbstract = true
@@ -70,6 +71,7 @@ func (p *Parser) parseDecoratedExport(decorators []*Decorator) Statement {
 
 		// Parse class expression (may be anonymous for export default)
 		// parseClassExpression expects curToken to be 'class'
+		p.abstractClassPending = isAbstract
 		classExpr := p.parseClassExpression()
 		if ce, ok := classExpr.(*ClassExpression); ok && ce != nil {
 			ce.Decorators = decorators
@@ -102,6 +104,7 @@ func (p *Parser) parseDecoratedExportedClass(exportToken *lexer.Token, decorator
 		return nil
 	}
 
+	p.abstractClassPending = isAbstract
 	classDecl := p.parseClassDeclaration()
 	if cd, ok := classDecl.(*ClassDeclaration); ok {
 		cd.Decorators = decorators

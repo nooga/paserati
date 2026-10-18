@@ -42,6 +42,8 @@ func (p *Parser) isValidMethodName() bool {
 // Syntax: class ClassName [extends SuperClass] { classBody }
 func (p *Parser) parseClassDeclaration() Statement {
 	classToken := p.curToken
+	isAbstractClass := p.abstractClassPending
+	p.abstractClassPending = false
 
 	// All parts of a class, including its name and heritage, are strict mode code.
 	savedStrict := p.strictMode
@@ -140,6 +142,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 	}
 
 	p.classBodyName = name.Value
+	p.classBodyAbstract = isAbstractClass
 	body := p.parseClassBody()
 	if body == nil {
 		return nil
@@ -254,6 +257,8 @@ func isWellKnownSymbol(name string) bool {
 // Syntax: class [ClassName] [extends SuperClass] { classBody }
 func (p *Parser) parseClassExpression() Expression {
 	classToken := p.curToken
+	isAbstractClass := p.abstractClassPending
+	p.abstractClassPending = false
 
 	// All parts of a class, including its name and heritage, are strict mode code.
 	savedStrict := p.strictMode
@@ -348,6 +353,7 @@ func (p *Parser) parseClassExpression() Expression {
 	}
 
 	p.classBodyName = "(Anonymous class)"
+	p.classBodyAbstract = isAbstractClass
 	if name != nil {
 		p.classBodyName = name.Value
 	}
@@ -427,8 +433,24 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 	}
 
+	// An abstract member of a class not declared abstract (tsc's
+	// checkGrammarModifiers): reported once the member's kind is known.
+	abstractClass := p.classBodyAbstract
+	var abstractTok *lexer.Token
+	flushAbstract := func() {
+		if abstractTok == nil {
+			return
+		}
+		if len(properties) > nProps {
+			p.addGrammarErrorWithCode(abstractTok, "TS1253", "Abstract properties can only appear within an abstract class.")
+		} else {
+			p.addGrammarErrorWithCode(abstractTok, "TS1244", "Abstract methods can only appear within an abstract class.")
+		}
+		abstractTok = nil
+	}
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		flushDoc()
+		flushAbstract()
 		nMethods, nProps, nMethodSigs = len(methods), len(properties), len(methodSigs)
 		docStart = p.curToken.StartPos
 		// Skip semicolons
@@ -544,6 +566,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 					p.addError(p.curToken, "'abstract' modifier must precede 'override' modifier.")
 				}
 				isAbstract = true
+				if !abstractClass && p.tscDiagnostics {
+					abstractTok = p.curToken
+				}
 				p.nextToken()
 			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride && !isFieldName() {
 				if seenAsync {
@@ -823,6 +848,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 	}
 
 	flushDoc()
+	flushAbstract()
 	if !p.curTokenIs(lexer.RBRACE) {
 		if !p.canRecover() {
 			p.addError(p.curToken, "expected '}' to close class body")
@@ -1009,9 +1035,17 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Consume semicolon
 		}
+		hasBody := !ended && p.peekTokenIs(lexer.LBRACE)
+		if hasBody && p.canRecover() {
+			// tsc parses the body; its checker reports it (TS1245).
+			p.addSemanticErrorWithCode(methodToken, "TS1245", "Method '"+methodName.String()+"' cannot have an implementation because it is marked abstract.")
+			p.nextToken()
+			p.parseFunctionBody(parameters, restParameter, bodyMethod)
+			p.nextToken()
+		}
 
 		sig := &MethodSignature{
-			HasBody:              !ended && p.peekTokenIs(lexer.LBRACE),
+			HasBody:              hasBody,
 			Token:                methodToken,
 			Key:                  methodName,
 			TypeParameters:       typeParameters,

@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"fmt"
+
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 )
@@ -244,4 +246,86 @@ func (p *Parser) expectPeekBraceRecover() bool {
 	}
 	p.peekError(lexer.LBRACE)
 	return true
+}
+
+// startsParameter is tsc's isStartOfParameter, narrowed to the tokens that
+// can begin a parameter's name, modifiers or decorators.
+func (p *Parser) startsParameter(tok *lexer.Token) bool {
+	switch tok.Type {
+	case lexer.SPREAD, lexer.AT, lexer.LBRACKET, lexer.LBRACE, lexer.THIS, lexer.IDENT, lexer.PRIVATE_IDENT:
+		return true
+	}
+	return isIdentifierOrKeywordToken(tok)
+}
+
+// parseParameterListRecover parses a parameter list (cur is the '(') with
+// tsc's parseDelimitedList(Parameters) recovery: a missing ',' is reported and
+// the next parameter parsed, a token that cannot start a parameter is
+// reported (TS1138) and skipped, or ends the list when an enclosing construct
+// can use it. On return cur is the ')' (synthesized if missing).
+func (p *Parser) parseParameterListRecover(allowParameterProperties bool) ([]*Parameter, *RestParameter, error) {
+	params := []*Parameter{}
+	var rest *RestParameter
+	first := true
+	for !p.peekTokenIs(lexer.RPAREN) && !p.peekTokenIs(lexer.EOF) {
+		if !p.startsParameter(p.peekToken) {
+			p.addErrorWithCode(p.peekToken, "TS1138", "Parameter declaration expected.")
+			if p.peekTokenIs(lexer.RBRACKET) || listAbortsAt(p.peekToken) {
+				break
+			}
+			p.nextToken()
+			continue
+		}
+		p.nextToken()
+		var decorators []*Decorator
+		if p.curTokenIs(lexer.AT) {
+			decorators = p.parseDecoratorList()
+		}
+		if p.curTokenIs(lexer.SPREAD) {
+			r := p.parseRestParameter()
+			if r == nil {
+				return nil, nil, fmt.Errorf("failed to parse rest parameter")
+			}
+			if p.peekTokenIs(lexer.QUESTION) {
+				p.nextToken()
+				p.addGrammarErrorWithCode(p.curToken, "TS1047", "A rest parameter cannot be optional.")
+			}
+			if p.peekTokenIs(lexer.ASSIGN) {
+				if r.Name != nil {
+					p.addGrammarErrorWithCode(r.Name.Token, "TS1048", "A rest parameter cannot have an initializer.")
+				}
+				p.nextToken()
+				p.nextToken()
+				p.parseExpression(COMMA)
+			}
+			if p.peekTokenIs(lexer.COMMA) {
+				p.addGrammarErrorWithCode(r.Token, "TS1014", "A rest parameter must be last in a parameter list.")
+			}
+			if rest == nil {
+				rest = r
+			}
+		} else {
+			param, err := p.parseOneParameter(allowParameterProperties, first, decorators)
+			if err != nil {
+				return nil, nil, err
+			}
+			params = append(params, param)
+		}
+		first = false
+		if p.peekTokenIs(lexer.COMMA) {
+			p.nextToken()
+			continue
+		}
+		if p.peekTokenIs(lexer.RPAREN) || p.peekTokenIs(lexer.RBRACKET) || p.peekTokenIs(lexer.EOF) {
+			break
+		}
+		p.addErrorWithCode(p.peekToken, errors.TS1005, "',' expected.")
+		if !p.startsParameter(p.peekToken) && listAbortsAt(p.peekToken) {
+			break
+		}
+	}
+	if !p.expectPeekRecover(lexer.RPAREN) {
+		return nil, nil, fmt.Errorf("expected closing parenthesis after parameters")
+	}
+	return params, rest, nil
 }

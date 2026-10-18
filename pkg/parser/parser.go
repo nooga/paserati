@@ -72,6 +72,10 @@ type Parser struct {
 	// classBodyName names the class whose body is about to be parsed, for
 	// diagnostics that quote it.
 	classBodyName string
+	// abstractClassPending is set just before parsing a class that is
+	// declared abstract; classBodyAbstract says whether the body being
+	// parsed belongs to one.
+	abstractClassPending, classBodyAbstract bool
 
 	curToken  *lexer.Token
 	peekToken *lexer.Token
@@ -1396,6 +1400,7 @@ func (p *Parser) parseAbstractClassDeclarationStatement() Statement {
 	}
 
 	// Parse the class as a declaration (ClassDeclaration)
+	p.abstractClassPending = true
 	classDeclStmt := p.parseClassDeclaration()
 	if classDeclStmt == nil {
 		return &ExpressionStatement{
@@ -3529,6 +3534,9 @@ func (p *Parser) parseFunctionSignatureInternal(allowOmittedReturn bool) *Functi
 // rest parameter that is not last are accepted here, and reported as the
 // checker/grammar diagnostics tsc gives for them.
 func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Parameter, *RestParameter, error) {
+	if p.canRecover() {
+		return p.parseParameterListRecover(allowParameterProperties)
+	}
 	parameters := []*Parameter{}
 	var restParam *RestParameter
 
@@ -3647,6 +3655,12 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 		if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) || p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) || p.peekTokenIs(lexer.ASSIGN) {
 			break
 		}
+		// tsc's nextTokenIsOnSameLineAndCanFollowModifier: otherwise the
+		// keyword is the parameter's name.
+		if p.canRecover() && (p.peekToken.Line > p.curToken.Line || !(p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) ||
+			p.peekTokenIs(lexer.ASTERISK) || p.peekTokenIs(lexer.SPREAD) || isLiteralPropertyNameToken(p.peekToken))) {
+			break
+		}
 		if modTok == nil {
 			modTok = p.curToken
 		}
@@ -3691,8 +3705,15 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 	// Allow AWAIT as parameter name in non-async functions
 	isAwaitParam := p.curTokenIs(lexer.AWAIT) && p.inAsyncFunction == 0
 	// Allow contextual keywords as parameter names (type, set, get, from, of, as, async, static, readonly, etc.)
-	isContextualKeyword := p.isContextualKeywordAsIdent()
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam && !isAwaitParam && !isContextualKeyword {
+	isContextualKeyword := p.isContextualKeywordAsIdent() || p.canRecover() && p.curTokenIsIdentLike()
+	missingName := false
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam && !isAwaitParam && !isContextualKeyword && p.canRecover() {
+		// tsc's parseIdentifierOrPattern: a missing name, the token is left.
+		if !p.reportMissingBindingIdentifier() {
+			return nil, fmt.Errorf("missing parameter name")
+		}
+		missingName = true
+	} else if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam && !isAwaitParam && !isContextualKeyword {
 		msg := fmt.Sprintf("expected identifier, 'this', or destructuring pattern for parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
@@ -3700,6 +3721,8 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 	}
 
 	switch {
+	case missingName:
+		param.Name = p.missingExpression()
 	case p.curTokenIs(lexer.THIS):
 		// Explicit 'this' parameter. tsc accepts it anywhere syntactically (its
 		// checker requires it to come first: TS2680).
@@ -13008,6 +13031,7 @@ func (p *Parser) parseExportDefaultDeclaration(exportToken *lexer.Token) *Export
 	// export default abstract class C {}
 	if p.curTokenIs(lexer.ABSTRACT) && p.peekTokenIs(lexer.CLASS) && p.peekToken.Line == p.curToken.Line {
 		p.nextToken() // 'class'
+		p.abstractClassPending = true
 		cls, ok := p.prefixParseFns[lexer.CLASS]().(*ClassExpression)
 		if !ok || cls == nil {
 			return nil
