@@ -495,6 +495,7 @@ func (w *eeWalker) expr(e Expression, c eeCtx) {
 				w.p.addErrorWithCode(t.Token, "TS2524", "'await' expressions cannot be used in a parameter initializer.")
 			}
 			w.p.addErrorWithCode(w.p.tokenAfter(t.Token), "TS1109", "Expression expected.")
+			t.AwaitMissingOperand = true
 			return
 		}
 		w.ident(t, c)

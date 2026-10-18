@@ -104,6 +104,9 @@ func (c *Checker) preRegisterBlockScoped(stmts []parser.Statement) {
 // reportUnresolvedOrTDZ reports an identifier that did not resolve: a name that
 // is declared later in this scope is a TDZ error, anything else is TS2304/2552.
 func (c *Checker) reportUnresolvedOrTDZ(node *parser.Identifier) {
+	if node.AwaitMissingOperand {
+		return
+	}
 	if info := c.blockScopedInfoFor(node.Value); info != nil && node.Token != nil {
 		if c.functionNestingDepth > info.fnDepth || c.deferredContextDepth > 0 {
 			return // used inside a function that runs later: the declaration will be there

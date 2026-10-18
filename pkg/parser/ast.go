@@ -278,6 +278,9 @@ type Identifier struct {
 	Value          string // The name of the identifier
 	IsConstant     bool   // Populated by Type Checker
 	IsFromWith     bool   // True if this identifier comes from a with object (populated by Type Checker)
+	// AwaitMissingOperand marks an `await` that tsc parses as an await
+	// expression with no operand (TS1109), so it names no binding.
+	AwaitMissingOperand bool
 }
 
 func (i *Identifier) expressionNode()      {}
