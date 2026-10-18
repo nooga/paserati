@@ -413,6 +413,10 @@ type Checker struct {
 	// indexSigNodes maps a declared index signature to its declaration, for
 	// reporting the first of a duplicate pair.
 	indexSigNodes map[*types.IndexSignature]parser.Node
+	// ternaryContexts carries a conditional expression's contextual type
+	// to its arms.
+	ternaryContexts map[*parser.TernaryExpression]*ContextualType
+	ternaryArms     map[*parser.ArrowFunctionLiteral]bool
 	// presetCallee is a `new` expression's constructor, checked as the
 	// callee of a call whose type is presetCalleeType.
 	presetCallee     parser.Expression
@@ -4024,7 +4028,19 @@ func (c *Checker) visit(node parser.Node) {
 			c.env = narrowedEnv // Use narrowed environment for consequence
 		}
 
-		c.visit(node.Consequence)
+		// Both arms take the conditional expression's contextual type.
+		armContext := c.ternaryContexts[node]
+		if armContext != nil {
+			if c.ternaryArms == nil {
+				c.ternaryArms = map[*parser.ArrowFunctionLiteral]bool{}
+			}
+			for _, arm := range []parser.Expression{node.Consequence, node.Alternative} {
+				if af, ok := arm.(*parser.ArrowFunctionLiteral); ok {
+					c.ternaryArms[af] = true
+				}
+			}
+		}
+		c.visitWithContext(node.Consequence, armContext)
 		consType := node.Consequence.GetComputedType()
 
 		// Restore original environment before checking alternative
@@ -4038,7 +4054,7 @@ func (c *Checker) visit(node parser.Node) {
 			c.env = invertedEnv // Use inverted narrowed environment for alternative
 		}
 
-		c.visit(node.Alternative)
+		c.visitWithContext(node.Alternative, armContext)
 		altType := node.Alternative.GetComputedType()
 
 		// Restore original environment after alternative
@@ -5058,6 +5074,13 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		default:
 			c.visit(node)
 		}
+	case *parser.TernaryExpression:
+		if c.ternaryContexts == nil {
+			c.ternaryContexts = map[*parser.TernaryExpression]*ContextualType{}
+		}
+		c.ternaryContexts[node] = context
+		c.visit(node)
+		delete(c.ternaryContexts, node)
 	default:
 		// For other node types, use regular visit for now
 		c.visit(node)
@@ -5267,7 +5290,18 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				expectedReturnTypeForBodyCheck = nil // Signal that we want inference
 				debugPrintf("// [Checker ArrowFuncContext] Using return type inference (nil expected return type)\n")
 			}
+			// An arrow that is an arm of a conditional expression is not
+			// elaborated against the contextual return type (tsc reports the
+			// conditional's union instead): its return type is inferred, and
+			// taken as the contextual one when it fits.
+			armReturn := expectedReturnTypeForBodyCheck
+			if c.ternaryArms[node] && armReturn != nil && node.ReturnTypeAnnotation == nil {
+				expectedReturnTypeForBodyCheck = nil
+			}
 			finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBodyCheck)
+			if armReturn != nil && expectedReturnTypeForBodyCheck == nil && finalReturnType != nil && c.rel.IsAssignable(finalReturnType, armReturn) {
+				finalReturnType = armReturn
+			}
 			if checkerDebug {
 				debugPrintf("// [Checker ArrowFuncContext] Inferred final return type: %s\n", finalReturnType.String())
 			}
