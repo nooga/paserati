@@ -15,6 +15,9 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 		c.addError(node, "function signature must have a name")
 		return
 	}
+	if node.ReturnTypeAnnotation == nil && !node.HasBody {
+		c.reportImplicitAnyReturn(node.Name, node.Name.Value)
+	}
 
 	functionName := node.Name.Value
 	ctx := &FunctionCheckContext{

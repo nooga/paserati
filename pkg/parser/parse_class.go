@@ -971,13 +971,14 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 
 	// Check if this is a method signature (ends with semicolon) or implementation (has body)
 	// Abstract methods must be signatures (no implementation)
-	if p.consumeSignatureEnd() || isAbstract {
+	if ended := p.consumeSignatureEnd(); ended || isAbstract {
 		// This is a method signature, not an implementation
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Consume semicolon
 		}
 
 		sig := &MethodSignature{
+			HasBody:              !ended && p.peekTokenIs(lexer.LBRACE),
 			Token:                methodToken,
 			Key:                  methodName,
 			TypeParameters:       typeParameters,

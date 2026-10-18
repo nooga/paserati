@@ -3470,6 +3470,7 @@ type FunctionSignature struct {
 	RestParameter        *RestParameter // Optional rest parameter (...args)
 	ReturnTypeAnnotation Expression     // Return type annotation (required for overloads)
 	Declare              bool           // True for ambient `declare function` signatures
+	HasBody              bool           // a body followed anyway (an error), parsed apart
 }
 
 func (fs *FunctionSignature) statementNode()       {}
@@ -3859,6 +3860,7 @@ type MethodSignature struct {
 	IsProtected          bool
 	IsAbstract           bool // Abstract method modifier
 	IsOverride           bool // Override method modifier
+	HasBody              bool // an abstract method written with a body (an error)
 }
 
 func (ms *MethodSignature) statementNode()       {}

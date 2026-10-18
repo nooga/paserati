@@ -26,6 +26,22 @@ func (c *Checker) reportImplicitAnyMember(nameNode parser.Node, name string) {
 	c.addErrorWithCode(nameNode, errors.TS7008, fmt.Sprintf("Member '%s' implicitly has an 'any' type.", name))
 }
 
+// reportImplicitAnyReturn reports TS7010 for a declaration with no body and
+// no return type annotation: its return type is any.
+func (c *Checker) reportImplicitAnyReturn(nameNode *parser.Identifier, name string) {
+	if !c.noImplicitAny || c.inDeclarationFile() || nameNode == nil {
+		return
+	}
+	if c.implicitAnyMembers == nil {
+		c.implicitAnyMembers = make(map[parser.Node]bool)
+	}
+	if c.implicitAnyMembers[nameNode] {
+		return
+	}
+	c.implicitAnyMembers[nameNode] = true
+	c.addErrorWithCode(nameNode, errors.TS7010, fmt.Sprintf("'%s', which lacks return-type annotation, implicitly has an 'any' return type.", name))
+}
+
 func (c *Checker) checkImplicitAnyClassMembers(node *parser.ClassDeclaration) {
 	if !c.noImplicitAny || node == nil || node.Body == nil || c.inDeclarationFile() {
 		return
@@ -49,6 +65,14 @@ func (c *Checker) checkImplicitAnyClassMembers(node *parser.ClassDeclaration) {
 	assignedStatic := map[string]bool{}
 	for _, block := range node.Body.StaticInitializers {
 		walkForThisAssignments(block, assignedStatic)
+	}
+	for _, m := range node.Body.MethodSigs {
+		if m == nil || m.ReturnTypeAnnotation != nil || m.Kind != "method" || m.HasBody {
+			continue
+		}
+		if id, ok := m.Key.(*parser.Identifier); ok && !(ambient && (m.IsPrivate || strings.HasPrefix(id.Value, "#"))) {
+			c.reportImplicitAnyReturn(id, id.Value)
+		}
 	}
 	for _, prop := range node.Body.Properties {
 		if prop == nil || prop.TypeAnnotation != nil || prop.Value != nil || prop.IsAccessor {
@@ -104,7 +128,17 @@ func (c *Checker) checkImplicitAnyInterfaceMembers(props []*parser.InterfaceProp
 	if !c.noImplicitAny || c.inDeclarationFile() {
 		return
 	}
+	accessorMarker := false // the previous member was a split-off get/set
 	for _, p := range props {
+		afterMarker := accessorMarker
+		accessorMarker = p != nil && p.Type == nil && !p.IsMethod && p.Name != nil && p.Name.Token != nil &&
+			(p.Name.Token.Type == lexer.GET || p.Name.Token.Type == lexer.SET)
+		if p != nil && p.IsMethod && p.Name != nil {
+			if fn, ok := p.Type.(*parser.FunctionTypeExpression); ok && fn.ReturnType == nil && !afterMarker {
+				c.reportImplicitAnyReturn(p.Name, p.Name.Value)
+			}
+			continue
+		}
 		if p == nil || p.Type != nil || p.IsMethod || p.IsIndexSignature || p.IsConstructorSignature || p.IsComputedProperty || p.Name == nil {
 			continue
 		}

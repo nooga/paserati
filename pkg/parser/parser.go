@@ -3430,6 +3430,7 @@ func (p *Parser) parseFunctionSignatureInternal(allowOmittedReturn bool) *Functi
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken()
 		}
+		sig.HasBody = p.peekTokenIs(lexer.LBRACE)
 		return sig
 	}
 

@@ -171,6 +171,7 @@ const (
 	TS2302  = "TS2302"  // static members cannot reference class type parameters
 	TS2783  = "TS2783"  // property specified more than once (spread overwrites)
 	TS7008  = "TS7008"  // Member implicitly has an 'any' type
+	TS7010  = "TS7010"  // implicitly any return type
 	TS7022  = "TS7022"  // implicitly any: referenced in its own initializer
 	TS7057  = "TS7057"  // yield implicitly results in any
 	TS18014 = "TS18014" // private identifier shadowed by an inner class
