@@ -439,6 +439,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isProtected := false
 		isAbstract := false
 		isOverride := false
+		isAccessor := false
 		isAsync := false
 		asyncStart := -1 // byte offset of this member's 'async', if any
 		var asyncTok *lexer.Token
@@ -536,6 +537,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				// Decorators proposal auto-accessor: `accessor x = v`.
 				// FIXME: parsed as a plain field; the getter/setter pair backed
 				// by a private slot is not implemented.
+				isAccessor = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.ASYNC) && !isAsync && !isFieldName() {
 				isAsync = true
@@ -772,6 +774,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 					// It's a property
 					property := p.parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected, isOverride, isDeclare)
 					if property != nil {
+						property.IsAccessor = isAccessor
 						attachDecorators(property)
 						properties = append(properties, property)
 					}

@@ -389,6 +389,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
 	c.checkClassIndexConstraints(node.Body, instanceType, constructorType)
+	c.checkClassInitializationOrder(node.Name.Value, node.Body, instanceType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
 	instanceType.DisplayName, constructorType.DisplayName = node.Name.Value, "typeof "+node.Name.Value
@@ -611,6 +612,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	}
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
 	c.checkClassIndexConstraints(node.Body, instanceType, constructorType)
+	c.checkClassInitializationOrder(node.Name.Value, node.Body, instanceType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
 	instanceType.GenericName = node.Name.Value

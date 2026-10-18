@@ -123,6 +123,7 @@ const (
 	TS2628  = "TS2628"  // Cannot assign to 'X' because it is an enum
 	TS2629  = "TS2629"  // Cannot assign to 'X' because it is a class
 	TS2631  = "TS2631"  // Cannot assign to 'X' because it is a namespace
+	TS2729  = "TS2729"  // Property 'X' is used before its initialization
 	TS2777  = "TS2777"  // The operand of an increment or decrement operator may not be an optional property access
 	TS2779  = "TS2779"  // The left-hand side of an assignment expression may not be an optional property access
 	TS2630  = "TS2630"  // Cannot assign to 'X' because it is a function

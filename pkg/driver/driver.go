@@ -125,6 +125,17 @@ func (p *Paserati) SetAlwaysStrict(strict bool) {
 	p.compiler.SetAlwaysStrict(strict)
 }
 
+// SetUseDefineForClassFields mirrors --useDefineForClassFields.
+func (p *Paserati) SetUseDefineForClassFields(on bool) {
+	p.checker.SetUseDefineForClassFields(on)
+}
+
+// SetEmitStandardClassFields mirrors tsc's emitStandardClassFields
+// (useDefineForClassFields with a target of ES2022 or later).
+func (p *Paserati) SetEmitStandardClassFields(on bool) {
+	p.checker.SetEmitStandardClassFields(on)
+}
+
 // SetIsModule tells the checker the source is a module, which selects TS1214
 // over TS1212 when reporting a strict-mode reserved word.
 func (p *Paserati) SetIsModule(isModule bool) {

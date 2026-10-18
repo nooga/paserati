@@ -396,13 +396,20 @@ type Checker struct {
 	nonArrowFunctionDepth  int  // >0 = inside a non-arrow function, where `arguments` exists
 	crossFunctionTargets   bool // a loop, switch or label encloses the current function, so jumps there cross a function boundary
 	allowTopLevelReturn    bool
-	skipStrictPropertyInit bool               // When true, TS2564 is not emitted (strict-init opt-out)
-	skipDefiniteAssignment bool               // When true, TS2454 is not emitted (definite-assignment opt-out)
-	allowUnreachableCode   bool               // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
-	tscCompat              bool               // Suppress diagnostics beyond what tsc reports; see SetTscCompatibleDiagnostics
-	alwaysStrict           bool               // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
-	classNameNode          *parser.Identifier // class being declared, for diagnostics reported on its name
-	strictNullChecks       bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
+	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
+	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
+	allowUnreachableCode   bool // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
+	tscCompat              bool // Suppress diagnostics beyond what tsc reports; see SetTscCompatibleDiagnostics
+	alwaysStrict           bool // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
+	// noDefineForClassFields mirrors --useDefineForClassFields false (the
+	// default for targets before ES2022); TS2729 depends on it.
+	noDefineForClassFields bool
+	// noStandardClassFields is set when class fields are not emitted as ES2022
+	// fields (useDefineForClassFields off, or a target before ES2022): a
+	// parameter property then exists before field initializers run.
+	noStandardClassFields bool
+	classNameNode         *parser.Identifier // class being declared, for diagnostics reported on its name
+	strictNullChecks      bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
 	// reportedRelationDiagnostics dedupes relation diagnostics reported at the
 	// same position more than once (see addErrorAtStart).
 	reportedRelationDiagnostics map[string]bool
@@ -668,6 +675,18 @@ func newRelation(globalEnv *Environment) *types.Relation {
 // and every conformance baseline is generated that way.
 func (c *Checker) SetAlwaysStrict(strict bool) {
 	c.alwaysStrict = strict
+}
+
+// SetUseDefineForClassFields mirrors --useDefineForClassFields (on by default,
+// as for TypeScript's default target).
+func (c *Checker) SetUseDefineForClassFields(on bool) {
+	c.noDefineForClassFields = !on
+}
+
+// SetEmitStandardClassFields mirrors tsc's emitStandardClassFields
+// (useDefineForClassFields with a target of ES2022 or later).
+func (c *Checker) SetEmitStandardClassFields(on bool) {
+	c.noStandardClassFields = !on
 }
 
 // SetIsModule tells the checker the source is a module. Modules are strict

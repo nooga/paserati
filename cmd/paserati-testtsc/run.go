@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,6 +151,8 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(opts))
 	pas.SetTscCompatibleDiagnostics(true)
 	pas.SetAlwaysStrict(alwaysStrictEnabled(opts))
+	pas.SetUseDefineForClassFields(useDefineForClassFieldsEnabled(opts))
+	pas.SetEmitStandardClassFields(useDefineForClassFieldsEnabled(opts) && targetLevel(opts) >= 2022)
 	return pas
 }
 
@@ -181,3 +184,34 @@ func strictFunctionTypesEnabled(o Options) bool { return o.strictFamily("strictf
 
 // alwaysStrictEnabled gates TS1212. Explicit directive, then `strict`, default on.
 func alwaysStrictEnabled(o Options) bool { return o.strictFamily("alwaysstrict") }
+
+// useDefineForClassFieldsEnabled: an explicit directive, else on for targets
+// from ES2022 (and for the default target, ES2025).
+func useDefineForClassFieldsEnabled(o Options) bool {
+	if v, set := o.boolOpt("usedefineforclassfields"); set {
+		return v
+	}
+	return targetLevel(o) >= 2022
+}
+
+// targetLevel is the variant's --target as a year (esnext and the default,
+// ES2025, count as current); es3/es5 are 3 and 5.
+func targetLevel(o Options) int {
+	t, ok := o.singleValue("target")
+	if !ok {
+		return 2025
+	}
+	switch t = strings.ToLower(t); {
+	case t == "es3":
+		return 3
+	case t == "es5":
+		return 5
+	case t == "es6":
+		return 2015
+	case strings.HasPrefix(t, "es20"):
+		if y, err := strconv.Atoi(t[2:]); err == nil {
+			return y
+		}
+	}
+	return 9999
+}
