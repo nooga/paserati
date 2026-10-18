@@ -592,6 +592,19 @@ type Checker struct {
 type deferredComputedKeyCheck struct {
 	expr parser.Expression
 	env  *Environment
+	// classCtx sees the private names of the class whose member key this
+	// is, and of the classes around it.
+	classCtx *types.AccessContext
+}
+
+// computedKeyClassContext is the access context of a computed member key of
+// class className: inside the class for private names.
+func (c *Checker) computedKeyClassContext(className string) *types.AccessContext {
+	saved := c.currentClassContext
+	c.setClassContext(className, types.AccessContextExternal)
+	ctx := c.currentClassContext
+	c.currentClassContext = saved
+	return ctx
 }
 
 // NewChecker creates a new type checker with standard built-in types.
@@ -2221,12 +2234,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// so that const/let declarations earlier in the file are already in scope.
 	if len(c.deferredComputedKeyChecks) > 0 {
 		savedEnv := c.env
+		savedCtx := c.currentClassContext
 		for _, check := range c.deferredComputedKeyChecks {
 			c.env = check.env
+			c.currentClassContext = check.classCtx
 			c.visit(check.expr)
 			c.validateComputedPropertyNameType(check.expr, check.expr)
 			c.reportThisInComputedName(check.expr)
 		}
+		c.currentClassContext = savedCtx
 		c.env = savedEnv
 		c.deferredComputedKeyChecks = nil
 	}

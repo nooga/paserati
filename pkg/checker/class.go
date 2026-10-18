@@ -859,7 +859,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	// Static members' computed keys are checked like instance ones.
 	deferStaticKey := func(key parser.Expression) {
 		if computedKey, isComputed := key.(*parser.ComputedPropertyName); isComputed {
-			c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+			c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
 		}
 	}
 	for _, method := range body.Methods {
@@ -886,12 +886,12 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	for _, method := range body.Methods {
 		if method.Kind == "getter" && !method.IsStatic {
 			if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
 			}
 			getters[c.extractPropertyName(method.Key)] = method
 		} else if method.Kind == "setter" && !method.IsStatic {
 			if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
 			}
 			setters[c.extractPropertyName(method.Key)] = method
 		}
@@ -1006,7 +1006,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 			// Check if this is a computed property
 			if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
 				// Try to extract constant property name
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific method
@@ -1040,7 +1040,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	for _, methodSig := range body.MethodSigs {
 		if !methodSig.IsStatic {
 			if computedKey, isComputed := methodSig.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
 			}
 			methodName := c.extractPropertyName(methodSig.Key)
 			c.setClassContext(className, types.AccessContextInstanceMethod)
@@ -1093,7 +1093,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 			// Check if this is a computed property
 			if computedKey, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
 				// Try to extract constant property name
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific property
