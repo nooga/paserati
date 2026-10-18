@@ -322,6 +322,15 @@ func (c *Checker) checkTopLevelVarLikeDeclarators(declarations []*parser.VarDecl
 				continue
 			}
 		}
+		if isVar && d.TypeAnnotation == nil && value != nil {
+			// A var clashing with a class or enum of the same name (TS2300,
+			// from the binder) is a symbol of its own: its initializer is
+			// not related to the class.
+			if kind := globalEnv.ResolveBindingKind(d.Name.Value); kind == BindingClass || kind == BindingEnum {
+				c.visit(value)
+				continue
+			}
+		}
 		c.checkVarLikeInitializerAndRefine(d.Name, d.TypeAnnotation, value, globalEnv, flow)
 		if isVar {
 			if t, _, ok := globalEnv.Resolve(d.Name.Value); ok {
