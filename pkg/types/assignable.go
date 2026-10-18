@@ -341,6 +341,12 @@ func (r *Relation) isAssignable(source, target Type) bool {
 	// GenericType handling - for generic methods in interfaces
 	// When target is a GenericType (generic method signature) and source is an ObjectType (method implementation)
 	if targetGeneric, ok := target.(*GenericType); ok {
+		// Signatures that declare their type parameters relate as written:
+		// the target's type parameters stay opaque to a non-generic source
+		// (tsc's canonical signature).
+		if sourceObj, ok := source.(*ObjectType); ok && (sourceObj.IsCallable() || len(sourceObj.ConstructSigs()) > 0) && sigsDeclareTypeParams(targetGeneric.Body) {
+			return r.isAssignable(source, targetGeneric.Body)
+		}
 		// A constructable source against a generic construct signature.
 		if sourceObj, ok := source.(*ObjectType); ok && len(sourceObj.ConstructSigs()) > 0 {
 			if bodyObj, ok := targetGeneric.Body.(*ObjectType); ok && len(bodyObj.ConstructSigs()) > 0 {
@@ -687,9 +693,18 @@ func (r *Relation) isAssignable(source, target Type) bool {
 }
 
 func (r *Relation) signaturesRelated(sourceSigs, targetSigs []*Signature) bool {
+	// tsc's signaturesRelatedTo keeps type parameters only when one
+	// signature is compared with one; overload sets relate erased.
+	erase := len(sourceSigs) > 1 || len(targetSigs) > 1
 	for _, targetSig := range targetSigs {
 		matched := false
+		if erase {
+			targetSig = eraseSignatureTypeParams(targetSig)
+		}
 		for _, sourceSig := range sourceSigs {
+			if erase {
+				sourceSig = eraseSignatureTypeParams(sourceSig)
+			}
 			if r.isSignatureAssignable(sourceSig, targetSig) {
 				matched = true
 				break
