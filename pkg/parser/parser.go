@@ -3930,8 +3930,10 @@ func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
 	p.nextToken() // Move to first property
 
 	// Parse first property/rest
+	var restTok *lexer.Token
 	if p.curTokenIs(lexer.SPREAD) {
 		// Rest property
+		restTok = p.curToken
 		restProperty = p.parseParameterDestructuringElement()
 		if restProperty == nil {
 			return nil
@@ -3950,7 +3952,12 @@ func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
 	}
 
 	// Parse subsequent properties
-	for p.peekTokenIs(lexer.COMMA) && restProperty == nil {
+	for p.peekTokenIs(lexer.COMMA) && (restProperty == nil || p.canRecover()) {
+		if restProperty != nil {
+			// tsc parses on past a rest element that is not last; its
+			// checker reports it.
+			p.addSemanticErrorWithCode(restTok, "TS2462", "A rest element must be last in a destructuring pattern.")
+		}
 		p.nextToken() // Consume ','
 
 		// Check for trailing comma
@@ -3962,15 +3969,21 @@ func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
 
 		if p.curTokenIs(lexer.SPREAD) {
 			// Rest property (must be last)
-			restProperty = p.parseParameterDestructuringElement()
-			if restProperty == nil {
+			spreadTok := p.curToken
+			elem := p.parseParameterDestructuringElement()
+			if elem == nil {
 				return nil
 			}
-			if !restProperty.IsRest {
+			if !elem.IsRest {
 				p.addError(p.curToken, "expected rest element after '...'")
 				return nil
 			}
-			break // Rest must be last
+			if restProperty == nil {
+				restProperty, restTok = elem, spreadTok
+			}
+			if !p.canRecover() {
+				break // Rest must be last
+			}
 		} else {
 			// Regular property
 			prop := p.parseParameterDestructuringProperty()
@@ -5524,6 +5537,16 @@ func (p *Parser) parseGroupedExpression() Expression {
 		var restParam *RestParameter
 		p.speculatively(func() { params, restParam, _ = p.parseParameterList() }) // Consumes up to and including ')'
 
+		// tsc's isParenthesizedArrowFunctionExpression is certain for `()`
+		// followed by '{' or ':', and for a parameter list using parameter-only
+		// syntax; it then parses an arrow function whose '=>' may be missing.
+		definite := params != nil && p.curTokenIs(lexer.RPAREN) && p.canRecover() && arrowParamsAreDefinite(params, restParam)
+		if definite && p.peekTokenIs(lexer.LBRACE) && len(params) == 0 && restParam == nil {
+			p.errors = p.errors[:startErrors]
+			p.expectPeekRecover(lexer.ARROW)
+			return p.parseArrowFunctionBodyAndFinish(startCur.StartPos, nil, params, restParam, nil, false)
+		}
+
 		// Case 1: Arrow function with params, NO return type annotation: (a, b) => body
 		if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.ARROW) {
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found '=>' next.", params)
@@ -5558,6 +5581,12 @@ func (p *Parser) parseGroupedExpression() Expression {
 
 				// Pass the correctly parsed returnTypeAnnotation.
 				// parseArrowFunctionBodyAndFinish expects curToken to be '=>'.
+				return p.parseArrowFunctionBodyAndFinish(startCur.StartPos, nil, params, restParam, returnTypeAnnotation, false)
+			}
+
+			if definite && returnTypeAnnotation != nil {
+				p.errors = p.errors[:startErrors]
+				p.expectPeekRecover(lexer.ARROW)
 				return p.parseArrowFunctionBodyAndFinish(startCur.StartPos, nil, params, restParam, returnTypeAnnotation, false)
 			}
 
@@ -6029,6 +6058,9 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 // or `async`), for its source text.
 func (p *Parser) parseArrowFunctionBodyAndFinish(start int, typeParams []*TypeParameter, params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression, isAsync bool) Expression {
 	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v, restParam=%v, isAsync=%v", p.curToken.Literal, p.curToken.Type, params, restParam, isAsync)
+	if restParam != nil && restParam.NotLast {
+		p.addGrammarErrorWithCode(restParam.Token, "TS1014", "A rest parameter must be last in a parameter list.")
+	}
 	// ArrowFunction: ArrowParameters [no LineTerminator here] =>
 	if p.prevToken != nil && p.curTokenIs(lexer.ARROW) && p.curToken.Line > p.prevToken.Line {
 		p.addError(p.curToken, "Line terminator not permitted before arrow")
@@ -6089,6 +6121,9 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 		return nil, nil, fmt.Errorf("expected '(")
 	}
 	debugPrint("parseParameterList: Starting, cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+	if p.tscDiagnostics {
+		return p.parseArrowParameterListTsc()
+	}
 
 	// Handle empty list: () => ...
 	if p.peekTokenIs(lexer.RPAREN) {
@@ -6533,14 +6568,21 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 		if spreadElement, ok := pair.Key.(*SpreadElement); ok {
 			// This is a rest property: ...rest
 			if destructure.RestProperty != nil {
+				if p.canRecover() {
+					continue // the first one was reported as not last
+				}
 				p.addError(objectLit.Token, "multiple rest elements in object destructuring pattern")
 				return nil
 			}
 
 			// Rest property must be the last property
 			if i != len(objectLit.Properties)-1 {
-				p.addError(objectLit.Token, "rest element must be last element in object destructuring pattern")
-				return nil
+				if !p.canRecover() {
+					p.addError(objectLit.Token, "rest element must be last element in object destructuring pattern")
+					return nil
+				}
+				// tsc's checker reports it and checks the rest of the pattern.
+				p.addSemanticErrorWithCode(spreadElement.Token, "TS2462", "A rest element must be last in a destructuring pattern.")
 			}
 
 			// Validate that the spread argument is an identifier or member expression
@@ -6565,8 +6607,12 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 					IsRest:  true,
 				}
 			default:
-				p.addError(objectLit.Token, "rest element target must be an identifier or member expression")
-				return nil
+				if !p.canRecover() {
+					p.addError(objectLit.Token, "rest element target must be an identifier or member expression")
+					return nil
+				}
+				p.addSemanticErrorWithCode(spreadElement.Token, "TS2701", "The target of an object rest assignment must be a variable or a property access.")
+				destructure.RestProperty = &DestructuringElement{Target: target, IsRest: true}
 			}
 			continue
 		}
@@ -6909,13 +6955,22 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 				return nil, nil
 			}
 
-			restProperty = &DestructuringElement{
+			elem := &DestructuringElement{
 				Target: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
 				IsRest: true,
+			}
+			if restProperty == nil {
+				restProperty = elem
 			}
 
 			// Rest property must be last
 			if !p.peekTokenIs(lexer.RBRACE) {
+				if p.canRecover() && p.peekTokenIs(lexer.COMMA) {
+					// tsc parses on; its checker reports the rest element.
+					p.addSemanticErrorWithCode(p.prevToken, "TS2462", "A rest element must be last in a destructuring pattern.")
+					p.nextToken()
+					continue
+				}
 				p.addError(p.curToken, "rest element must be last element in object destructuring pattern")
 				return nil, nil
 			}
@@ -11967,6 +12022,17 @@ func (p *Parser) parseTypeofTypeExpression() Expression {
 		}
 		tte.Import = imp
 		path = []string{}
+	} else if !p.curTokenIsIdentLike() && !p.curTokenIs(lexer.THIS) && p.canRecover() && p.isIdentifierNameToken(p.curToken) {
+		// tsc's parseEntityName(allowReservedWords): any keyword names it.
+		path = []string{p.curToken.Literal}
+	} else if !p.curTokenIsIdentLike() && !p.curTokenIs(lexer.THIS) && p.canRecover() {
+		// A missing name; the token is left for what follows.
+		p.addErrorWithCode(p.curToken, errors.TS1003, "Identifier expected.")
+		if !p.stepBackForMissing() {
+			return nil
+		}
+		// The query has no name to resolve: stand in an error type.
+		return p.missingExpression()
 	} else if !p.curTokenIsIdentLike() && !p.curTokenIs(lexer.THIS) {
 		p.addError(p.curToken, "expected identifier after 'typeof'")
 		return nil
@@ -12764,7 +12830,7 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			// `import { type as osType } from 'node:os'`) fail to parse,
 			// since 'as' isn't a valid binding name to land on afterward.
 			isTypeOnlySpecifier := false
-			if p.curToken.Type == lexer.TYPE && isImportBindingName(p.peekToken.Type) && p.peekToken.Type != lexer.AS {
+			if p.curToken.Type == lexer.TYPE && (isImportBindingName(p.peekToken.Type) && p.peekToken.Type != lexer.AS || p.peekToken.Type == lexer.STRING) {
 				isTypeOnlySpecifier = true
 				p.nextToken() // consume 'type'
 			}

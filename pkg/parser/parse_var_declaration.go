@@ -74,7 +74,26 @@ func (p *Parser) parseVariableDeclarationList(declToken *lexer.Token, kind varDe
 // appending to items. Precondition: curToken is the last token of the preceding
 // declarator.
 func (p *Parser) parseMoreDeclListItems(items []declListItem, declToken *lexer.Token, kind varDeclKind) ([]declListItem, bool) {
-	for p.peekTokenIs(lexer.COMMA) {
+	for {
+		if !p.peekTokenIs(lexer.COMMA) {
+			if !p.canRecover() || p.declListEnds() {
+				break
+			}
+			// tsc's parseDelimitedList: the comma is missing. Go on with the
+			// next declarator if one starts here; otherwise the list ends
+			// (the statement's own ';' error lands at the same place).
+			p.addErrorWithCode(p.peekToken, errors.TS1005, "',' expected.")
+			if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.LBRACKET) && !p.peekTokenIs(lexer.LBRACE) {
+				break
+			}
+			p.nextToken()
+			item, ok := p.parseDeclListItem(declToken, kind, ",")
+			if !ok {
+				return nil, false
+			}
+			items = append(items, item)
+			continue
+		}
 		commaToken := p.peekToken
 		p.nextToken() // Consume ','
 
@@ -347,4 +366,14 @@ func appendFlatteningGroups(list []Statement, stmt Statement) []Statement {
 		return append(list, group.Declarations...)
 	}
 	return append(list, stmt)
+}
+
+// declListEnds is tsc's isVariableDeclaratorListTerminator for the token
+// after a declarator: a place a semicolon can go, 'in'/'of', or '=>'.
+func (p *Parser) declListEnds() bool {
+	switch p.peekToken.Type {
+	case lexer.SEMICOLON, lexer.RBRACE, lexer.EOF, lexer.IN, lexer.OF, lexer.ARROW:
+		return true
+	}
+	return p.peekToken.Line > p.curToken.Line
 }

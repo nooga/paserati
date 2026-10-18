@@ -107,13 +107,25 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 		}
 
 		if p.curTokenIs(lexer.SPREAD) {
+			restTok := p.curToken
 			rest := p.parseRestParameterType()
 			if rest == nil {
 				return res, false
 			}
-			res.rest = rest
+			if res.rest == nil {
+				res.rest = rest
+			}
 			if p.curTokenIs(lexer.RPAREN) {
 				return res, true
+			}
+			if p.peekTokenIs(lexer.COMMA) && p.tscDiagnostics {
+				// tsc parses on; its checker reports the misplaced rest.
+				if p.canRecover() {
+					p.addGrammarErrorWithCode(restTok, "TS1014", "A rest parameter must be last in a parameter list.")
+				}
+				p.nextToken()
+				p.nextToken()
+				continue
 			}
 			if !p.expectPeek(lexer.RPAREN) {
 				return res, false

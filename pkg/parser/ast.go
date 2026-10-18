@@ -390,6 +390,9 @@ type RestParameter struct {
 	Pattern        Expression   // Optional destructuring pattern (e.g., ...[x, y] or ...{a, b})
 	TypeAnnotation Expression   // Optional type annotation (e.g., 'string[]' in ...args: string[])
 	ComputedType   types.Type   // Stores the resolved type (should be array type)
+	// NotLast marks a rest parameter that more parameters follow (TS1014),
+	// accepted by a speculative parse that reports it only once it commits.
+	NotLast bool
 }
 
 func (rp *RestParameter) expressionNode()      {}

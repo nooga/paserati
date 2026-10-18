@@ -329,3 +329,63 @@ func (p *Parser) parseParameterListRecover(allowParameterProperties bool) ([]*Pa
 	}
 	return params, rest, nil
 }
+
+// arrowParamsAreDefinite reports whether a parenthesized list can only be
+// arrow function parameters: it is empty, or it uses syntax no parenthesized
+// expression has (a rest parameter, a type annotation, an optional marker).
+func arrowParamsAreDefinite(params []*Parameter, rest *RestParameter) bool {
+	if len(params) == 0 || rest != nil {
+		return true
+	}
+	for _, prm := range params {
+		if prm.TypeAnnotation != nil || prm.Optional {
+			return true
+		}
+	}
+	return false
+}
+
+// parseArrowParameterListTsc parses a parenthesized arrow parameter list (cur
+// is the '(') the way tsc's parseParameters does, so that a list tsc accepts
+// with grammar errors (a rest parameter that is not last) still reads as
+// parameters. It fails, without recovery, on anything else; the caller is
+// speculating.
+func (p *Parser) parseArrowParameterListTsc() ([]*Parameter, *RestParameter, error) {
+	params := []*Parameter{}
+	var rest *RestParameter
+	if p.peekTokenIs(lexer.RPAREN) {
+		p.nextToken()
+		return params, nil, nil
+	}
+	for first := true; ; first = false {
+		p.nextToken()
+		if p.curTokenIs(lexer.SPREAD) {
+			r := p.parseRestParameter()
+			if r == nil {
+				return nil, nil, fmt.Errorf("failed to parse rest parameter")
+			}
+			if rest == nil {
+				rest = r
+				r.NotLast = p.peekTokenIs(lexer.COMMA)
+			}
+		} else {
+			param, err := p.parseOneParameter(false, first, nil)
+			if err != nil {
+				return nil, nil, err
+			}
+			params = append(params, param)
+		}
+		if !p.peekTokenIs(lexer.COMMA) {
+			break
+		}
+		p.nextToken()
+		if p.peekTokenIs(lexer.RPAREN) {
+			p.nextToken()
+			return params, rest, nil
+		}
+	}
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil, nil, fmt.Errorf("expected closing parenthesis after parameters")
+	}
+	return params, rest, nil
+}
