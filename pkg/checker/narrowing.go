@@ -981,6 +981,13 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 			debugPrintf("// [TypeNarrowing] Narrowing '%s' from '%s' to more specific type '%s'\n",
 				guard.VariableName, originalType.String(), guard.NarrowedType.String())
 		}
+	} else if _, isObj := originalType.(*types.ObjectType); isObj && guard.Predicate && guard.NarrowedType != nil &&
+		!isNarrowingMarker(guard.NarrowedType) && !c.rel.IsAssignable(originalType, guard.NarrowedType) {
+		// A type predicate for a type unrelated to the declared one narrows
+		// to their intersection (tsc's getNarrowedType): an A that passes
+		// isB is an A & B.
+		canNarrow = true
+		narrowedType = types.NewIntersectionType(originalType, guard.NarrowedType)
 	} else {
 		// NarrowedType might be nil for discriminated union guards that couldn't find a match
 		narrowedTypeStr := "<nil>"
