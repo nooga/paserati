@@ -608,13 +608,37 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				return nil // Error resolving rest element type
 			}
 
-			// Validate that rest element type is an array type
-			if _, isArrayType := restType.(*types.ArrayType); !isArrayType {
-				c.addError(node.RestElement, fmt.Sprintf("rest element in tuple type must be an array type, got '%s'", restType.String()))
-				// Use any[] as fallback
+			if ro, ok := restType.(*types.ReadonlyType); ok {
+				if _, isArray := ro.InnerType.(*types.ArrayType); isArray {
+					restType = ro.InnerType
+				}
+			}
+			switch rt := restType.(type) {
+			case *types.ArrayType:
+				restElementType = rt
+			case *types.TupleType:
+				// A spread tuple contributes its elements: [...[A, B?], ...C[]].
+				flags := make([]bool, len(elementTypes))
+				copy(flags, node.OptionalFlags)
+				for i, et := range rt.ElementTypes {
+					elementTypes = append(elementTypes, et)
+					flags = append(flags, i < len(rt.OptionalElements) && rt.OptionalElements[i])
+				}
+				tupleType := &types.TupleType{ElementTypes: elementTypes, OptionalElements: flags, RestElementType: rt.RestElementType}
+				node.SetComputedType(tupleType)
+				return tupleType
+			default:
+				// Variadic tuple elements (a type parameter, `infer X`, a
+				// generic alias) are not modelled; they widen to any[]. tsc
+				// only refuses a rest type that cannot be an array (TS2574).
+				if isConcreteNonArrayType(restType) {
+					var at parser.Node = node.RestElement
+					if node.RestToken != nil {
+						at = &parser.Identifier{Token: node.RestToken}
+					}
+					c.addErrorWithCode(at, errors.TS2574, "A rest element type must be an array type.")
+				}
 				restElementType = &types.ArrayType{ElementType: types.Any}
-			} else {
-				restElementType = restType
 			}
 		}
 
@@ -4964,6 +4988,18 @@ func (c *Checker) hasOpaqueBase(obj *types.ObjectType, depth int) bool {
 		if baseObj != obj && c.hasOpaqueBase(baseObj, depth+1) {
 			return true
 		}
+	}
+	return false
+}
+
+// isConcreteNonArrayType reports whether t is a primitive, a literal or a
+// plain object type, none of which can be an array.
+func isConcreteNonArrayType(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.Primitive, *types.LiteralType:
+		return t != types.Any && t != types.Never && t != types.Unknown
+	case *types.ObjectType:
+		return !tt.IsCallable() && len(tt.IndexSigs()) == 0 && tt.Props()["length"] == nil
 	}
 	return false
 }

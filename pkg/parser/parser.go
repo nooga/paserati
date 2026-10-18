@@ -2139,6 +2139,7 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 		// Check for rest element syntax (...T[])
 		if p.curTokenIs(lexer.SPREAD) {
 			// Parse rest element: '...T[]'
+			tupleTypeExp.RestToken = p.curToken
 			p.nextToken() // Move past '...' to the type
 			if p.isTupleElementLabelStart() && p.peekTokenIs(lexer.COLON) {
 				p.nextToken() // Move to ':'

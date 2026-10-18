@@ -1,5 +1,5 @@
 // Tuple rest element validation and type checking tests
-// expect_compile_error: rest element in tuple type must be an array type
+// expect_compile_error: A rest element type must be an array type.
 
 // Valid rest element cases - these should parse without errors
 let validRest1: [string, ...number[]];

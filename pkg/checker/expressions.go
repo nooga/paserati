@@ -3454,11 +3454,11 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 						}
 					}
 				} else {
-					c.addError(node, "yield* expression must be an iterable")
+					c.reportNotIterable(node.Value, valueType)
 					yieldedType = types.Any
 				}
 			} else {
-				c.addError(node, "yield* expression must be an iterable")
+				c.reportNotIterable(node.Value, valueType)
 				yieldedType = types.Any
 			}
 		} else {

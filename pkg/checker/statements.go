@@ -1075,7 +1075,7 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 	originalEnv := c.env
 	keys := writtenRefs(switchBodies(node)...)
 	arms := make([]branchEnd, 0, len(node.Cases)+1)
-	joinable := len(keys) > 0
+	joinable := true // false once a clause breaks out from the middle
 	hasDefault := false
 	for i, caseClause := range node.Cases {
 		if caseClause.Condition == nil {
@@ -1118,13 +1118,34 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 			arms = append(arms, branchEnd{env: endEnv, terminates: true})
 		}
 	}
-	if len(keys) > 0 {
-		if !hasDefault && !c.switchCoversAll(node, switchExprType) {
-			arms = append(arms, branchEnd{env: originalEnv, terminates: false})
+	// The switch subject (and the union a discriminant belongs to) is
+	// narrowed after the switch by the clauses that leave it normally, plus
+	// the path on which no case matched.
+	subjectKeys := c.switchSubjectKeys(node)
+	allKeys := append(append([]string{}, keys...), subjectKeys...)
+	if !hasDefault {
+		var noMatchEnv *Environment
+		if cond := switchNoMatchCondition(node); cond != nil && len(subjectKeys) > 0 {
+			noMatchEnv = c.applyTypeNarrowingWithFallback(cond)
 		}
+		exhaustive := c.switchCoversAll(node, switchExprType) || noMatchEnv != nil && narrowsToNever(noMatchEnv, subjectKeys)
+		switch {
+		case !exhaustive:
+			env := noMatchEnv
+			if env == nil {
+				env = originalEnv
+			}
+			arms = append(arms, branchEnd{env: env, terminates: false})
+		case noMatchEnv != nil && !hasLiveArm(arms):
+			// Nothing leaves the switch: what follows is unreachable and
+			// sees the subject as never, as tsc's flow analysis does.
+			arms = append(arms, branchEnd{env: noMatchEnv, terminates: false})
+		}
+	}
+	if len(allKeys) > 0 {
 		if joinable {
-			c.joinBranches(originalEnv, keys, arms)
-		} else {
+			c.joinBranches(originalEnv, allKeys, arms)
+		} else if len(keys) > 0 {
 			c.resetToDeclared(originalEnv, keys)
 		}
 	}
@@ -1179,6 +1200,63 @@ func switchClauseCondition(node *parser.SwitchStatement, i int) parser.Expressio
 		}
 	}
 	return cond
+}
+
+// switchSubjectKeys are the references a switch narrows: its expression and,
+// for a discriminant (`switch (x.kind)`), the object it discriminates.
+func (c *Checker) switchSubjectKeys(node *parser.SwitchStatement) []string {
+	var keys []string
+	if key := expressionToNarrowingKey(node.Expression); key != "" {
+		keys = append(keys, key)
+	}
+	for _, cc := range node.Cases {
+		if cc.Condition == nil {
+			continue
+		}
+		cond := &parser.InfixExpression{Token: cc.Token, Left: node.Expression, Operator: "===", Right: cc.Condition}
+		if g := c.detectTypeGuard(cond); g != nil && g.VariableName != "" && (len(keys) == 0 || g.VariableName != keys[0]) {
+			keys = append(keys, g.VariableName)
+		}
+		break
+	}
+	return keys
+}
+
+// switchNoMatchCondition is `expr !== v1 && expr !== v2 ...` over every case:
+// the condition under which a switch without default runs no clause.
+func switchNoMatchCondition(node *parser.SwitchStatement) parser.Expression {
+	var cond parser.Expression
+	for _, cc := range node.Cases {
+		if cc.Condition == nil {
+			continue
+		}
+		ne := &parser.InfixExpression{Token: cc.Token, Left: node.Expression, Operator: "!==", Right: cc.Condition}
+		if cond == nil {
+			cond = ne
+		} else {
+			cond = &parser.InfixExpression{Token: cc.Token, Left: cond, Operator: "&&", Right: ne}
+		}
+	}
+	return cond
+}
+
+// narrowsToNever reports whether env narrows one of keys to never.
+func narrowsToNever(env *Environment, keys []string) bool {
+	for _, k := range keys {
+		if typeOfRefIn(env, k) == types.Never {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLiveArm(arms []branchEnd) bool {
+	for _, a := range arms {
+		if !a.terminates {
+			return true
+		}
+	}
+	return false
 }
 
 // clauseMayFallThrough reports whether control can run off the end of a

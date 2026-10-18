@@ -1799,6 +1799,7 @@ type TupleTypeExpression struct {
 	ElementTypes   []Expression // The type expressions for each element
 	OptionalFlags  []bool       // Which elements are optional (same length as ElementTypes)
 	RestElement    Expression   // Optional rest element type (...T[])
+	RestToken      *lexer.Token // The '...' of the rest element
 }
 
 func (tte *TupleTypeExpression) expressionNode()      {}

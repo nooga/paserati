@@ -501,6 +501,12 @@ func (c *Checker) literalToType(expr parser.Expression) types.Type {
 		return types.Null
 	case *parser.UndefinedLiteral:
 		return types.Undefined
+	case *parser.MemberExpression:
+		// An enum member (`Choice.Yes`) is a unit type like a literal.
+		if em, ok := lit.GetComputedType().(*types.EnumMemberType); ok {
+			return em
+		}
+		return nil
 	default:
 		return nil // Not a literal we can narrow to
 	}
@@ -1183,6 +1189,16 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 				narrowedEnv := NewEnclosedEnvironment(c.env)
 				narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
 				return narrowedEnv
+			}
+		}
+		// A single object whose discriminant is exactly that unit value is
+		// ruled out: after `x.kind !== A && x.kind !== B` nothing is left.
+		if objType, ok := c.resolveObjectTypeForNarrowing(originalType); ok && !isUnionTypeValue(originalType) {
+			if propType, exists := objType.Props()[guard.DiscriminantProp]; exists && isUnitType(propType) && c.rel.IsIdenticalType(propType, guard.DiscriminantValue) {
+				narrowedEnv := NewEnclosedEnvironment(c.env)
+				if narrowedEnv.Define(guard.VariableName, types.Never, isConst) {
+					return narrowedEnv
+				}
 			}
 		}
 
@@ -2666,12 +2682,20 @@ func (c *Checker) falsyNullishGuard(name string) *TypeGuard {
 
 // isUnitType reports whether t has exactly one value: a literal type, null or
 // undefined.
+func isUnionTypeValue(t types.Type) bool {
+	_, ok := t.(*types.UnionType)
+	return ok
+}
+
 func isUnitType(t types.Type) bool {
 	if t == types.Null || t == types.Undefined {
 		return true
 	}
-	_, ok := t.(*types.LiteralType)
-	return ok
+	switch t.(type) {
+	case *types.LiteralType, *types.EnumMemberType:
+		return true
+	}
+	return false
 }
 
 // applyAssertionNarrowing narrows for the rest of the enclosing block after an
