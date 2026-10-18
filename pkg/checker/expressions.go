@@ -3719,6 +3719,9 @@ func (c *Checker) isSpreadableIterableType(t types.Type) bool {
 	if t == nil {
 		return false
 	}
+	if obj, ok := t.(*types.ObjectType); ok && c.isDefinitelyNotIterable(obj) {
+		return false
+	}
 	if _, ok := collectionElementType(t); ok {
 		return true
 	}

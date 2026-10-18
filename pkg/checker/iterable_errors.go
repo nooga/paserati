@@ -32,11 +32,18 @@ func (c *Checker) isDefinitelyNotIterable(t types.Type) bool {
 	case *types.LiteralType:
 		return !c.rel.IsAssignable(tt, types.String)
 	case *types.ObjectType:
-		if tt.IsCallable() || len(tt.ConstructSigs()) > 0 || len(tt.Bases()) > 0 || tt.ClassMeta != nil {
+		if len(tt.IndexSigs()) > 0 || len(tt.ConstructSigs()) > 0 {
 			return false
 		}
 		for _, marker := range iterableMarkerProperties {
-			if _, ok := tt.Props()[marker]; ok {
+			if pt, ok := tt.EffectiveProperty(marker); ok {
+				return c.iteratorMethodIsBroken(tt, marker, pt)
+			}
+		}
+		// Only judge what we fully see: a plain function, a class instance,
+		// or an object literal type whose bases are all known.
+		for _, base := range tt.Bases() {
+			if _, ok := base.(*types.ObjectType); !ok {
 				return false
 			}
 		}
@@ -44,7 +51,7 @@ func (c *Checker) isDefinitelyNotIterable(t types.Type) bool {
 	case *types.UnionType:
 		for _, member := range tt.Types {
 			if member == types.Null || member == types.Undefined {
-				return false
+				return c.strictNullChecks
 			}
 		}
 		for _, member := range tt.Types {
@@ -62,4 +69,33 @@ func (c *Checker) reportNotIterable(node parser.Node, t types.Type) {
 		return
 	}
 	c.addErrorWithCode(node, errors.TS2488, fmt.Sprintf("Type '%s' must have a '[Symbol.iterator]()' method that returns an iterator.", t.String()))
+}
+
+// iteratorMethodIsBroken judges a [Symbol.iterator] member we can see: an
+// optional one (under strictNullChecks), or a method returning an object
+// that has no next() method, does not make the type iterable. Anything less
+// certain counts as iterable.
+func (c *Checker) iteratorMethodIsBroken(owner *types.ObjectType, marker string, member types.Type) bool {
+	isIteratorKey := marker == "[Symbol.iterator]" || (marker == "__COMPUTED_PROPERTY__" && owner.ClassMeta != nil)
+	if !isIteratorKey {
+		return false
+	}
+	if owner.IsPropertyOptional(marker) {
+		return c.strictNullChecks
+	}
+	fn, ok := member.(*types.ObjectType)
+	if !ok || len(fn.CallSigs()) != 1 {
+		return false
+	}
+	ret, ok := types.GetEffectiveType(fn.CallSigs()[0].ReturnType).(*types.ObjectType)
+	if !ok || ret.IsCallable() || len(ret.IndexSigs()) > 0 {
+		return false
+	}
+	for _, base := range ret.Bases() {
+		if _, known := base.(*types.ObjectType); !known {
+			return false
+		}
+	}
+	_, hasNext := ret.EffectiveProperty("next")
+	return !hasNext
 }
