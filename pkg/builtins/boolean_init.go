@@ -30,6 +30,12 @@ func (b *BooleanInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Register boolean primitive prototype
 	ctx.SetPrimitivePrototype("boolean", booleanProtoType)
+	// The Boolean interface (the wrapper object type) is the prototype's
+	// shape; `boolean` is assignable to it, but not the other way round.
+	booleanProtoType.DisplayName = "Boolean"
+	if err := ctx.DefineTypeAlias("Boolean", booleanProtoType); err != nil {
+		return err
+	}
 
 	// Add prototype property to constructor
 	booleanCtorType = booleanCtorType.WithProperty("prototype", booleanProtoType)

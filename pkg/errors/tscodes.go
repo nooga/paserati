@@ -90,6 +90,7 @@ const (
 	TS2428  = "TS2428"  // All declarations of 'X' must have identical type parameters
 	TS2445  = "TS2445"  // Property 'X' is protected and only accessible within class 'C' and its subclasses
 	TS2446  = "TS2446"  // Property 'X' is protected and only accessible through an instance of class 'C'
+	TS2447  = "TS2447"  // The X operator is not allowed for boolean types
 	TS2454  = "TS2454"  // Variable 'X' is used before being assigned
 	TS2461  = "TS2461"  // Type 'X' is not an array type
 	TS2464  = "TS2464"  // A computed property name must be of type 'string', 'number', 'symbol', or 'any'

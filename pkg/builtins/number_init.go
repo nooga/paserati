@@ -207,6 +207,12 @@ func (n *NumberInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Register number primitive prototype
 	ctx.SetPrimitivePrototype("number", numberProtoType)
+	// The Number interface (the wrapper object type) is the prototype's
+	// shape; `number` is assignable to it, but not the other way round.
+	numberProtoType.DisplayName = "Number"
+	if err := ctx.DefineTypeAlias("Number", numberProtoType); err != nil {
+		return err
+	}
 
 	// Add prototype property to constructor
 	numberCtorType = numberCtorType.WithProperty("prototype", numberProtoType)

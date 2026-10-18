@@ -51,7 +51,7 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "InfixAddStr", input: `"f" + "oo";`, expect: "foo"},
 		{name: "InfixDivZero", input: "1 / 0;", expect: "Infinity"}, // JS: 1/0 === Infinity
 		{name: "InfixAddMismatch", input: `1 + "a";`, expect: "1a"},
-		{name: "InfixSubMismatch", input: `"a" - 1;`, expect: "NaN"}, // JS: "a" - 1 === NaN (type coercion)
+		{name: "InfixSubMismatch", input: `("a" as any) - 1;`, expect: "NaN"}, // JS: "a" - 1 === NaN (type coercion; tsc rejects the bare string operand)
 
 		// Infix Comparison
 		{name: "InfixLT_T", input: "5 < 10;", expect: "true"},

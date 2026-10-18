@@ -87,3 +87,112 @@ func (c *Checker) isPrimitiveOperandType(t types.Type) bool {
 	}
 	return false
 }
+
+// checkArithmeticOperator checks an arithmetic, bitwise or shift operator the
+// way tsc's checkBinaryLikeExpression does: `&`, `|` and `^` on two booleans
+// suggest the logical operator (TS2447); otherwise each operand must on its own
+// be assignable to number | bigint (TS2362/TS2363), and bigint operands must
+// not mix with number ones (TS2365).
+func (c *Checker) checkArithmeticOperator(node *parser.InfixExpression, leftType, rightType types.Type) types.Type {
+	if leftType == nil {
+		leftType = types.Any
+	}
+	if rightType == nil {
+		rightType = types.Any
+	}
+	switch node.Operator {
+	case "&", "|", "^":
+		if c.isBooleanLikeOperand(leftType) && c.isBooleanLikeOperand(rightType) {
+			suggest := map[string]string{"&": "&&", "|": "||", "^": "!=="}[node.Operator]
+			c.addErrorWithCode(node.Left, errors.TS2447, fmt.Sprintf(
+				"The '%s' operator is not allowed for boolean types. Consider using '%s' instead.", node.Operator, suggest))
+			return types.Number
+		}
+	}
+	numberOrBigInt := types.NewUnionType(types.Number, types.BigInt)
+	leftOk := c.arithmeticOperandOk(leftType, numberOrBigInt)
+	rightOk := c.arithmeticOperandOk(rightType, numberOrBigInt)
+	if !leftOk {
+		c.addErrorWithCode(node.Left, errors.TS2362,
+			"The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.")
+	}
+	if !rightOk {
+		c.addErrorWithCode(node.Right, errors.TS2363,
+			"The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.")
+	}
+	if (isAnyOrUnknownType(leftType) && isAnyOrUnknownType(rightType)) ||
+		!(c.maybeBigIntLike(leftType) || c.maybeBigIntLike(rightType)) {
+		return types.Number
+	}
+	if c.isBigIntLike(leftType) && c.isBigIntLike(rightType) {
+		if node.Operator == ">>>" {
+			c.reportOperatorNotApplicable(node, c.rel.GetWidenedType(leftType), c.rel.GetWidenedType(rightType))
+		}
+		return types.BigInt
+	}
+	if leftOk && rightOk {
+		c.reportOperatorNotApplicable(node, c.rel.GetWidenedType(leftType), c.rel.GetWidenedType(rightType))
+	}
+	return types.Any
+}
+
+// arithmeticOperandOk mirrors checkArithmeticOperandType: the operand must be
+// assignable to number | bigint. unknown is reported elsewhere (TS18046).
+func (c *Checker) arithmeticOperandOk(t, numberOrBigInt types.Type) bool {
+	if isAnyOrUnknownType(t) {
+		return true
+	}
+	return c.rel.IsAssignable(t, numberOrBigInt)
+}
+
+func isAnyOrUnknownType(t types.Type) bool {
+	return t == types.Any || t == types.Unknown
+}
+
+// isBigIntLike reports whether t is bigint, a bigint literal, or a union of them.
+func (c *Checker) isBigIntLike(t types.Type) bool {
+	if u, ok := t.(*types.UnionType); ok {
+		for _, m := range u.Types {
+			if !c.isBigIntLike(m) {
+				return false
+			}
+		}
+		return len(u.Types) > 0
+	}
+	return t == types.Never || c.rel.GetWidenedType(t) == types.BigInt
+}
+
+// maybeBigIntLike reports whether any constituent of t is bigint-like.
+func (c *Checker) maybeBigIntLike(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if c.maybeBigIntLike(m) {
+				return true
+			}
+		}
+		return false
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if c.maybeBigIntLike(m) {
+				return true
+			}
+		}
+		return false
+	}
+	return t != types.Never && c.rel.GetWidenedType(t) == types.BigInt
+}
+
+// isBooleanLikeOperand reports whether t is boolean, a boolean literal, or a
+// union of them.
+func (c *Checker) isBooleanLikeOperand(t types.Type) bool {
+	if u, ok := t.(*types.UnionType); ok {
+		for _, m := range u.Types {
+			if !c.isBooleanLikeOperand(m) {
+				return false
+			}
+		}
+		return len(u.Types) > 0
+	}
+	return c.rel.GetWidenedType(t) == types.Boolean
+}

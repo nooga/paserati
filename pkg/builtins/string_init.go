@@ -388,6 +388,12 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Register string primitive prototype
 	ctx.SetPrimitivePrototype("string", stringProtoType)
+	// The String interface (the wrapper object type) is the prototype's
+	// shape; `string` is assignable to it, but not the other way round.
+	stringProtoType.DisplayName = "String"
+	if err := ctx.DefineTypeAlias("String", stringProtoType); err != nil {
+		return err
+	}
 
 	// Add prototype property to constructor
 	stringCtorType = stringCtorType.WithProperty("prototype", stringProtoType)

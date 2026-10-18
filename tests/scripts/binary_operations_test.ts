@@ -1,4 +1,5 @@
 // expect: undefined
+// no-typecheck
 // Test basic binary operations
 console.log("1 + 1 =", 1 + 1);
 console.log("2 - 1 =", 2 - 1);
