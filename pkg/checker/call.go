@@ -1283,7 +1283,10 @@ func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, ar
 		argType := argTypes[i]
 
 		// Collect constraints from this parameter-argument pair
+		savedTop, savedSig := c.inferTopParam, c.inferSig
+		c.inferTopParam, c.inferSig = paramType, sig
 		paramConstraints := c.collectConstraintsFromType(paramType, argType)
+		c.inferTopParam, c.inferSig = savedTop, savedSig
 		constraints = append(constraints, paramConstraints...)
 	}
 
@@ -1569,7 +1572,10 @@ func (c *Checker) collectTypeParameterConstraints(sig *types.Signature, argTypes
 		argType := argTypes[i]
 
 		// Collect constraints from this parameter-argument pair
+		savedTop, savedSig := c.inferTopParam, c.inferSig
+		c.inferTopParam, c.inferSig = paramType, sig
 		paramConstraints := c.collectConstraintsFromType(paramType, argType)
+		c.inferTopParam, c.inferSig = savedTop, savedSig
 		constraints = append(constraints, paramConstraints...)
 	}
 
@@ -1695,11 +1701,24 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		// e.g., { count: 0 } should infer T = { count: number }, not T = { count: 0 }
 		inferredType := c.rel.DeeplyWidenType(argType)
 		keepsLiteral := false
-		if _, isLit := argType.(*types.LiteralType); isLit && hasPrimitiveConstraint(pType.Parameter.Constraint) {
+		_, isLit := argType.(*types.LiteralType)
+		if isLit && hasPrimitiveConstraint(pType.Parameter.Constraint) {
 			// `T extends string` / `K extends keyof O` keep the literal
 			// ("a"), as tsc does for a primitive-constrained parameter.
 			inferredType = argType
 			keepsLiteral = true
+		} else if isLit && c.inferSig != nil && c.keepsLiteralCandidate(pType.Parameter, paramType) {
+			inferredType = argType
+			keepsLiteral = true
+			if paramType == c.inferTopParam && !c.isWideningLiteral(argType) {
+				lit := argType.(*types.LiteralType)
+				w := &types.LiteralType{Value: lit.Value}
+				if c.wideningLiterals == nil {
+					c.wideningLiterals = map[*types.LiteralType]bool{}
+				}
+				c.wideningLiterals[w] = true
+				inferredType = w
+			}
 		}
 		if argTP, argIsTP := argType.(*types.TypeParameterType); argIsTP && argTP.Parameter != nil &&
 			argTP.Parameter.Constraint != nil && argTP.Parameter.Constraint != types.Any {
@@ -2642,3 +2661,51 @@ func (c *Checker) hasConflictingDiscriminant(inter *types.IntersectionType) bool
 	return false
 }
 
+// typeParamAtTopLevel reports whether t is tp, or a union containing it.
+func typeParamAtTopLevel(t types.Type, tp *types.TypeParameter) bool {
+	switch tt := t.(type) {
+	case *types.TypeParameterType:
+		return tt.Parameter == tp
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if typeParamAtTopLevel(m, tp) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// keepsLiteralCandidate is tsc's getCovariantInference widening rule for a
+// literal candidate of tp inferred at paramType: it is widened when inferred
+// directly for a parameter typed tp, unless tp is a top-level return type and
+// is not fixed early by a callback parameter. Literals nested in an array or
+// tuple parameter come from declared types and are kept.
+func (c *Checker) keepsLiteralCandidate(tp *types.TypeParameter, paramType types.Type) bool {
+	if paramType != c.inferTopParam {
+		switch c.inferTopParam.(type) {
+		case *types.ArrayType, *types.TupleType, *types.ReadonlyType:
+			return true
+		}
+		return false
+	}
+	if !typeParamAtTopLevel(c.inferSig.ReturnType, tp) {
+		return false
+	}
+	params := append([]types.Type(nil), c.inferSig.ParameterTypes...)
+	if c.inferSig.RestParameterType != nil {
+		params = append(params, c.inferSig.RestParameterType)
+	}
+	for _, p := range params {
+		if fn, ok := p.(*types.ObjectType); ok {
+			for _, cs := range fn.CallSigs() {
+				for _, pt := range cs.ParameterTypes {
+					if c.typeContainsTypeParameter(pt) {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
+}

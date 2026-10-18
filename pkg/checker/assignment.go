@@ -78,7 +78,8 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		_, isConst, found := c.env.Resolve(identLHS.Value)
 		if found && isConst {
 			c.addErrorWithCode(node.Left, errors.TS2588, fmt.Sprintf("Cannot assign to '%s' because it is a constant.", identLHS.Value))
-			// Still proceed to check assignability for more errors
+			// tsc types the target as an error type: nothing more is reported.
+			validOperands = false
 		}
 	}
 
@@ -104,6 +105,10 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 				// This preserves stricter checking for annotated variables.
 				if _, isLiteral := resolvedType.(*types.LiteralType); !isLiteral {
 					targetType = resolvedType
+				} else if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil {
+					// A literal here may be a narrowing; the declared type is
+					// the target (`let k: "a"` accepts only "a").
+					targetType = declared
 				}
 			}
 		}

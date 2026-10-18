@@ -2374,6 +2374,9 @@ func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 		var keyTypes []types.Type
 		seen := map[string]bool{}
 		add := func(name string) {
+			if strings.HasPrefix(name, "#") {
+				return // private names are not keys
+			}
 			if !seen[name] {
 				seen[name] = true
 				keyTypes = append(keyTypes, &types.LiteralType{Value: vm.String(name)})

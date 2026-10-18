@@ -271,6 +271,13 @@ type Checker struct {
 	// inDestructuringAssignment is set while checking the targets of a
 	// destructuring assignment, whose identifiers are existing variables.
 	inDestructuringAssignment bool
+
+	// inferTopParam and inferSig describe the parameter and the
+	// signature an inference is collecting candidates for: a literal argument
+	// inferred for a parameter that is the type parameter itself keeps its
+	// literal type only when the type parameter is a top-level return type.
+	inferTopParam types.Type
+	inferSig      *types.Signature
 	// builtinEnv is the global environment the checker started from.
 	builtinEnv *Environment
 
