@@ -34,13 +34,15 @@ func (p *PromiseInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Promise constructor type
 	promiseCtorType := types.NewObjectType().
 		WithProperty("prototype", promiseProtoType).
-		WithProperty("resolve", types.NewSimpleFunction(
+		WithProperty("resolve", types.NewOptionalFunction(
 			[]types.Type{types.Any},
 			types.Any,
+			[]bool{true}, // resolve(): Promise<void>
 		)).
-		WithProperty("reject", types.NewSimpleFunction(
+		WithProperty("reject", types.NewOptionalFunction(
 			[]types.Type{types.Any},
 			types.Any,
+			[]bool{true}, // reject(reason?: any)
 		)).
 		WithProperty("all", types.NewSimpleFunction(
 			[]types.Type{types.Any}, // iterable

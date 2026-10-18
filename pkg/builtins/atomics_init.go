@@ -33,8 +33,10 @@ func (a *AtomicsInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("pause", types.NewOptionalFunction([]types.Type{types.Number}, types.Undefined, []bool{true})).
 		WithProperty("store", types.NewSimpleFunction([]types.Type{types.Any, types.Number, types.Number}, types.Number)).
 		WithProperty("sub", types.NewSimpleFunction([]types.Type{types.Any, types.Number, types.Number}, types.Number)).
-		WithProperty("wait", types.NewSimpleFunction([]types.Type{types.Any, types.Number, types.Number, types.Number}, types.String)).
-		WithProperty("waitAsync", types.NewSimpleFunction([]types.Type{types.Any, types.Number, types.Number, types.Number}, types.Any)).
+		// The value is a number or a bigint, matching the array; the timeout
+		// is optional.
+		WithProperty("wait", types.NewOptionalFunction([]types.Type{types.Any, types.Number, types.Any, types.Number}, types.String, []bool{false, false, false, true})).
+		WithProperty("waitAsync", types.NewOptionalFunction([]types.Type{types.Any, types.Number, types.Any, types.Number}, types.Any, []bool{false, false, false, true})).
 		WithProperty("xor", types.NewSimpleFunction([]types.Type{types.Any, types.Number, types.Number}, types.Number))
 
 	return ctx.DefineGlobal("Atomics", atomicsType)
