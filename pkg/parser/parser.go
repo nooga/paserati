@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -796,6 +797,17 @@ func (p *Parser) skipObjectMemberMarker() {
 	}
 }
 
+// skipEqualsAfterBlock is the end of tsc's parseBlock: an `=` right after a
+// block (`{ a } = b`, a destructuring assignment that needed parentheses) is
+// reported (TS2809) and skipped. cur is the block's '}'.
+func (p *Parser) skipEqualsAfterBlock() {
+	if !p.tscDiagnostics || !p.canRecover() || !p.curTokenIs(lexer.RBRACE) || !p.peekTokenIs(lexer.ASSIGN) {
+		return
+	}
+	p.addErrorWithCode(p.peekToken, "TS2809", "Declaration or statement expected. This '=' follows a block of statements, so if you intended to write a destructuring assignment, you might need to wrap the whole assignment in parentheses.")
+	p.nextToken()
+}
+
 // rescanPeekAsRegex rescans the peek token as a regex literal if it's a SLASH.
 // This is called after parsing statement-ending braces where the next / should be regex.
 func (p *Parser) rescanPeekAsRegex() {
@@ -1131,6 +1143,7 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		stmt := p.parseFunctionDeclarationStatement()
 		// After function declaration ending with }, next / should be regex
 		p.rescanPeekAsRegex()
+		p.skipEqualsAfterBlock()
 		return stmt
 	case lexer.ASYNC:
 		// Check if this is 'async function' (declaration) or async arrow expression
@@ -1247,6 +1260,7 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		stmt := p.parseBlockStatement()
 		// After block statement ending with }, next / should be regex
 		p.rescanPeekAsRegex()
+		p.skipEqualsAfterBlock()
 		return stmt
 	case lexer.RBRACE:
 		// End of current block scope; let the caller handle it
@@ -2920,6 +2934,13 @@ func (p *Parser) parseNumberLiteral() Expression {
 			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
 				// Try parsing as float64 instead
 				floatVal, floatErr := strconv.ParseFloat(cleanedLiteral, 64)
+				if floatErr != nil && base != 10 {
+					// 0b/0o/0x: the exact integer, rounded to the nearest double.
+					if n, ok := new(big.Int).SetString(cleanedLiteral, base); ok {
+						floatVal, _ = new(big.Float).SetInt(n).Float64()
+						floatErr = nil
+					}
+				}
 				if floatErr != nil {
 					msg := fmt.Sprintf("could not parse %q as number: %v", rawLiteral, floatErr)
 					p.addError(p.curToken, msg)
@@ -6150,7 +6171,18 @@ func (p *Parser) parseInfixExpression(left Expression) Expression {
 	// ?? cannot be mixed with || or && without parentheses (ECMA-262 13.13:
 	// CoalesceExpressionHead only admits a BitwiseORExpression).
 	if isCoalesceMix(expression.Operator, expression.Left) || isCoalesceMix(expression.Operator, expression.Right) {
-		p.addError(expression.Token, "'??' cannot be mixed with '||' or '&&' without parentheses.")
+		if p.tscDiagnostics {
+			// checkNullishCoalesceOperands: the operators in source order.
+			first, second := expression.Operator, expression.Operator
+			if isCoalesceMix(expression.Operator, expression.Left) {
+				first = expression.Left.(*InfixExpression).Operator
+			} else {
+				second = expression.Right.(*InfixExpression).Operator
+			}
+			p.addGrammarErrorWithCode(expression.Token, "TS5076", fmt.Sprintf("'%s' and '%s' operations cannot be mixed without parentheses.", first, second))
+		} else {
+			p.addError(expression.Token, "'??' cannot be mixed with '||' or '&&' without parentheses.")
+		}
 	}
 	if debugParser {
 		debugPrint("parseInfixExpression: Finished. Right=%T('%s')", expression.Right, expression.Right.String())
@@ -6329,6 +6361,9 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(start int, typeParams []*TypePa
 
 	// curToken is the body's last token ('}' or the expression's end).
 	arrowFunc.SourceStart, arrowFunc.SourceEnd = start+1, p.curToken.EndPos+1
+	if _, isBlock := arrowFunc.Body.(*BlockStatement); isBlock {
+		p.skipEqualsAfterBlock()
+	}
 	return arrowFunc
 }
 
@@ -6641,23 +6676,32 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 
 	// A parenthesized literal is not an AssignmentPattern: ({}) = 1 and
 	// ([a]) = 1 are early SyntaxErrors.
+	// tsc parses it as a plain assignment and its checker reports the target
+	// (TS2364).
+	parenthesizedLiteral := false
 	if arr, ok := left.(*ArrayLiteral); ok && arr.Parenthesized {
-		p.addError(p.curToken, "Invalid left-hand side in assignment.")
-		return nil
+		if !p.tscDiagnostics {
+			p.addError(p.curToken, "Invalid left-hand side in assignment.")
+			return nil
+		}
+		parenthesizedLiteral = true
 	}
 	if obj, ok := left.(*ObjectLiteral); ok && obj.Parenthesized {
-		p.addError(p.curToken, "Invalid left-hand side in assignment.")
-		return nil
+		if !p.tscDiagnostics {
+			p.addError(p.curToken, "Invalid left-hand side in assignment.")
+			return nil
+		}
+		parenthesizedLiteral = true
 	}
 
 	// Check for array destructuring assignment: [a, b, c] = expr
-	if arrayLit, ok := left.(*ArrayLiteral); ok && p.curToken.Type == lexer.ASSIGN {
+	if arrayLit, ok := left.(*ArrayLiteral); ok && p.curToken.Type == lexer.ASSIGN && !parenthesizedLiteral {
 		debugPrint("parseAssignmentExpression detected array destructuring pattern")
 		return p.parseArrayDestructuringAssignment(arrayLit)
 	}
 
 	// Check for object destructuring assignment: {a, b, c} = expr
-	if objectLit, ok := left.(*ObjectLiteral); ok && p.curToken.Type == lexer.ASSIGN {
+	if objectLit, ok := left.(*ObjectLiteral); ok && p.curToken.Type == lexer.ASSIGN && !parenthesizedLiteral {
 		debugPrint("parseAssignmentExpression detected object destructuring pattern")
 		return p.parseObjectDestructuringAssignment(objectLit)
 	}
