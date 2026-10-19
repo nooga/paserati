@@ -125,6 +125,17 @@ func (p *Parser) parseDecoratedClassExpression() Expression {
 	decorators := p.parseDecoratorList()
 
 	if !p.curTokenIs(lexer.CLASS) {
+		if p.canRecover() && p.tscDiagnostics {
+			// tsc's parseDecoratedExpression: a missing expression after
+			// the decorators ("Expression expected." where it should be).
+			// It is reported at the end of the decorators, so the token here
+			// still gets its own error.
+			p.stepBackForMissing()
+			end := p.curToken
+			at := &lexer.Token{Line: end.Line, Column: end.Column + (end.EndPos - end.StartPos), StartPos: end.EndPos, EndPos: end.EndPos}
+			p.addErrorWithCode(at, "TS1109", "Expression expected.")
+			return p.missingExpression()
+		}
 		p.addError(p.curToken, "decorators are only valid on class expressions")
 		return nil
 	}

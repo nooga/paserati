@@ -108,6 +108,18 @@ func (p *Parser) parseMoreDeclListItems(items []declListItem, declToken *lexer.T
 
 		p.nextToken() // Move to the first token of the next declarator
 
+		if p.tscDiagnostics && p.canRecover() && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) &&
+			!p.curTokenIs(lexer.IDENT) && !p.isKeywordThatCanBeIdentifier(p.curToken.Type) {
+			// tsc's abortParsingListOrMoveToNextToken for VariableDeclarations:
+			// report the token and skip what cannot continue the list.
+			p.addErrorWithCode(p.curToken, "TS1134", "Variable declaration expected.")
+			for !p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) &&
+				p.peekToken.Line == p.curToken.Line && !listAbortsAt(p.peekToken) {
+				p.nextToken()
+			}
+			break
+		}
+
 		item, ok := p.parseDeclListItem(declToken, kind, ",")
 		if !ok {
 			return nil, false

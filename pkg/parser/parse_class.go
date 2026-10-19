@@ -106,6 +106,8 @@ func (p *Parser) parseClassDeclaration() Statement {
 // so the checker registers the class type for inheritance/type checking, while the
 // compiler skips code generation for it.
 func (p *Parser) parseDeclareClassStatement() Statement {
+	p.ambientClass++
+	defer func() { p.ambientClass-- }()
 	return p.finishDeclareClass(p.parseClassDeclaration())
 }
 
@@ -162,7 +164,8 @@ func (p *Parser) finishDeclareClass(classStmt Statement) Statement {
 		case *MemberExpression:
 			if obj, ok := expr.Object.(*Identifier); ok && obj.Value == "Symbol" {
 				if prop, ok := expr.Property.(*Identifier); ok {
-					if !isWellKnownSymbol(prop.Value) {
+					// The checker reports this (TS2339) in tsc mode.
+					if !isWellKnownSymbol(prop.Value) && !p.tscDiagnostics {
 						p.addError(prop.Token, fmt.Sprintf("Property '%s' does not exist on type 'SymbolConstructor'.", prop.Value))
 					}
 				}
@@ -395,30 +398,39 @@ func (p *Parser) parseClassBody() *ClassBody {
 		var declareTok, abstractModTok *lexer.Token
 		seenAsync := false
 		seenOverride := false
+		// tsc's checkGrammarModifiers stops at the first modifier error.
+		modErrSeen := false
+		modError := func(tok *lexer.Token, msg string) {
+			if p.tscDiagnostics && modErrSeen {
+				return
+			}
+			modErrSeen = true
+			p.addError(tok, msg)
+		}
 		for {
 			if p.curTokenIs(lexer.READONLY) && !isReadonly && !isFieldName() {
 				isReadonly = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.STATIC) && !isStatic && !isFieldName() {
 				if seenOverride {
-					p.addError(p.curToken, "'static' modifier must precede 'override' modifier.")
+					modError(p.curToken, "'static' modifier must precede 'override' modifier.")
 				} else if seenAsync {
-					p.addError(p.curToken, "'static' modifier must precede 'async' modifier.")
+					modError(p.curToken, "'static' modifier must precede 'async' modifier.")
 				}
 				isStatic = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.STATIC) && isStatic && !isFieldName() {
 				// Duplicate 'static' modifier
-				p.addError(p.curToken, "Unexpected keyword or identifier.")
+				modError(p.curToken, "Unexpected keyword or identifier.")
 				p.nextToken()
 			} else if p.curTokenIs(lexer.EXPORT) && !isFieldName() {
 				// 'export' is not a valid class element modifier
 				exportTok := p.curToken
 				p.nextToken()
 				if p.curTokenIs(lexer.LBRACKET) && p.isUnambiguouslyIndexSignature() {
-					p.addError(exportTok, "'export' modifier cannot appear on an index signature.")
+					modError(exportTok, "'export' modifier cannot appear on an index signature.")
 				} else {
-					p.addError(exportTok, "'export' modifier cannot appear on class elements of this kind.")
+					modError(exportTok, "'export' modifier cannot appear on class elements of this kind.")
 				}
 			} else if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "declare" && !isFieldName() {
 				// 'declare' modifier on class member (valid for properties; only error if method has body)
@@ -427,15 +439,15 @@ func (p *Parser) parseClassBody() *ClassBody {
 				p.nextToken()
 			} else if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED)) && !isFieldName() {
 				if hasAccessibility {
-					p.addError(p.curToken, "Accessibility modifier already seen.")
+					modError(p.curToken, "Accessibility modifier already seen.")
 				}
 				if isStatic {
-					p.addError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'static' modifier.", p.curToken.Literal))
+					modError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'static' modifier.", p.curToken.Literal))
 				}
 				if seenOverride {
-					p.addError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'override' modifier.", p.curToken.Literal))
+					modError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'override' modifier.", p.curToken.Literal))
 				} else if seenAsync {
-					p.addError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'async' modifier.", p.curToken.Literal))
+					modError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'async' modifier.", p.curToken.Literal))
 				}
 				hasAccessibility = true
 				if p.curTokenIs(lexer.PUBLIC) {
@@ -448,7 +460,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				p.nextToken()
 			} else if p.curTokenIs(lexer.ABSTRACT) && !isAbstract && !isFieldName() {
 				if seenOverride {
-					p.addError(p.curToken, "'abstract' modifier must precede 'override' modifier.")
+					modError(p.curToken, "'abstract' modifier must precede 'override' modifier.")
 				}
 				isAbstract = true
 				abstractModTok = p.curToken
@@ -465,12 +477,12 @@ func (p *Parser) parseClassBody() *ClassBody {
 				p.nextToken()
 			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride && !isFieldName() {
 				if seenAsync {
-					p.addError(p.curToken, "'override' modifier must precede 'async' modifier.")
+					modError(p.curToken, "'override' modifier must precede 'async' modifier.")
 				}
 				// `override readonly` is the required order (#614); the
 				// error is for `readonly override`.
 				if isReadonly {
-					p.addError(p.curToken, "'override' modifier must precede 'readonly' modifier.")
+					modError(p.curToken, "'override' modifier must precede 'readonly' modifier.")
 				}
 				isOverride = true
 				seenOverride = true
@@ -1888,6 +1900,22 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 		if returnTypeAnnotation == nil {
 			return nil
 		}
+	}
+
+	// A generator signature (no body): tsc parses it and its
+	// checkGrammarForGenerator reports the asterisk.
+	if p.tscDiagnostics && p.canRecover() && !isAbstract && !p.peekTokenIs(lexer.LBRACE) &&
+		(p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.RBRACE) || p.peekToken.Line > p.curToken.Line) {
+		if p.ambientClass > 0 || p.inAmbientContext > 0 || p.ambientFile {
+			p.addGrammarErrorWithCode(asteriskToken, "TS1221", "Generators are not allowed in an ambient context.")
+		} else {
+			p.addGrammarErrorWithCode(asteriskToken, "TS1222", "An overload signature cannot be declared as a generator.")
+		}
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
+		p.nextToken()
+		return nil
 	}
 
 	// Abstract generator methods cannot have implementations

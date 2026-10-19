@@ -177,6 +177,8 @@ type Parser struct {
 	// propertyModifierError: the class property being parsed already has a
 	// modifier/decorator grammar error, so its property grammar is not checked.
 	propertyModifierError bool
+	// ambientClass counts enclosing `declare class` bodies.
+	ambientClass int
 	// noIn is tsc's disallowIn context: `in` is not a binary operator in a
 	// for-statement declaration initializer (tsc mode only).
 	noIn bool
@@ -2961,6 +2963,11 @@ func (p *Parser) parseTemplateLiteral() Expression {
 
 			// Expect closing brace }
 			if !p.expectPeek(lexer.RBRACE) {
+				if p.tscDiagnostics && p.canRecover() {
+					// tsc's parseTemplateSpan: the missing '}' is reported
+					// and the template ends here with what was parsed.
+					return lit
+				}
 				p.addError(p.curToken, "expected '}' to close template interpolation")
 				return nil
 			}
@@ -3346,9 +3353,11 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 	lit.IsAsync = isAsync // Set BEFORE parsing body so context tracking works
 
 	// Check for generator syntax (function*)
+	var asteriskTok *lexer.Token
 	if p.peekTokenIs(lexer.ASTERISK) {
 		p.nextToken() // Consume the '*'
 		lit.IsGenerator = true
+		asteriskTok = p.curToken
 	}
 
 	// Optional Function Name (can be IDENT or contextual keywords like yield, get, type, etc.)
@@ -3423,6 +3432,14 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 			p.nextToken() // Consume semicolon
 		}
 
+		if asteriskTok != nil && p.tscDiagnostics {
+			// checkGrammarForGenerator
+			if p.inAmbientContext > 0 || p.ambientFile {
+				p.addGrammarErrorWithCode(asteriskTok, "TS1221", "Generators are not allowed in an ambient context.")
+			} else {
+				p.addGrammarErrorWithCode(asteriskTok, "TS1222", "An overload signature cannot be declared as a generator.")
+			}
+		}
 		sig := &FunctionSignature{
 			Token:                lit.Token,
 			Name:                 lit.Name,
@@ -11808,7 +11825,9 @@ func (p *Parser) parseTryClauses(stmt *TryStatement) bool {
 		p.nextToken() // consume 'finally'
 
 		if !p.expectPeek(lexer.LBRACE) {
-			p.addError(p.curToken, "expected '{' after 'finally'")
+			if !p.tscDiagnostics {
+				p.addError(p.curToken, "expected '{' after 'finally'")
+			}
 			return false
 		}
 
