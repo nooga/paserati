@@ -771,6 +771,12 @@ func (p *Parser) parseClassBody() *ClassBody {
 		} else {
 			// Remove duplicate PRIVATE_IDENT check - now handled earlier in the chain
 			debugPrint("ERROR: Unrecognized token in class body: cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
+			if p.tscDiagnostics && p.curTokenIs(lexer.EOF) {
+				// Modifiers up to the end of input (`static public`): tsc
+				// reads the last as a property name; the body's '}' is
+				// what is missing.
+				continue
+			}
 			p.addError(p.curToken, "Unexpected token. A constructor, method, accessor, or property was expected.")
 			p.nextToken()
 		}
@@ -1150,7 +1156,7 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		}
 	} else {
 		// No initializer
-		p.checkClassFieldEnd(p.prevToken, p.curToken)
+		p.checkTypedClassFieldEnd(typeAnnotation != nil)
 		// Check for optional semicolon and skip it
 		if p.curTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move past semicolon
@@ -1238,7 +1244,7 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 		}
 	} else {
 		// No initializer
-		p.checkClassFieldEnd(p.prevToken, p.curToken)
+		p.checkTypedClassFieldEnd(typeAnnotation != nil)
 		// Check for optional semicolon and skip it
 		if p.curTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move past semicolon
@@ -1843,7 +1849,18 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 
 	// Check that we have a valid method name token
 	// Use isValidMethodName() to allow keywords like 'yield', 'await', etc. as method names
-	if !p.isValidMethodName() && !p.curTokenIs(lexer.LBRACKET) {
+	var methodName Expression
+	var methodToken *lexer.Token
+
+	if p.tscDiagnostics && p.canRecover() && (p.curTokenIs(lexer.LPAREN) || p.curTokenIs(lexer.LT)) {
+		// tsc: a missing name, then the method parses normally.
+		p.addErrorWithCode(p.curToken, errors.TS1003, "Identifier expected.")
+		missing := p.missingExpression()
+		missing.Token.StartPos, missing.Token.EndPos = p.curToken.StartPos, p.curToken.StartPos
+		missing.Token.Line, missing.Token.Column = p.curToken.Line, p.curToken.Column
+		methodToken, methodName = missing.Token, missing
+		p.stepBackForMissing()
+	} else if !p.isValidMethodName() && !p.curTokenIs(lexer.LBRACKET) {
 		if p.tscDiagnostics {
 			p.addErrorWithCode(p.curToken, errors.TS1003, "Identifier expected.")
 		} else {
@@ -1852,10 +1869,9 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 		return nil
 	}
 
-	var methodName Expression
-	var methodToken *lexer.Token
-
-	if p.curTokenIs(lexer.LBRACKET) {
+	if methodName != nil {
+		// recovered above
+	} else if p.curTokenIs(lexer.LBRACKET) {
 		// Computed generator method: *[expr]() { ... }
 		methodToken = p.curToken
 		p.nextToken() // Consume '['

@@ -2750,6 +2750,9 @@ scan:
 func (p *Parser) parseExpression(precedence int) Expression {
 	debugPrint("parseExpression(prec=%d): cur='%s' (%s)", precedence, p.curToken.Literal, p.curToken.Type)
 	prefix := p.prefixParseFns[p.curToken.Type]
+	if p.tscDiagnostics && statementOnlyKeyword(p.curToken.Type) {
+		prefix = nil
+	}
 	if prefix == nil {
 		if re := p.unterminatedRegex(); re != nil {
 			return p.parseInfixContinuation(re, precedence)
@@ -2793,6 +2796,7 @@ func (p *Parser) parseExpression(precedence int) Expression {
 // for-head, which parses at LESSGREATER so a following `in`/`of` is not eaten
 // as an operator) use it to resume once the stop is no longer needed.
 func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expression {
+loop:
 	for !p.peekTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.SEMICOLON) && precedence < p.peekPrecedence() {
 		// ASI restricted production: [no LineTerminator here] before postfix ++/--
 		// Per ECMAScript §12.9.3, if there is a LineTerminator between the left-hand
@@ -2803,9 +2807,14 @@ func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expr
 		}
 		// tsc applies at most one postfix ++/-- (parsePostfixExpressionOrHigher):
 		// in `a++ ++` the second one starts the next statement.
-		if (p.peekToken.Type == lexer.INC || p.peekToken.Type == lexer.DEC) && p.tscDiagnostics {
-			if u, ok := leftExp.(*UpdateExpression); ok && !u.Prefix {
-				break
+		// Nor is a postfix expression the object of a member access or call:
+		// in `a--.x` the `.` starts the next statement.
+		if p.tscDiagnostics {
+			switch p.peekToken.Type {
+			case lexer.INC, lexer.DEC, lexer.DOT, lexer.LBRACKET, lexer.LPAREN, lexer.OPTIONAL_CHAINING:
+				if u, ok := leftExp.(*UpdateExpression); ok && !u.Prefix {
+					break loop
+				}
 			}
 		}
 		// tsc returns an arrow function as a whole AssignmentExpression: in
@@ -3327,6 +3336,11 @@ func (p *Parser) parseNewExpression() Expression {
 
 	// Regular new expression
 	ne := &NewExpression{Token: newToken}
+	if p.tscDiagnostics && p.peekTokenIs(lexer.LT) {
+		// tsc's parseMemberExpressionOrHigher has no type assertion: the
+		// callee is missing, and `<T>Foo()` parses on as it would anyway.
+		p.addErrorWithCode(p.peekToken, errors.TS1109, "Expression expected.")
+	}
 
 	// Move to the next token (constructor identifier/expression)
 	p.nextToken()
@@ -9966,6 +9980,13 @@ func (p *Parser) parseInterfaceBracketProperty() *InterfaceProperty {
 
 			prop.Type = funcType
 			prop.IsMethod = true
+			return prop
+		}
+
+		// A computed property without a type annotation is `any`, like a
+		// named one.
+		if p.tscDiagnostics && (p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.COMMA) ||
+			p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.EOF) || p.peekToken.Line != p.curToken.Line) {
 			return prop
 		}
 

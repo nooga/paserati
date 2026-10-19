@@ -101,7 +101,17 @@ func (p *Parser) reportStatementStart() {
 // isStartOfExpression), judged by whether the Pratt parser has a prefix rule.
 func (p *Parser) startsExpression(tok *lexer.Token) bool {
 	// A `/` or `/=` there is rescanned as a regular expression.
+	if p.tscDiagnostics && statementOnlyKeyword(tok.Type) {
+		return false
+	}
 	return p.prefixParseFns[tok.Type] != nil || tok.Type == lexer.SLASH || tok.Type == lexer.SLASH_ASSIGN
+}
+
+// statementOnlyKeyword reports reserved words that have a prefix parse
+// function (as identifiers, for property-name positions) but can never start
+// an expression in tsc.
+func statementOnlyKeyword(t lexer.TokenType) bool {
+	return t == lexer.RETURN || t == lexer.THROW
 }
 
 // parseArgumentsRecover parses call arguments with tsc's parseDelimitedList
@@ -131,6 +141,12 @@ loop:
 			break loop
 		default:
 			p.addErrorWithCode(p.peekToken, "TS1135", "Argument expression expected.")
+			if p.tscDiagnostics && listAbortsAt(p.peekToken) && !p.peekTokenIs(lexer.ILLEGAL) {
+				// abortParsingListOrMoveToNextToken: a statement start ends
+				// the list. (tsc's scanner never yields an invalid
+				// character as a token.)
+				break loop
+			}
 			p.nextToken() // skip the offending token
 		}
 	}

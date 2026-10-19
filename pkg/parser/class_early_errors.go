@@ -270,6 +270,26 @@ func (p *Parser) checkClassFieldEnd(last, next *lexer.Token) {
 	}
 }
 
+// checkTypedClassFieldEnd is checkClassFieldEnd for a field without an
+// initializer, where cur is the token after the field. tsc's
+// parseSemicolonAfterPropertyName has its own messages after a type
+// annotation.
+func (p *Parser) checkTypedClassFieldEnd(hasType bool) {
+	last, next := p.prevToken, p.curToken
+	if p.tscDiagnostics && hasType && last != nil && next != nil && !(next.Type == lexer.AT && next.Line == last.Line) {
+		switch {
+		case next.Type == lexer.LPAREN:
+			p.addErrorWithCode(next, "TS1441", "Cannot start a function call in a type annotation.")
+			p.nextToken()
+			return
+		case next.Line == last.Line && next.Type != lexer.SEMICOLON && next.Type != lexer.RBRACE && next.Type != lexer.EOF:
+			p.addErrorWithCode(next, "TS1442", "Expected '=' for property initializer.")
+			return
+		}
+	}
+	p.checkClassFieldEnd(last, next)
+}
+
 // initializerHazard is what scanInitializer found in a field initializer
 // or static block.
 type initializerHazard struct {
