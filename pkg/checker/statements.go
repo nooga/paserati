@@ -1848,6 +1848,10 @@ func (c *Checker) extractConstantPropertyName(expr parser.Expression) string {
 		// TODO: Add constant folding support
 		return ""
 	default:
+		// A well-known symbol (`[Symbol.iterator]`) names a member too.
+		if key, ok := wellKnownSymbolKey(expr); ok {
+			return key
+		}
 		return ""
 	}
 }

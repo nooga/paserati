@@ -374,6 +374,8 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
 				keyName = fmt.Sprintf("%v", literal.Value)
+			} else if symKey, ok := wellKnownSymbolKey(key.Expr); ok {
+				keyName = symKey
 			} else {
 				keyName = "__COMPUTED_PROPERTY__"
 			}
@@ -1216,8 +1218,11 @@ func isDynamicComputedObjectKey(key *parser.ComputedPropertyName) bool {
 	case *parser.StringLiteral, *parser.NumberLiteral, *parser.BigIntLiteral:
 		return false
 	case *parser.MemberExpression:
-		if objectIdent, ok := expr.Object.(*parser.Identifier); ok && objectIdent.Value == "Symbol" {
-			return true
+		// A well-known symbol other than Symbol.iterator names a member
+		// (@@symbol:name); Symbol.iterator keeps the legacy marker key, which
+		// collects the dynamic keys' values.
+		if key, ok := wellKnownSymbolKey(expr); ok && key != "__COMPUTED_PROPERTY__" {
+			return false
 		}
 	}
 	return true

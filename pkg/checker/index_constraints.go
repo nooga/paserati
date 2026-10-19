@@ -308,7 +308,10 @@ func (c *Checker) checkClassIndexConstraints(body *parser.ClassBody, instanceTyp
 	// the member against the index signatures its key type selects.
 	checkUnbound := func(key parser.Expression, tok *lexer.Token, static bool, memberType types.Type) {
 		cp, ok := key.(*parser.ComputedPropertyName)
-		if !ok || cp.Expr == nil || memberType == nil || c.extractConstantPropertyName(cp.Expr) != "" {
+		if !ok || cp.Expr == nil || memberType == nil {
+			return
+		}
+		if _, symbolKey := wellKnownSymbolKey(cp.Expr); !symbolKey && c.extractConstantPropertyName(cp.Expr) != "" {
 			return
 		}
 		if _, isStr := cp.Expr.(*parser.StringLiteral); isStr {
