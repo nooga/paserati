@@ -168,6 +168,12 @@ type Parser struct {
 	labels         []labelEntry
 	functionDepth  int
 	newTargetDepth int
+	// tscNewTargetBad is tsc's checkNewTargetMetaProperty: whether the
+	// nearest `this` container (arrows are transparent) is not a function
+	// declaration/expression or constructor. tscCtorBody marks the next
+	// bodyMethod as a constructor body.
+	tscNewTargetBad bool
+	tscCtorBody     bool
 	// superPropertyDepth > 0 where `super.x` / `super[x]` is legal: method
 	// bodies and class bodies, and arrows within them.
 	superPropertyDepth  int
@@ -337,11 +343,12 @@ var typePrecedences = map[lexer.TokenType]int{
 func NewParser(l *lexer.Lexer) *Parser {
 	src := l.GetSource()
 	p := &Parser{
-		l:         l,
-		source:    src, // Cache source from lexer
-		errors:    []errors.PaseratiError{},
-		arena:     newASTArenaSized(0),  // Initialize arena for AST node allocation (grows on demand)
-		tokenPool: newTokenPoolSized(0), // Initialize pool for *lexer.Token storage (grows by doubling)
+		l:               l,
+		source:          src, // Cache source from lexer
+		errors:          []errors.PaseratiError{},
+		tscNewTargetBad: true,                 // the source file is not a new.target container
+		arena:           newASTArenaSized(0),  // Initialize arena for AST node allocation (grows on demand)
+		tokenPool:       newTokenPoolSized(0), // Initialize pool for *lexer.Token storage (grows by doubling)
 	}
 	if src != nil {
 		name := src.Path
@@ -3071,7 +3078,13 @@ func (p *Parser) parseSuperExpression() Expression {
 		return nil
 	}
 	if p.superPropertyDepth == 0 && (p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET)) {
-		p.addError(p.curToken, "SyntaxError: 'super' keyword unexpected here")
+		if p.tscDiagnostics {
+			// tsc's checkSuperExpression: no class or object-literal member
+			// encloses this super property access.
+			p.addSemanticErrorWithCode(p.curToken, "TS2660", "'super' can only be referenced in members of derived classes or object literal expressions.")
+		} else {
+			p.addError(p.curToken, "SyntaxError: 'super' keyword unexpected here")
+		}
 	}
 	return &SuperExpression{Token: p.curToken}
 }
@@ -3089,7 +3102,11 @@ func (p *Parser) parseNewExpression() Expression {
 			if newToken.EndPos-newToken.StartPos != len("new") || p.curToken.EndPos-p.curToken.StartPos != len("target") {
 				p.addError(newToken, "SyntaxError: Keyword must not contain escaped characters")
 			}
-			if p.newTargetDepth == 0 {
+			if p.tscDiagnostics {
+				if p.tscNewTargetBad {
+					p.addSemanticErrorWithCode(newToken, "TS17013", "Meta-property 'new.target' is only allowed in the body of a function declaration, function expression, or constructor.")
+				}
+			} else if p.newTargetDepth == 0 {
 				p.addError(newToken, "SyntaxError: new.target expression is not allowed here")
 			}
 			return &NewTargetExpression{Token: newToken}
@@ -4652,12 +4669,23 @@ func (p *Parser) parseFunctionBody(params []*Parameter, rest *RestParameter, kin
 	if !p.curTokenIs(lexer.LBRACE) && p.canRecover() {
 		// expectPeekBraceRecover found no '{': the body is missing (tsc's
 		// parseBlock with a missing list); nothing is consumed.
+		p.tscCtorBody = false
 		return &BlockStatement{Token: p.peekToken, Statements: []Statement{}, HoistedDeclarations: map[string]Expression{}}
 	}
 	savedStrict := p.strictMode
 	savedLabels := p.labels
 	savedFunctionDepth := p.functionDepth
 	savedNewTarget := p.newTargetDepth
+	savedTscNewTarget := p.tscNewTargetBad
+	switch kind {
+	case bodyFunction:
+		p.tscNewTargetBad = false
+	case bodyMethod:
+		p.tscNewTargetBad = !p.tscCtorBody
+	case bodyStaticBlock:
+		p.tscNewTargetBad = true
+	}
+	p.tscCtorBody = false
 	savedSuperProp := p.superPropertyDepth
 	savedInStaticBlock := p.inStaticBlock
 	p.inStaticBlock = kind == bodyStaticBlock
@@ -4687,6 +4715,7 @@ func (p *Parser) parseFunctionBody(params []*Parameter, rest *RestParameter, kin
 	}
 	p.superPropertyDepth = savedSuperProp
 	p.newTargetDepth = savedNewTarget
+	p.tscNewTargetBad = savedTscNewTarget
 	p.functionDepth = savedFunctionDepth
 	p.inStaticBlock = savedInStaticBlock
 	p.iterDepth, p.switchDepth = savedIter, savedSwitch

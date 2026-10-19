@@ -723,7 +723,7 @@ func propertyKeyName(key Expression) (name string, tok *lexer.Token, private boo
 		if k.Token != nil && k.Token.Type == lexer.NUMBER {
 			return CanonicalNumericName(k.Value), k.Token, false
 		}
-		return k.Value, k.Token, false
+		return k.Value, k.Token, strings.HasPrefix(k.Value, "#")
 	case *StringLiteral:
 		if looksNumeric(k.Value) {
 			return "", nil, false // "1" and 1.0 name the same property in tsc; we skip numeric names
@@ -901,7 +901,7 @@ func (b *binder) bindClassBody(body *ClassBody, sym *bindSymbol, ambient bool) {
 			continue
 		}
 		if prev&dmPrivateStatic != meaning&dmPrivateStatic {
-			b.report(it.tok, "TS18038", fmt.Sprintf("Duplicate identifier '%s'. Static and instance elements cannot share the same private name.", it.name))
+			b.report(it.tok, "TS2804", fmt.Sprintf("Duplicate identifier '%s'. Static and instance elements cannot share the same private name.", it.name))
 			continue
 		}
 		prevIsMethod, isMethod := prev&dmMethod != 0, meaning&dmMethod != 0
@@ -917,11 +917,16 @@ func (b *binder) bindClassBody(body *ClassBody, sym *bindSymbol, ambient bool) {
 	}
 
 	// Private names: a duplicate private name is a TS2300 on both (the binder
-	// declares them in the same table as other members under a mangled name).
-	privTable := bindTable{}
+	// declares them under a mangled name). Like other members, static private names live in the class's exports
+	// and instance ones in its members, so only same-placement names clash.
+	privInstance, privStatic := bindTable{}, bindTable{}
 	for _, it := range items {
 		if it.private && it.name != "" {
-			b.declare(privTable, it.name, it.tok, it.flags, it.excludes, it.decl)
+			table := privInstance
+			if it.isStatic {
+				table = privStatic
+			}
+			b.declare(table, it.name, it.tok, it.flags, it.excludes, it.decl)
 		}
 	}
 

@@ -139,7 +139,9 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 			((prev[0].kind == "getter" && kind == "setter") || (prev[0].kind == "setter" && kind == "getter")) {
 			dup = false
 		}
-		if dup {
+		// tsc reports duplicate private names from its binder and checker
+		// (see bindClassBody in binder_dups.go), not as a syntax error.
+		if dup && !p.tscDiagnostics {
 			before := len(p.errors)
 			p.addError(tok, "Identifier '"+name+"' has already been declared")
 			if len(p.errors) > before {

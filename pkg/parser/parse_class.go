@@ -944,6 +944,7 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 		return nil
 	}
 
+	p.tscCtorBody = true
 	body := p.parseFunctionBody(parameters, restParameter, bodyMethod)
 
 	// parseBlockStatement leaves us at '}', advance past it
@@ -1199,7 +1200,7 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		p.nextToken() // move past '='
 		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
 		// This allows chained assignments like: x = obj['lol'] = 42
-		initializer = p.parseExpression(COMMA)
+		initializer = p.parseFieldInitializer()
 		p.checkClassFieldEnd(p.curToken, p.peekToken)
 
 		// After parseExpression, curToken is at the last token of the expression.
@@ -1283,7 +1284,7 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 		p.nextToken() // move past '='
 		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
 		// This allows chained assignments like: x = obj['lol'] = 42
-		initializer = p.parseExpression(COMMA)
+		initializer = p.parseFieldInitializer()
 		p.checkClassFieldEnd(p.curToken, p.peekToken)
 
 		// After parseExpression, curToken is at the last token of the expression.
@@ -1832,7 +1833,7 @@ func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expres
 		p.nextToken() // Move past '=' to the initializer expression
 		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
 		// This allows chained assignments like: x = obj['lol'] = 42
-		initializer = p.parseExpression(COMMA)
+		initializer = p.parseFieldInitializer()
 
 		// After parseExpression, curToken is at the last token of the
 		// initializer. Handle ASI: consume an explicit semicolon and move
@@ -2103,4 +2104,14 @@ func (p *Parser) noteDecoratedSignature(decorators []*Decorator) {
 	if len(decorators) > 0 {
 		p.addGrammarErrorWithCode(decorators[0].Token, "TS1249", "A decorator can only decorate a method implementation, not an overload.")
 	}
+}
+
+// parseFieldInitializer parses a class field's initializer. For tsc a
+// property declaration is a `this` container of its own, so new.target in it
+// (outside a nested function) is an error.
+func (p *Parser) parseFieldInitializer() Expression {
+	saved := p.tscNewTargetBad
+	p.tscNewTargetBad = true
+	defer func() { p.tscNewTargetBad = saved }()
+	return p.parseExpression(COMMA)
 }
