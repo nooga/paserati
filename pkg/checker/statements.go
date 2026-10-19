@@ -778,6 +778,25 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			} else {
 				bodyType.SetProperty("new", constructorType)
 			}
+		} else if prop.IsComputedProperty {
+			// [expr]: Type, as in the non-generic path.
+			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				propType = types.Any
+			}
+			if computedName := c.extractConstantPropertyName(prop.ComputedName); computedName != "" {
+				bodyType.SetProperty(computedName, propType)
+				setReadonlyProperty(bodyType, computedName, prop.Readonly)
+				if prop.Optional {
+					optionalProperties[computedName] = true
+				}
+			} else {
+				indexSignatures = append(indexSignatures, &types.IndexSignature{
+					KeyType:   types.String,
+					Synthetic: true,
+					ValueType: propType,
+				})
+			}
 		} else if prop.Name == nil {
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {

@@ -5048,6 +5048,18 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		c.checkObjectLiteralWithContext(node, context)
 	case *parser.ArrowFunctionLiteral:
 		c.checkArrowFunctionLiteralWithContext(node, context)
+	case *parser.MethodDefinition:
+		// An object literal method (`m(x) {}`): its unannotated parameters
+		// take the contextual signature's parameter types.
+		if fn := node.Value; node.Kind == "method" && fn != nil && len(fn.TypeParameters) == 0 {
+			if ctxTypes := contextualParameterTypes(context.ExpectedType, fn.Parameters, fn.RestParameter); len(ctxTypes) > 0 {
+				if c.functionLiteralContext == nil {
+					c.functionLiteralContext = make(map[*parser.FunctionLiteral][]types.Type)
+				}
+				c.functionLiteralContext[fn] = ctxTypes
+			}
+		}
+		c.visit(node)
 	case *parser.FunctionLiteral:
 		// A function expression's unannotated parameters take the contextual
 		// signature's parameter types.

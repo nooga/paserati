@@ -1314,12 +1314,73 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 
 // isLikelyFunctionArgument checks if an argument node is likely a function (for two-phase inference)
 func (c *Checker) isLikelyFunctionArgument(argNode parser.Expression) bool {
-	switch argNode.(type) {
+	switch arg := argNode.(type) {
 	case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
 		return true
-	default:
-		return false
+	case *parser.ObjectLiteral:
+		// An object literal holding a context-sensitive function (a method
+		// or function-valued property with an unannotated parameter) is
+		// typed once the other arguments have fixed what they can, as tsc
+		// defers context-sensitive arguments.
+		// FIXME: tsc still infers from the literal's other properties in
+		// its first pass; here the whole literal waits.
+		for _, prop := range arg.Properties {
+			if prop != nil && hasUnannotatedParams(prop.Value) {
+				return true
+			}
+		}
 	}
+	return false
+}
+
+// partialObjectLiteralType types an object literal argument without its
+// context-sensitive members, speculatively (nothing is reported): tsc's
+// first inference pass sees those members as non-inferrable.
+func (c *Checker) partialObjectLiteralType(obj *parser.ObjectLiteral) types.Type {
+	partial := &parser.ObjectLiteral{BaseExpression: obj.BaseExpression, Token: obj.Token}
+	for _, prop := range obj.Properties {
+		if prop == nil || hasUnannotatedParams(prop.Value) {
+			continue
+		}
+		if _, computed := prop.Key.(*parser.ComputedPropertyName); computed {
+			continue
+		}
+		partial.Properties = append(partial.Properties, prop)
+	}
+	if len(partial.Properties) == 0 {
+		return nil
+	}
+	var t types.Type
+	c.speculate(func() {
+		c.visit(partial)
+		t = partial.GetComputedType()
+	})
+	return t
+}
+
+// hasUnannotatedParams reports whether expr is a function, arrow or method
+// with a parameter that has no type annotation (a context-sensitive
+// function).
+func hasUnannotatedParams(expr parser.Expression) bool {
+	var params []*parser.Parameter
+	switch fn := expr.(type) {
+	case *parser.FunctionLiteral:
+		params = fn.Parameters
+	case *parser.ArrowFunctionLiteral:
+		params = fn.Parameters
+	case *parser.ShorthandMethod:
+		params = fn.Parameters
+	case *parser.MethodDefinition:
+		if fn.Value != nil {
+			params = fn.Value.Parameters
+		}
+	}
+	for _, p := range params {
+		if p != nil && !p.IsThis && p.TypeAnnotation == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // collectTypeParameterConstraintsPhase1 collects constraints only from non-nil argument types
@@ -1482,8 +1543,20 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		}
 	}
 
-	// Collect constraints from non-function arguments only
-	constraints := c.collectTypeParameterConstraintsPhase1(genericSig, argTypes)
+	// Collect constraints from non-function arguments only, and from the
+	// members of deferred object literals that are not context-sensitive.
+	phase1Types := argTypes
+	for i, argNode := range callNode.Arguments {
+		if obj, ok := argNode.(*parser.ObjectLiteral); ok && i < len(argTypes) && argTypes[i] == nil {
+			if partial := c.partialObjectLiteralType(obj); partial != nil {
+				if &phase1Types[0] == &argTypes[0] {
+					phase1Types = append([]types.Type(nil), argTypes...)
+				}
+				phase1Types[i] = partial
+			}
+		}
+	}
+	constraints := c.collectTypeParameterConstraintsPhase1(genericSig, phase1Types)
 	if checkerDebug {
 		debugPrintf("// [Checker Inference] Phase 1: Collected %d type parameter constraints\n", len(constraints))
 	}
