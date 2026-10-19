@@ -1639,6 +1639,8 @@ func (r *Relation) apparentMembersAssignable(source Type, tgt *ObjectType) bool 
 			kind = "boolean"
 		case BigInt:
 			kind = "bigint"
+		case Symbol:
+			kind = "symbol"
 		}
 	}
 	if kind == "" {

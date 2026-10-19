@@ -27,7 +27,9 @@ func setReadonlyProperty(obj *types.ObjectType, name string, readonly bool) {
 
 // checkReadonlyAssignmentTarget reports a write (=, op=, ++, --) to a
 // read-only property or index: TS2540 for a named property, TS2542 for a
-// readonly index signature or array. It returns whether it reported.
+// readonly index signature or array. It returns whether the target is
+// unusable (TS2540: tsc types it as an error); after TS2542 the index type
+// still applies, so the assigned value is checked against it.
 func (c *Checker) checkReadonlyAssignmentTarget(target parser.Expression) bool {
 	var objectExpr parser.Expression
 	var name string
@@ -59,7 +61,6 @@ func (c *Checker) checkReadonlyAssignmentTarget(target parser.Expression) bool {
 		if !c.isReadonlyProperty(objectType, name, 0) {
 			if !c.hasProperty(objectType, name) && c.hasReadonlyIndex(objectType, name) {
 				c.addErrorWithCode(target, errors.TS2542, fmt.Sprintf("Index signature in type '%s' only permits reading.", objectType.String()))
-				return true
 			}
 			return false
 		}
@@ -75,7 +76,6 @@ func (c *Checker) checkReadonlyAssignmentTarget(target parser.Expression) bool {
 	}
 	if c.hasReadonlyIndex(objectType, "") {
 		c.addErrorWithCode(target, errors.TS2542, fmt.Sprintf("Index signature in type '%s' only permits reading.", objectType.String()))
-		return true
 	}
 	return false
 }

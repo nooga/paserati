@@ -81,6 +81,12 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("description", types.NewUnionType(types.String, types.Undefined))
 
 	ctx.SetPrimitivePrototype("symbol", symbolProtoType)
+	// The Symbol interface (the wrapper object type) is the prototype's
+	// shape; `symbol` is assignable to it, but not the other way round.
+	symbolProtoType.DisplayName = "Symbol"
+	if err := ctx.DefineTypeAlias("Symbol", symbolProtoType); err != nil {
+		return err
+	}
 
 	return nil
 }
