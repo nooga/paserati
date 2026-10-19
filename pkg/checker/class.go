@@ -266,14 +266,10 @@ func (c *Checker) tryExtractConstantComputedPropertyName(expr parser.Expression)
 	case *parser.NumberLiteral:
 		return fmt.Sprintf("%v", e.Value), true
 	case *parser.MemberExpression:
-		// Check for Symbol.iterator
-		if obj, ok := e.Object.(*parser.Identifier); ok && obj.Value == "Symbol" {
-			if prop, ok := e.Property.(*parser.Identifier); ok && prop.Value == "iterator" {
-				debugPrintf("// [Checker Class] Detected Symbol.iterator constant computed property\n")
-				return "__COMPUTED_PROPERTY__", true
-			}
+		// A well-known symbol (Symbol.iterator, Symbol.hasInstance, ...).
+		if key, ok := wellKnownSymbolKey(e); ok {
+			return key, true
 		}
-		debugPrintf("// [Checker Class] MemberExpression not Symbol.iterator: %T.%T\n", e.Object, e.Property)
 		return "", false
 	case *parser.Identifier:
 		// A constant whose type is a string or number literal names the
@@ -315,6 +311,29 @@ func (c *Checker) tryExtractConstantComputedPropertyName(expr parser.Expression)
 		debugPrintf("// [Checker Class] Non-constant computed property expression: %T\n", expr)
 		return "", false
 	}
+}
+
+// wellKnownSymbolKey is the property key of a well-known symbol member,
+// `Symbol.name`: the legacy __COMPUTED_PROPERTY__ for Symbol.iterator (the
+// builtin iterables use it), "@@symbol:name" for the others, as object
+// literals name them.
+func wellKnownSymbolKey(expr parser.Expression) (string, bool) {
+	m, ok := expr.(*parser.MemberExpression)
+	if !ok {
+		return "", false
+	}
+	obj, ok := m.Object.(*parser.Identifier)
+	if !ok || obj.Value != "Symbol" {
+		return "", false
+	}
+	prop, ok := m.Property.(*parser.Identifier)
+	if !ok {
+		return "", false
+	}
+	if prop.Value == "iterator" {
+		return "__COMPUTED_PROPERTY__", true
+	}
+	return "@@symbol:" + prop.Value, true
 }
 
 // validateParamListBasic checks TS1015 (optional+default) and TS1016 (required after optional)
@@ -1340,6 +1359,9 @@ func (c *Checker) refineMethodReturnType(owner *types.ObjectType, body *parser.C
 		// An accessor property typed any before its getter body was checked
 		// takes the getter's inferred return type.
 		name, known := getMethodKeyString(method.Key)
+		if ck, isComputed := method.Key.(*parser.ComputedPropertyName); !known && isComputed {
+			name, known = c.tryExtractConstantComputedPropertyName(ck.Expr)
+		}
 		if !known {
 			return
 		}

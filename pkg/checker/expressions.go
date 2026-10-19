@@ -2244,6 +2244,16 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		indexStringValue = vm.AsString(litIndex.Value)
 	}
 
+	// A well-known symbol key names a member: x[Symbol.hasInstance].
+	if obj, isObj := leftType.(*types.ObjectType); isObj && indexType != types.Any && c.rel.IsAssignable(indexType, types.Symbol) {
+		if key, ok := wellKnownSymbolKey(node.Index); ok {
+			if propType, found := obj.EffectiveProperty(key); found && propType != nil {
+				node.SetComputedType(propType)
+				return
+			}
+		}
+	}
+
 	// 3. Check base type (allow Array for now)
 	// First handle the special case of 'any'
 	if leftType == types.Any {
