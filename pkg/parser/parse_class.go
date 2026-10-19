@@ -392,6 +392,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		// Parse all modifiers until we hit something that's not a modifier
 		hasAccessibility := false
 		isDeclare := false
+		var declareTok, abstractModTok *lexer.Token
 		seenAsync := false
 		seenOverride := false
 		for {
@@ -422,6 +423,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "declare" && !isFieldName() {
 				// 'declare' modifier on class member (valid for properties; only error if method has body)
 				isDeclare = true
+				declareTok = p.curToken
 				p.nextToken()
 			} else if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED)) && !isFieldName() {
 				if hasAccessibility {
@@ -449,6 +451,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 					p.addError(p.curToken, "'abstract' modifier must precede 'override' modifier.")
 				}
 				isAbstract = true
+				abstractModTok = p.curToken
 				if !abstractClass && p.tscDiagnostics {
 					abstractTok = p.curToken
 				}
@@ -538,6 +541,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 			if isAsync && asyncTok != nil {
 				p.addErrorWithCode(asyncTok, errors.TS1042, "'async' modifier cannot be used here.")
 			}
+			if isDeclare && p.tscDiagnostics {
+				p.addGrammarErrorWithCode(declareTok, "TS1031", "'declare' modifier cannot appear on class elements of this kind.")
+			}
 			switch m := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride).(type) {
 			case *MethodDefinition:
 				attachDecorators(m)
@@ -553,6 +559,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 			// And NOT if there's a newline (ASI) or a field terminator - that's a field named "set"
 			if isAsync && asyncTok != nil {
 				p.addErrorWithCode(asyncTok, errors.TS1042, "'async' modifier cannot be used here.")
+			}
+			if isDeclare && p.tscDiagnostics {
+				p.addGrammarErrorWithCode(declareTok, "TS1031", "'declare' modifier cannot appear on class elements of this kind.")
 			}
 			switch m := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride).(type) {
 			case *MethodDefinition:
@@ -676,6 +685,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 				if isDeclare {
 					p.addError(p.curToken, "'declare' modifier cannot appear on class elements of this kind.")
 				}
+				if isAbstract && p.tscDiagnostics && abstractModTok != nil {
+					p.addGrammarErrorWithCode(abstractModTok, "TS1242", "'abstract' modifier can only appear on a class, method, or property declaration.")
+				}
 				result := p.parseConstructor(isStatic, isPublic, isPrivate, isProtected)
 				if result != nil {
 					if sig, ok := result.(*ConstructorSignature); ok {
@@ -716,6 +728,11 @@ func (p *Parser) parseClassBody() *ClassBody {
 					// It's a property
 					property := p.parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected, isOverride, isDeclare)
 					if property != nil {
+						if isAbstract && property.Value != nil && p.tscDiagnostics {
+							if id, ok := property.Key.(*Identifier); ok {
+								p.addSemanticErrorWithCode(id.Token, "TS1267", fmt.Sprintf("Property '%s' cannot have an initializer because it is marked abstract.", id.Value))
+							}
+						}
 						property.IsAccessor = isAccessor
 						attachDecorators(property)
 						properties = append(properties, property)

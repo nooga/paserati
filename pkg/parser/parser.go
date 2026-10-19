@@ -1199,6 +1199,14 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		if p.disallowModuleSyntax {
 			p.addError(p.curToken, "SyntaxError: 'export' declarations are only valid in module code")
 		}
+		// tsc parses `export <declaration>` anywhere; off the top level and
+		// out of a module body its checker reports the modifier (TS1184).
+		if p.tscDiagnostics && p.canRecover() && (inSubStatement || (len(p.blockKinds) > 0 && !p.blockKinds[len(p.blockKinds)-1])) &&
+			p.peekToken.Line == p.curToken.Line && p.startsDeclaration(p.peekToken) {
+			p.addGrammarErrorWithCode(p.curToken, "TS1184", "Modifiers cannot appear here.")
+			p.nextToken()
+			return p.parseStatement()
+		}
 		return p.parseExportDeclaration()
 	case lexer.LBRACE:
 		// Check if this is a block statement or destructuring assignment
@@ -8283,6 +8291,10 @@ func (p *Parser) parseObjectLiteral() Expression {
 	objLit.Properties = []*ObjectProperty{}
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
 		p.nextToken() // Consume '{' or ',' to get to the key
+		if p.tscDiagnostics && p.curTokenIs(lexer.PRIVATE_IDENT) {
+			// checkGrammarObjectLiteralExpression
+			p.addGrammarErrorWithCode(p.curToken, "TS18016", "Private identifiers are not allowed outside class bodies.")
+		}
 
 		// --- NEW: Check for spread syntax (...expression) ---
 		if p.curTokenIs(lexer.SPREAD) {
@@ -12403,6 +12415,9 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 			if p.inHeritage > 0 {
 				// `extends React.Component<P>`: the checker needs them.
 				p.heritageTypeArgs = tagArgs
+			} else if p.tscDiagnostics && p.peekTokenIs(lexer.DOT) {
+				// tsc's parsePropertyAccessExpressionRest
+				p.addErrorWithCode(savedCur, "TS1477", "An instantiation expression cannot be followed by a property access.")
 			}
 			return left
 		}
