@@ -100,7 +100,8 @@ func (p *Parser) reportStatementStart() {
 // startsExpression reports whether tok can begin an expression (tsc:
 // isStartOfExpression), judged by whether the Pratt parser has a prefix rule.
 func (p *Parser) startsExpression(tok *lexer.Token) bool {
-	return p.prefixParseFns[tok.Type] != nil
+	// A `/` or `/=` there is rescanned as a regular expression.
+	return p.prefixParseFns[tok.Type] != nil || tok.Type == lexer.SLASH || tok.Type == lexer.SLASH_ASSIGN
 }
 
 // parseArgumentsRecover parses call arguments with tsc's parseDelimitedList

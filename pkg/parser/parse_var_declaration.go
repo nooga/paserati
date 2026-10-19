@@ -321,7 +321,11 @@ func (p *Parser) continueForInitDeclarators(first Statement, declToken *lexer.To
 		return first
 	}
 
+	// tsc parses the whole for-statement declaration list with `in` disallowed.
+	savedNoIn := p.noIn
+	p.noIn = p.tscDiagnostics
 	extra, ok := p.parseMoreDeclListItems(nil, declToken, kind)
+	p.noIn = savedNoIn
 	if !ok {
 		return nil
 	}

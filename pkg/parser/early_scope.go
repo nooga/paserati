@@ -670,9 +670,15 @@ func (p *Parser) parseSubStatement(ctx subStatementContext) Statement {
 	// declaration, even when a line break separates the two tokens.
 	letBracket := p.curTokenIs(lexer.LET) && p.peekTokenIs(lexer.LBRACKET)
 	p.inSubStatement = true
+	p.subStatementModifierError = false
 	stmt := p.parseStatement()
+	modifierError := p.subStatementModifierError
+	p.subStatementModifierError = false
 	if stmt == nil {
 		return nil
+	}
+	if modifierError {
+		return stmt
 	}
 	strict := p.isStrictContext()
 	if letBracket {

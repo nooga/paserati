@@ -41,7 +41,14 @@ func (p *Parser) checkForInOfHead(head Statement, isOf bool) {
 		declarators(s.Token, s.Declarations, true)
 	case *LetStatement:
 		if !isOf && (s.IsUsing || s.IsAwaitUsing) {
-			p.addError(s.Token, "'using' declarations are not allowed in a for-in statement")
+			switch {
+			case p.tscDiagnostics && s.IsAwaitUsing:
+				p.addGrammarErrorWithCode(s.Token, "TS1494", "The left-hand side of a 'for...in' statement cannot be an 'await using' declaration.")
+			case p.tscDiagnostics:
+				p.addGrammarErrorWithCode(s.Token, "TS1493", "The left-hand side of a 'for...in' statement cannot be a 'using' declaration.")
+			default:
+				p.addError(s.Token, "'using' declarations are not allowed in a for-in statement")
+			}
 			return
 		}
 		declarators(s.Token, s.Declarations, false)

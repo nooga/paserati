@@ -177,6 +177,9 @@ type Parser struct {
 	// propertyModifierError: the class property being parsed already has a
 	// modifier/decorator grammar error, so its property grammar is not checked.
 	propertyModifierError bool
+	// subStatementModifierError: the single-statement body just parsed had
+	// a modifier error, which stops tsc's grammar checks of that statement.
+	subStatementModifierError bool
 	// ambientClass counts enclosing `declare class` bodies.
 	ambientClass int
 	// noIn is tsc's disallowIn context: `in` is not a binary operator in a
@@ -772,6 +775,27 @@ func (p *Parser) nextToken() {
 	}
 }
 
+// skipObjectMemberMarker drops a `?` or `!` after an object literal member
+// name: tsc parses them on any member and its checker's
+// checkGrammarObjectLiteralExpression reports them (grammar errors).
+func (p *Parser) skipObjectMemberMarker() {
+	if !p.tscDiagnostics || !p.canRecover() || p.jsx || (!p.peekTokenIs(lexer.QUESTION) && !p.peekTokenIs(lexer.BANG)) {
+		return
+	}
+	switch p.lookAhead(1).Type {
+	case lexer.COLON, lexer.COMMA, lexer.RBRACE, lexer.LPAREN, lexer.LT, lexer.ASSIGN:
+	default:
+		return
+	}
+	marker := p.peekToken
+	p.peekToken = p.tokenPool.Take(p.l.NextToken())
+	if marker.Type == lexer.QUESTION {
+		p.addGrammarErrorWithCode(marker, "TS1162", "An object member cannot be declared optional.")
+	} else {
+		p.addGrammarErrorWithCode(marker, "TS1255", "A definite assignment assertion '!' is not permitted in this context.")
+	}
+}
+
 // rescanPeekAsRegex rescans the peek token as a regex literal if it's a SLASH.
 // This is called after parsing statement-ending braces where the next / should be regex.
 func (p *Parser) rescanPeekAsRegex() {
@@ -1210,6 +1234,7 @@ func (p *Parser) parseStatementNoDoc() Statement {
 			p.peekToken.Line == p.curToken.Line && p.startsDeclaration(p.peekToken) {
 			p.addGrammarErrorWithCode(p.curToken, "TS1184", "Modifiers cannot appear here.")
 			p.nextToken()
+			p.subStatementModifierError = inSubStatement
 			return p.parseStatement()
 		}
 		return p.parseExportDeclaration()
@@ -2583,12 +2608,87 @@ func isDeclarationLikeExpression(expr Expression) bool {
 	return false
 }
 
+// unterminatedRegex is tsc's reScanSlashToken for a `/` in expression
+// position that starts no complete regular expression: the literal runs to
+// the first unbalanced `)`, `]` or `}` (or the end of the line), minus
+// trailing whitespace and semicolons, and is reported as unterminated.
+func (p *Parser) unterminatedRegex() Expression {
+	if !p.tscDiagnostics || !p.canRecover() || p.source == nil || p.jsx ||
+		(!p.curTokenIs(lexer.SLASH) && !p.curTokenIs(lexer.SLASH_ASSIGN)) || p.peekToken.Line != p.curToken.Line {
+		return nil
+	}
+	src := p.source.Content
+	start := p.curToken.StartPos
+	if start < 0 || start >= len(src) || src[start] != '/' {
+		return nil
+	}
+	end := start + 1
+	inEscape, inClass := false, false
+	for end < len(src) && src[end] != '\n' && src[end] != '\r' {
+		ch := src[end]
+		switch {
+		case inEscape:
+			inEscape = false
+		case ch == '\\':
+			inEscape = true
+		case ch == '[':
+			inClass = true
+		case ch == ']' && inClass:
+			inClass = false
+		case ch == '/' && !inClass:
+			return nil // terminated: not this case
+		}
+		end++
+	}
+	pos := start + 1
+	classDepth, groupDepth := 0, 0
+	inEscape, inQuantifier := false, false
+scan:
+	for pos < end {
+		ch := src[pos]
+		switch {
+		case inEscape:
+			inEscape = false
+		case ch == '\\':
+			inEscape = true
+		case ch == '[':
+			classDepth++
+		case ch == ']' && classDepth > 0:
+			classDepth--
+		case classDepth > 0:
+		case ch == '{':
+			inQuantifier = true
+		case ch == '}' && inQuantifier:
+			inQuantifier = false
+		case inQuantifier:
+		case ch == '(':
+			groupDepth++
+		case ch == ')' && groupDepth > 0:
+			groupDepth--
+		case ch == ')' || ch == ']' || ch == '}':
+			break scan
+		}
+		pos++
+	}
+	for pos-1 > start && (src[pos-1] == ' ' || src[pos-1] == '\t' || src[pos-1] == ';') {
+		pos--
+	}
+	tok := p.curToken
+	p.addErrorWithCode(tok, "TS1161", "Unterminated regular expression literal.")
+	p.l.SetPosition(pos)
+	p.peekToken = p.tokenPool.Take(p.l.NextToken())
+	return &RegexLiteral{Token: tok, Pattern: src[start+1 : pos]}
+}
+
 // --- Expression Parsing (Pratt Parser) ---
 
 func (p *Parser) parseExpression(precedence int) Expression {
 	debugPrint("parseExpression(prec=%d): cur='%s' (%s)", precedence, p.curToken.Literal, p.curToken.Type)
 	prefix := p.prefixParseFns[p.curToken.Type]
 	if prefix == nil {
+		if re := p.unterminatedRegex(); re != nil {
+			return p.parseInfixContinuation(re, precedence)
+		}
 		p.noPrefixParseFnError(p.curToken.Type)
 		// Like tsc: report, treat the operand as missing and keep parsing at the
 		// offending token.
@@ -2635,6 +2735,13 @@ func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expr
 		// A semicolon is automatically inserted before it.
 		if (p.peekToken.Type == lexer.INC || p.peekToken.Type == lexer.DEC) && p.peekToken.Line > p.curToken.Line {
 			break
+		}
+		// tsc applies at most one postfix ++/-- (parsePostfixExpressionOrHigher):
+		// in `a++ ++` the second one starts the next statement.
+		if (p.peekToken.Type == lexer.INC || p.peekToken.Type == lexer.DEC) && p.tscDiagnostics {
+			if u, ok := leftExp.(*UpdateExpression); ok && !u.Prefix {
+				break
+			}
 		}
 		// TypeScript's non-null assertion `x!` likewise needs no line break
 		// before the `!`; otherwise the `!` starts the next statement.
@@ -7732,11 +7839,30 @@ func UnwrapTypeAssertions(expr Expression) Expression {
 	}
 }
 
+// peekStartsUnaryOnly reports whether the peek token can only start a unary
+// expression, never a left-hand-side expression.
+func (p *Parser) peekStartsUnaryOnly() bool {
+	switch p.peekToken.Type {
+	case lexer.INC, lexer.DEC, lexer.PLUS, lexer.MINUS, lexer.BANG, lexer.BITWISE_NOT, lexer.TYPEOF, lexer.VOID, lexer.DELETE:
+		return true
+	case lexer.AWAIT:
+		return p.inAsyncFunction > 0 && p.inNonAsyncFunction == 0
+	}
+	return false
+}
+
 func (p *Parser) parsePrefixUpdateExpression() Expression {
 	expr := &UpdateExpression{
 		Token:    p.curToken, // ++ or --
 		Operator: p.curToken.Literal,
 		Prefix:   true,
+	}
+	if p.tscDiagnostics && p.canRecover() && p.peekStartsUnaryOnly() {
+		// The operand is parsed as a left-hand-side expression, which a
+		// unary operator (or `await` in an async body) cannot start.
+		p.addErrorWithCode(p.peekToken, "TS1109", "Expression expected.")
+		expr.Argument = p.missingExpression()
+		return expr
 	}
 	p.nextToken() // Consume ++ or --
 	// The operand is a LeftHandSideExpression: it does not take a postfix
@@ -9101,6 +9227,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 			} else {
 				// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(' or '<') ---
 				propName := p.parsePropertyName()
+				if propName != nil {
+					p.skipObjectMemberMarker()
+				}
 				if propName != nil && (p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT)) {
 					// This is a shorthand method like methodName() { ... } or methodName<T>() { ... }
 					methodDef := p.parseShorthandMethod()
@@ -10603,6 +10732,20 @@ func (p *Parser) parseForOfStatement() *ForOfStatement {
 }
 
 // parseForStatementOrForOf determines if this is for...of, for...in, or regular for and parses accordingly
+// tscEmptyForOfDeclList reports whether the declaration keyword at cur is
+// followed by `of <identifier> )`, which tsc reads as an empty list before
+// the for-of keyword (canFollowContextualOfKeyword).
+func (p *Parser) tscEmptyForOfDeclList() bool {
+	if !p.tscDiagnostics || !p.canRecover() || !p.peekTokenIs(lexer.OF) {
+		return false
+	}
+	if !p.curTokenIs(lexer.VAR) && !p.curTokenIs(lexer.CONST) && !p.curTokenIs(lexer.LET) {
+		return false
+	}
+	next := p.lookAhead(1)
+	return (next.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(next.Type)) && p.lookAhead(2).Type == lexer.RPAREN
+}
+
 func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) Statement {
 	// We're positioned at the variable declaration or identifier
 	// Parse the variable part and see what comes next
@@ -10610,7 +10753,13 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 	var varStmt Statement
 	var varName string
 
-	if p.curTokenIs(lexer.LET) {
+	if p.tscEmptyForOfDeclList() {
+		// tsc's parseVariableDeclarationList: in `for (var of x)` the `of`
+		// is the for-of keyword and the list is empty (TS1123, a grammar error).
+		kw := p.curToken
+		p.addGrammarErrorWithCode(&lexer.Token{Line: kw.Line, Column: kw.Column + len(kw.Literal), StartPos: kw.EndPos, EndPos: kw.EndPos}, "TS1123", "Variable declaration list cannot be empty.")
+		varStmt = &VarStatement{Token: kw}
+	} else if p.curTokenIs(lexer.LET) {
 		// In non-strict mode, 'let' is an identifier when followed by 'in' or 'of'
 		// Per ECMAScript spec: lookahead ∉ { let [ }
 		// So "for (let in obj)" treats 'let' as an identifier, not a declaration
