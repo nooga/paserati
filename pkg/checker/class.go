@@ -48,7 +48,7 @@ func getMethodKeyString(key parser.Expression) (string, bool) {
 		case *parser.NumberLiteral:
 			return fmt.Sprintf("%v", e.Value), true
 		}
-		return "", false
+		return wellKnownSymbolKey(k.Expr)
 	}
 	return "", false
 }
@@ -137,6 +137,12 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 			continue
 		}
 		if !implNames[name] {
+			// Only the last signature of a run of overloads is reported.
+			if next, ok := nextClassMemberAfter(body, sig).(*parser.MethodSignature); ok && next.IsStatic == sig.IsStatic {
+				if nextName, ok := getMethodKeyString(next.Key); ok && nextName == name {
+					continue
+				}
+			}
 			if next := nextClassMethodAfter(body, sig); next != nil && next.Kind == "method" && next.Value != nil && next.Value.Body != nil {
 				if nextName, ok := getMethodKeyString(next.Key); ok && nextName != name {
 					c.addErrorWithCode(next.Key, errors.TS2389, fmt.Sprintf("Function implementation name must be '%s'.", name))
@@ -207,6 +213,12 @@ func constDeclaredAsSymbol(stmts []parser.Statement, name string) bool {
 // nextClassMethodAfter returns the method that immediately follows sig in the
 // class body, or nil when the next member is something else.
 func nextClassMethodAfter(body *parser.ClassBody, sig *parser.MethodSignature) *parser.MethodDefinition {
+	m, _ := nextClassMemberAfter(body, sig).(*parser.MethodDefinition)
+	return m
+}
+
+// nextClassMemberAfter is the class member that follows sig in source order.
+func nextClassMemberAfter(body *parser.ClassBody, sig *parser.MethodSignature) parser.Node {
 	at := parser.GetTokenFromNode(sig).StartPos
 	best, bestPos := parser.Node(nil), -1
 	consider := func(n parser.Node) {
@@ -226,8 +238,7 @@ func nextClassMethodAfter(body *parser.ClassBody, sig *parser.MethodSignature) *
 	for _, s := range body.MethodSigs {
 		consider(s)
 	}
-	m, _ := best.(*parser.MethodDefinition)
-	return m
+	return best
 }
 
 // extractPropertyName extracts the property name from a class member key
