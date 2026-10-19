@@ -40,6 +40,19 @@ func (p *Parser) parseDecoratedStatement() Statement {
 		// reports the decorators as misplaced, at the first '@'. When no
 		// declaration follows at all, tsc's parseDeclaration produces a
 		// MissingDeclaration instead ("Declaration expected.").
+		if p.tscDiagnostics && p.canRecover() && p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "using" {
+			// parseDeclarationWorker: after decorators `using` always starts
+			// a variable statement; the checker reports the decorators.
+			if len(decorators) > 0 {
+				p.addErrorWithCode(decorators[0].Token, errors.TS1206, "Decorators are not valid here.")
+			}
+			if p.peekToken.Line == p.curToken.Line && (p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.LBRACE) ||
+				p.peekTokenIs(lexer.LBRACKET) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
+				return p.parseUsingStatement(p.curToken, false)
+			}
+			p.addErrorWithCode(p.peekToken, "TS1134", "Variable declaration expected.")
+			return nil
+		}
 		if p.tscDiagnostics && !p.startsDeclarationAfterDecorators() && p.prevToken != nil {
 			// Reported at the token's full start: the end of the decorators.
 			end := p.prevToken

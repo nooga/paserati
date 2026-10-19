@@ -160,6 +160,14 @@ type Parser struct {
 	strictMode bool // True when parsing strict mode code
 	// classBodyDepth counts enclosing class bodies; all class code is strict.
 	classBodyDepth int
+	// abortToClassMember is set (tsc mode) when a statement list inside a
+	// class body met a class member modifier that cannot start a statement:
+	// like tsc's abortParsingListOrMoveToNextToken, every enclosing block
+	// ends there and the class body takes the token as its next member.
+	abortToClassMember bool
+	// usingModifierError is set while parsing a using declaration whose
+	// export/declare modifier was already reported.
+	usingModifierError bool
 
 	// Function-context tracking for early errors. labels holds the labels
 	// enclosing the current statement within the current function body;
@@ -1041,6 +1049,11 @@ func (p *Parser) parseStatementNoDoc() Statement {
 	debugPrint("parseStatement: cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 	inSubStatement := p.inSubStatement
 	p.inSubStatement = false
+	if p.tscDiagnostics && p.canRecover() && p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "accessor" && p.peekToken.Line == p.curToken.Line {
+		if stmt, ok := p.tscStatementModifier(); ok {
+			return stmt
+		}
+	}
 	switch p.curToken.Type {
 	case lexer.LET:
 		// Check if this is actually a let declaration or just 'let' as an identifier.
@@ -1106,7 +1119,15 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		return p.parseEmptyStatement()
 	case lexer.CONTINUE:
 		return p.parseContinueStatement()
-	case lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED:
+	case lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.STATIC, lexer.READONLY:
+		if p.tscDiagnostics && p.canRecover() {
+			if stmt, ok := p.tscStatementModifier(); ok {
+				return stmt
+			}
+		}
+		if p.curTokenIs(lexer.STATIC) || p.curTokenIs(lexer.READONLY) {
+			return p.parseExpressionStatement()
+		}
 		// `public class A {}`: an accessibility modifier on a statement. tsc parses
 		// the declaration and its checker reports the modifier (TS1044 in a module
 		// body or at the top level, TS1184 in a block).
@@ -1288,6 +1309,12 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		// Handle TypeScript 'declare' keyword for ambient declarations
 		// declare const/let/var/function/class/interface/type/enum — no code emitted
 		if p.curToken.Literal == "declare" {
+			if p.tscDiagnostics && p.canRecover() && p.peekToken.Line == p.curToken.Line &&
+				(p.peekToken.Literal == "using" || p.peekTokenIs(lexer.AWAIT)) && p.tscIsDeclaration() {
+				mod := p.curToken
+				p.nextToken()
+				return p.parseModifiedUsing(mod)
+			}
 			switch p.peekToken.Type {
 			case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM, lexer.ASYNC, lexer.ABSTRACT:
 				return p.parseDeclareStatement()
@@ -1328,6 +1355,9 @@ func (p *Parser) parseStatementNoDoc() Statement {
 			return p.parseNamespaceDeclaration(false)
 		}
 		// `using x = expr` — explicit resource management (contextual keyword).
+		if p.tscDiagnostics && p.curToken.Literal == "using" && p.tscIsDeclaration() {
+			return p.parseUsingStatement(p.curToken, false)
+		}
 		if p.startsUsingDeclaration() {
 			return p.parseUsingStatement(p.curToken, false)
 		}
@@ -1348,6 +1378,15 @@ func (p *Parser) parseStatementNoDoc() Statement {
 			return p.parseLabeledStatement()
 		}
 		// `await using x = expr` — async explicit resource management.
+		if p.tscDiagnostics && p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "using" {
+			// tsc's isAwaitUsingDeclaration; otherwise an await expression.
+			if p.tscIsDeclaration() {
+				awaitToken := p.curToken
+				p.nextToken() // Move to 'using'
+				return p.parseUsingStatement(awaitToken, true)
+			}
+			return p.parseExpressionStatement()
+		}
 		if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "using" && p.peekToken.Line == p.curToken.Line {
 			awaitToken := p.curToken
 			p.nextToken() // Move to 'using'
@@ -2823,6 +2862,11 @@ loop:
 		// right side it ends. (A parenthesized arrow ends at its ')' and is
 		// an ordinary operand.)
 		if p.tscDiagnostics && p.arrowEnd == p.curToken.EndPos+1 && !p.peekTokenIs(lexer.COMMA) {
+			break
+		}
+		// tsc assigns only to a LeftHandSideExpression: after `a + b` or
+		// `await x` an `=` ends the expression (';' expected there).
+		if p.tscDiagnostics && assignmentTokens[p.peekToken.Type] && !tscIsLeftHandSide(leftExp) {
 			break
 		}
 		// TypeScript's non-null assertion `x!` likewise needs no line break
@@ -4847,6 +4891,10 @@ func (p *Parser) parseStatementListBlock() *BlockStatement {
 
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		stmt := p.parseStatement()
+		if p.abortToClassMember {
+			p.addErrorWithCode(p.peekToken, errors.TS1005, "'}' expected.")
+			return block
+		}
 		if stmt != nil {
 			block.Statements = appendFlatteningGroups(block.Statements, stmt)
 
@@ -5000,6 +5048,11 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		stmt := p.parseStatement()
+		if p.abortToClassMember {
+			p.addErrorWithCode(p.peekToken, errors.TS1005, "'}' expected.")
+			block.EndPos = p.curToken.EndPos
+			return block
+		}
 		if stmt != nil {
 			block.Statements = appendFlatteningGroups(block.Statements, stmt)
 
@@ -8909,7 +8962,11 @@ func (p *Parser) parseObjectLiteral() Expression {
 			} else {
 				// Regular computed property: [expr]: value
 				// Expect colon
-				if !p.expectPeek(lexer.COLON) {
+				if p.tscDiagnostics && !p.peekTokenIs(lexer.COLON) {
+					if !p.expectPeekRecover(lexer.COLON) {
+						return nil
+					}
+				} else if !p.expectPeek(lexer.COLON) {
 					return nil
 				}
 
@@ -9370,7 +9427,10 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 					// Create an ObjectProperty with the method name as key and the MethodDefinition as value
 					objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodDef.Key, Value: methodDef})
-				} else if propName != nil && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.ASSIGN)) {
+				} else if propName != nil && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.ASSIGN)) &&
+					// tsc: only an identifier can be a shorthand; `{ class }`
+					// is a property missing its ':'.
+					!(p.tscDiagnostics && p.canRecover() && p.curToken.Type != lexer.IDENT && tscReservedWords[p.curToken.Literal]) {
 					// --- NEW: Check for shorthand property syntax ---
 					// This handles:
 					// 1. { name, age } - shorthand without default
@@ -9431,6 +9491,14 @@ func (p *Parser) parseObjectLiteral() Expression {
 						return nil
 					} // Error parsing key
 
+					// tsc: an identifier key not followed by ':' is a
+					// shorthand property (`{ a.b }` is `a` then junk).
+					if p.tscDiagnostics && p.canRecover() && !p.peekTokenIs(lexer.COLON) {
+						if id, ok := key.(*Identifier); ok && id.Token.Type == lexer.IDENT {
+							objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: &Identifier{Token: id.Token, Value: id.Value}})
+							goto memberDone
+						}
+					}
 					// Check for Colon *after* parsing the key (including potential closing ']')
 					if !p.expectPeekRecover(lexer.COLON) {
 						return nil // Expected ':'
@@ -9452,6 +9520,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 		}
 
+	memberDone:
 		// Expect ',' or '}'
 		if !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.COMMA) {
 			if p.canRecover() {
@@ -9464,10 +9533,19 @@ func (p *Parser) parseObjectLiteral() Expression {
 				if p.tscDiagnostics && p.peekTokenIs(lexer.SEMICOLON) && p.peekToken.Line == p.curToken.Line {
 					p.nextToken()
 				}
+				// abortParsingListOrMoveToNextToken: a token that starts
+				// nothing here or in an enclosing list is skipped.
+				for p.tscDiagnostics && !p.startsPropertyName(p.peekToken) && !listAbortsAt(p.peekToken) &&
+					!p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.ILLEGAL) {
+					p.addErrorWithCode(p.peekToken, "TS1136", "Property assignment expected.")
+					p.nextToken()
+				}
 				if p.startsPropertyName(p.peekToken) {
 					continue
 				}
-				break
+				if !p.tscDiagnostics || !p.peekTokenIs(lexer.COMMA) {
+					break
+				}
 			}
 			msg := fmt.Sprintf("expected ',' or '}' after object property value, got %s", p.peekToken.Type)
 			p.addError(p.peekToken, msg)
@@ -13457,6 +13535,12 @@ func (p *Parser) parseExportDeclaration() Statement {
 		p.nextToken() // consume the duplicate export
 	}
 
+	// tsc parses `export using` / `export await using` and its checker
+	// rejects the modifier.
+	if p.tscDiagnostics && p.canRecover() && (p.curToken.Literal == "using" || p.curTokenIs(lexer.AWAIT)) && p.tscIsDeclaration() {
+		return p.parseModifiedUsing(exportToken)
+	}
+
 	// Check for type-only export: export type { ... } from "module" or export type * from "module"
 	// But distinguish from type alias: export type TypeAlias = ...
 	isTypeOnly := false
@@ -14190,4 +14274,30 @@ func isImportCall(e Expression) bool {
 func (p *Parser) safeFinishBinding(program *Program) {
 	defer func() { _ = recover() }()
 	p.finishBinding(program)
+}
+
+// assignmentTokens are the assignment operators.
+var assignmentTokens = map[lexer.TokenType]bool{
+	lexer.ASSIGN: true, lexer.PLUS_ASSIGN: true, lexer.MINUS_ASSIGN: true, lexer.ASTERISK_ASSIGN: true,
+	lexer.SLASH_ASSIGN: true, lexer.REMAINDER_ASSIGN: true, lexer.EXPONENT_ASSIGN: true,
+	lexer.BITWISE_AND_ASSIGN: true, lexer.BITWISE_OR_ASSIGN: true, lexer.BITWISE_XOR_ASSIGN: true,
+	lexer.LEFT_SHIFT_ASSIGN: true, lexer.RIGHT_SHIFT_ASSIGN: true, lexer.UNSIGNED_RIGHT_SHIFT_ASSIGN: true,
+	lexer.LOGICAL_AND_ASSIGN: true, lexer.LOGICAL_OR_ASSIGN: true, lexer.COALESCE_ASSIGN: true,
+}
+
+// tscIsLeftHandSide is false for the expressions tsc's isLeftHandSideExpression
+// rejects that an assignment could otherwise follow here: unparenthesized
+// binary, unary, update, await and yield expressions.
+func tscIsLeftHandSide(e Expression) bool {
+	switch n := e.(type) {
+	case *InfixExpression:
+		return n.Parenthesized
+	case *PrefixExpression:
+		return n.Parenthesized
+	case *TypeofExpression:
+		return n.Parenthesized
+	case *UpdateExpression, *AwaitExpression, *YieldExpression:
+		return false
+	}
+	return true
 }

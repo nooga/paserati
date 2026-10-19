@@ -324,3 +324,137 @@ func (p *Parser) startsDeclaration(tok *lexer.Token) bool {
 	}
 	return false
 }
+
+// isWordToken reports an identifier or keyword token (tsc's
+// tokenIsIdentifierOrKeyword).
+func isWordToken(t *lexer.Token) bool {
+	switch t.Type {
+	case lexer.IDENT:
+		return true
+	case lexer.STRING, lexer.NUMBER, lexer.BIGINT, lexer.TEMPLATE_START, lexer.EOF:
+		return false
+	}
+	return t.Literal != "" && !isPunctuationToken(t)
+}
+
+// tscIsDeclaration is tsc's isDeclaration lookahead from the current token:
+// whether the statement here, after any modifiers, is a declaration.
+func (p *Parser) tscIsDeclaration() bool {
+	toks := []lexer.Token{*p.curToken, *p.peekToken}
+	if p.peekToken.Type != lexer.EOF {
+		p.scanAhead(1, func(t lexer.Token) bool {
+			toks = append(toks, t)
+			return len(toks) < 16
+		})
+	}
+	at := func(i int) *lexer.Token {
+		if i < len(toks) {
+			return &toks[i]
+		}
+		return &lexer.Token{Type: lexer.EOF}
+	}
+	sameLine := func(i int) bool { return i > 0 && at(i).Type != lexer.EOF && at(i).Line == at(i-1).Line }
+	isIdent := func(t *lexer.Token) bool {
+		return t.Type == lexer.IDENT || (isWordToken(t) && !tscReservedWords[t.Literal] && p.isKeywordThatCanBeIdentifier(t.Type))
+	}
+	for i := 0; i < len(toks); {
+		t := at(i)
+		switch t.Type {
+		case lexer.VAR, lexer.LET, lexer.CONST, lexer.FUNCTION, lexer.CLASS, lexer.ENUM:
+			return true
+		case lexer.AWAIT:
+			// Like `using`, an object pattern counts (reported later); an
+			// array pattern could be element access.
+			return sameLine(i+1) && at(i+1).Literal == "using" && sameLine(i+2) && (isIdent(at(i+2)) || at(i+2).Type == lexer.LBRACE)
+		case lexer.INTERFACE, lexer.TYPE:
+			return sameLine(i+1) && isIdent(at(i+1))
+		case lexer.ABSTRACT, lexer.ASYNC, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.READONLY:
+			i++
+			if !sameLine(i) {
+				return false
+			}
+			continue
+		case lexer.STATIC:
+			i++
+			continue
+		case lexer.IMPORT:
+			n := at(i + 1)
+			return n.Type == lexer.STRING || n.Type == lexer.ASTERISK || n.Type == lexer.LBRACE || isWordToken(n)
+		case lexer.EXPORT:
+			i++
+			if at(i).Type == lexer.TYPE {
+				i++
+			}
+			switch at(i).Type {
+			case lexer.ASSIGN, lexer.ASTERISK, lexer.LBRACE, lexer.DEFAULT, lexer.AS, lexer.AT:
+				return true
+			}
+			continue
+		case lexer.IDENT:
+			switch t.Literal {
+			case "using":
+				return sameLine(i+1) && (isIdent(at(i+1)) || at(i+1).Type == lexer.LBRACE)
+			case "module", "namespace":
+				return sameLine(i+1) && (isIdent(at(i+1)) || at(i+1).Type == lexer.STRING)
+			case "global":
+				n := at(i + 1)
+				return n.Type == lexer.LBRACE || n.Type == lexer.IDENT || n.Type == lexer.EXPORT
+			case "accessor", "declare":
+				i++
+				if !sameLine(i) {
+					return false
+				}
+				if t.Literal == "declare" && at(i).Type == lexer.TYPE {
+					return true
+				}
+				continue
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// tscStatementModifier handles a class-member modifier (public, private,
+// protected, static, readonly, accessor) at the start of a statement, as tsc's
+// isStartOfStatement does: before a declaration it is a modifier its checker
+// rejects (TS1044 at module level, TS1184 in a block); before another word on
+// the same line it is no statement at all (TS1128), skipped, or inside a
+// class body the end of every enclosing block. ok is false when it is just an
+// identifier.
+func (p *Parser) tscStatementModifier() (Statement, bool) {
+	mod := p.curToken
+	if p.tscIsDeclaration() {
+		if mod.Type == lexer.IDENT {
+			p.addGrammarErrorWithCode(mod, "TS1275", "'accessor' modifier can only appear on a property declaration.")
+		} else if mod.Type != lexer.READONLY {
+			if n := len(p.blockKinds); n == 0 || p.blockKinds[n-1] {
+				p.addGrammarErrorWithCode(mod, "TS1044", "'"+mod.Literal+"' modifier cannot appear on a module or namespace element.")
+			} else {
+				p.addGrammarErrorWithCode(mod, "TS1184", "Modifiers cannot appear here.")
+			}
+		}
+		for {
+			switch p.curToken.Type {
+			case lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.STATIC, lexer.READONLY:
+				p.nextToken()
+				continue
+			case lexer.IDENT:
+				if p.curToken.Literal == "accessor" {
+					p.nextToken()
+					continue
+				}
+			}
+			break
+		}
+		return p.parseStatement(), true
+	}
+	if p.peekToken.Line != mod.Line || !isWordToken(p.peekToken) {
+		return nil, false
+	}
+	p.reportStatementStart()
+	if p.classBodyDepth > 0 && p.stepBackForMissing() {
+		p.abortToClassMember = true
+	}
+	return nil, true
+}

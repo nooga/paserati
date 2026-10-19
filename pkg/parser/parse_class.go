@@ -329,7 +329,10 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 		abstractTok = nil
 	}
+	defer func() { p.abortToClassMember = false }()
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+		// A member body that ended at a member modifier hands it back here.
+		p.abortToClassMember = false
 		flushDoc()
 		flushAbstract()
 		nMethods, nProps, nMethodSigs = len(methods), len(properties), len(methodSigs)
@@ -407,7 +410,14 @@ func (p *Parser) parseClassBody() *ClassBody {
 			modErrSeen = true
 			p.addError(tok, msg)
 		}
+		firstModTok := p.curToken
+		staticBlockMods := false
 		for {
+			if p.tscDiagnostics && p.curTokenIs(lexer.STATIC) && p.peekTokenIs(lexer.LBRACE) {
+				// `public static {`: a static block after other modifiers.
+				staticBlockMods = true
+				break
+			}
 			if p.curTokenIs(lexer.READONLY) && !isReadonly && !isFieldName() {
 				isReadonly = true
 				p.nextToken()
@@ -503,6 +513,18 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else {
 				break // No more modifiers
 			}
+		}
+
+		if staticBlockMods {
+			if !modErrSeen {
+				p.addGrammarErrorWithCode(firstModTok, "TS1184", "Modifiers cannot appear here.")
+			}
+			p.nextToken() // move to '{'
+			if block := p.parseFunctionBody(nil, nil, bodyStaticBlock); block != nil {
+				staticInitializers = append(staticInitializers, block)
+			}
+			p.nextToken() // move past '}'
+			continue
 		}
 
 		// Decorators that follow modifiers (`public @dec get x() {}`): tsc reports
@@ -2253,7 +2275,9 @@ func (p *Parser) parseHeritageSuperClass() (superClass Expression, superTypeArgs
 	// expression, never a TS type construct.
 	isIndexedMemberExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LBRACKET)
 
-	if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
+	if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) ||
+		p.curTokenIs(lexer.THIS) || p.curTokenIs(lexer.SUPER) || p.curTokenIs(lexer.NEW) ||
+		isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
 		// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
 		p.heritageTypeArgs = nil
 		superClass = p.parseExpression(COMMA) // a heritage is never a comma sequence

@@ -127,7 +127,7 @@ func (p *Parser) parseUsingStatement(startToken *lexer.Token, isAwait bool) Stat
 		IsUsing:      true,
 		IsAwaitUsing: isAwait,
 	}
-	if p.tscDiagnostics && p.usingIsAmbient() {
+	if p.tscDiagnostics && p.usingIsAmbient() && !p.usingModifierError {
 		code := errors.TS1545
 		if isAwait {
 			code = errors.TS1546
@@ -149,7 +149,11 @@ func (p *Parser) parseUsingStatement(startToken *lexer.Token, isAwait bool) Stat
 			if isAwait {
 				kind = "'await using'"
 			}
-			p.addErrorWithCode(patternToken, errors.TS1492, fmt.Sprintf("%s declarations may not have binding patterns.", kind))
+			if p.tscDiagnostics {
+				p.addGrammarErrorWithCode(patternToken, errors.TS1492, fmt.Sprintf("%s declarations may not have binding patterns.", kind))
+			} else {
+				p.addErrorWithCode(patternToken, errors.TS1492, fmt.Sprintf("%s declarations may not have binding patterns.", kind))
+			}
 			if patternToken.Type == lexer.LBRACKET {
 				p.parseArrayParameterPattern()
 			} else {
@@ -173,7 +177,7 @@ func (p *Parser) parseUsingStatement(startToken *lexer.Token, isAwait bool) Stat
 		// reports it as a grammar error (or the ambient-context error,
 		// which takes precedence), so do the same when recovering.
 		if !p.peekTokenIs(lexer.ASSIGN) && p.tscDiagnostics && p.canRecover() {
-			if !p.usingIsAmbient() {
+			if !p.usingIsAmbient() && !p.usingModifierError {
 				p.addGrammarErrorWithCode(declarator.Name.Token, errors.TS1155, fmt.Sprintf("%s declarations must be initialized.", usingKind(isAwait)))
 			}
 		} else {
@@ -204,6 +208,30 @@ func (p *Parser) parseUsingStatement(startToken *lexer.Token, isAwait bool) Stat
 		p.nextToken()
 	}
 
+	return stmt
+}
+
+// parseModifiedUsing parses a `using` / `await using` declaration (cur on
+// `using` or `await`) that follows an `export` or `declare` modifier, which
+// tsc's checker rejects (TS1491 / TS1495).
+func (p *Parser) parseModifiedUsing(mod *lexer.Token) Statement {
+	// checkGrammarModifiers stops the declaration's other grammar checks.
+	p.usingModifierError = true
+	defer func() { p.usingModifierError = false }()
+	var stmt Statement
+	if p.curTokenIs(lexer.AWAIT) {
+		p.addGrammarErrorWithCode(mod, "TS1495", fmt.Sprintf("'%s' modifier cannot appear on an 'await using' declaration.", mod.Literal))
+		awaitToken := p.curToken
+		p.nextToken() // Move to 'using'
+		stmt = p.parseUsingStatement(awaitToken, true)
+	} else {
+		p.addGrammarErrorWithCode(mod, "TS1491", fmt.Sprintf("'%s' modifier cannot appear on a 'using' declaration.", mod.Literal))
+		stmt = p.parseUsingStatement(p.curToken, false)
+	}
+	if mod.Type == lexer.EXPORT && stmt != nil {
+		// Still an export: the file is a module.
+		return &ExportNamedDeclaration{Token: mod, Declaration: stmt}
+	}
 	return stmt
 }
 
