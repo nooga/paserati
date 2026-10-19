@@ -3579,6 +3579,30 @@ func (c *Checker) isObjectType(t types.Type) bool {
 	}
 }
 
+// hasSymbolHasInstance reports whether t has a [Symbol.hasInstance] member
+// (every member of a union, some member of an intersection).
+func hasSymbolHasInstance(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.ObjectType:
+		_, has := tt.EffectiveProperty("@@symbol:hasInstance")
+		return has
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if !hasSymbolHasInstance(m) {
+				return false
+			}
+		}
+		return len(tt.Types) > 0
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if hasSymbolHasInstance(m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // checkInstanceofOperator checks the instanceof operator usage
 func (c *Checker) checkInstanceofOperator(leftType, rightType types.Type, node *parser.InfixExpression) {
 	// TS2358: the left operand must be `any`, an object type or a type
@@ -3587,7 +3611,11 @@ func (c *Checker) checkInstanceofOperator(leftType, rightType types.Type, node *
 		c.addErrorWithCode(node.Left, errors.TS2358, "The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter.")
 	}
 
-	// Right operand must be a constructor function
+	// Right operand must be a constructor function, or have a
+	// [Symbol.hasInstance] method.
+	if hasSymbolHasInstance(rightType) {
+		return
+	}
 	if rightType != types.Any && c.isDefinitelyNotConstructor(rightType) && !c.isUntypedCallTarget(rightType) {
 		c.addErrorWithCode(node.Right, errors.TS2359, "The right-hand side of an 'instanceof' expression must be either of type 'any', a class, function, or other type assignable to the 'Function' interface type, or an object type with a 'Symbol.hasInstance' method.")
 	}
