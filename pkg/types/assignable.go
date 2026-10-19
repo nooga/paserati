@@ -1577,6 +1577,13 @@ func (r *Relation) apparentMembersAssignable(source Type, tgt *ObjectType) bool 
 	switch src := source.(type) {
 	case *ArrayType, *TupleType:
 		kind = "array"
+	case *EnumMemberType:
+		// An enum member's apparent type is its base primitive's wrapper.
+		if _, isString := src.Value.(string); isString {
+			kind = "string"
+		} else {
+			kind = "number"
+		}
 	case *LiteralType:
 		switch src.Value.Type() {
 		case vm.TypeString:

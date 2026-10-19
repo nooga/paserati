@@ -49,11 +49,12 @@ func (c *Checker) settlePendingInit(name string) {
 	delete(c.pendingInits, name)
 }
 
-// inferPendingInit gives a top-level binding read from inside a function its
-// initializer's type, if it is still pending and the read isn't shadowed.
+// inferPendingInit gives a top-level binding read from inside a function (or
+// a namespace body, also checked before Pass 5) its initializer's type, if it
+// is still pending and the read isn't shadowed.
 func (c *Checker) inferPendingInit(name string) {
 	p := c.pendingInits[name]
-	if p == nil || p.blocked || p.inProgress || c.functionNestingDepth == 0 {
+	if p == nil || p.blocked || p.inProgress || (c.functionNestingDepth == 0 && c.namespaceBodyDepth == 0) {
 		return
 	}
 	if c.definingEnv(name) != p.env {
