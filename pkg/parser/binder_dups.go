@@ -682,6 +682,9 @@ func (m *classMember) displayName() string {
 	if m.tok != nil && m.tok.Type == lexer.NUMBER {
 		return m.tok.Literal
 	}
+	if sym, ok := strings.CutPrefix(m.name, wellKnownPrefix); ok {
+		return "[Symbol." + sym + "]"
+	}
 	return m.name
 }
 
@@ -744,6 +747,25 @@ func propertyKeyName(key Expression) (name string, tok *lexer.Token, private boo
 	return "", nil, false
 }
 
+// classMemberKeyName is propertyKeyName for a class member, which also names
+// a well-known symbol key: the checker's duplicate check treats
+// `[Symbol.iterator]` as the member "__@iterator" (the binder does not bind
+// it; see the class binder pass).
+func classMemberKeyName(key Expression) (name string, tok *lexer.Token, private bool) {
+	if c, ok := key.(*ComputedPropertyName); ok {
+		if e, ok := c.Expr.(*MemberExpression); ok {
+			if obj, ok := e.Object.(*Identifier); ok && obj.Value == "Symbol" {
+				if prop, ok := e.Property.(*Identifier); ok {
+					return wellKnownPrefix + prop.Value, obj.Token, false
+				}
+			}
+		}
+	}
+	return propertyKeyName(key)
+}
+
+const wellKnownPrefix = "__@"
+
 // CanonicalNumericName is the property name a numeric literal key denotes
 // (its ToString): `1.0`, `1.` and `1.00` all name "1".
 func CanonicalNumericName(literal string) string {
@@ -788,7 +810,7 @@ func (b *binder) bindClassBody(body *ClassBody, sym *bindSymbol, ambient bool) {
 			items = append(items, &classMember{pos: tok.StartPos, tok: tok, name: "", decl: d})
 			continue
 		}
-		name, tok, private := propertyKeyName(m.Key)
+		name, tok, private := classMemberKeyName(m.Key)
 		if tok == nil {
 			continue
 		}
@@ -811,7 +833,7 @@ func (b *binder) bindClassBody(body *ClassBody, sym *bindSymbol, ambient bool) {
 		if ms == nil {
 			continue
 		}
-		name, tok, private := propertyKeyName(ms.Key)
+		name, tok, private := classMemberKeyName(ms.Key)
 		if tok == nil {
 			continue
 		}
@@ -841,7 +863,7 @@ func (b *binder) bindClassBody(body *ClassBody, sym *bindSymbol, ambient bool) {
 		if p == nil {
 			continue
 		}
-		name, tok, private := propertyKeyName(p.Key)
+		name, tok, private := classMemberKeyName(p.Key)
 		if tok == nil {
 			continue
 		}
@@ -866,6 +888,9 @@ func (b *binder) bindClassBody(body *ClassBody, sym *bindSymbol, ambient bool) {
 	sort.SliceStable(items, func(i, j int) bool { return items[i].pos < items[j].pos })
 
 	// Binder: declare into the member tables.
+	// A well-known symbol key is a dynamic name to the binder; only the
+	// checker's duplicate-implementation check (TS2393) sees its methods.
+	symInstance, symStatic := bindTable{}, bindTable{}
 	for _, it := range items {
 		if it.name == "" || it.private {
 			continue
@@ -873,6 +898,15 @@ func (b *binder) bindClassBody(body *ClassBody, sym *bindSymbol, ambient bool) {
 		table := instance
 		if it.isStatic {
 			table = static
+		}
+		if strings.HasPrefix(it.name, wellKnownPrefix) {
+			if it.flags != sfMethod {
+				continue
+			}
+			table = symInstance
+			if it.isStatic {
+				table = symStatic
+			}
 		}
 		b.declare(table, it.name, it.tok, it.flags, it.excludes, it.decl)
 	}
