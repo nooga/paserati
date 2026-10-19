@@ -2566,8 +2566,13 @@ func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.Ob
 	// Check if interface exists (should exist since we registered it earlier)
 	interfaceType, exists := c.env.ResolveType(interfaceName)
 	if !exists {
-		// An unresolvable implements target is reported where the clause is
-		// resolved (TS2304); qualified names are not resolved here (FIXME).
+		// FIXME: qualified names in an implements clause are not resolved
+		// here; only a plain unresolvable name is reported.
+		if isPlainIdentifierName(interfaceName) && errNode != nil {
+			if _, _, isValue := c.env.Resolve(interfaceName); !isValue {
+				c.addErrorWithCode(errNode, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", interfaceName))
+			}
+		}
 		return
 	}
 
@@ -3260,4 +3265,10 @@ func inheritSetterAnnotations(body *parser.ClassBody) {
 			}
 		}
 	}
+}
+
+// isPlainIdentifierName reports whether a heritage name is a single
+// identifier rather than a qualified or parenthesized one.
+func isPlainIdentifierName(name string) bool {
+	return name != "" && !strings.ContainsAny(name, ".()<>[] ")
 }

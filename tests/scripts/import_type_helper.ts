@@ -3,3 +3,4 @@ export type Id = string;
 export const k = { n: 1 };
 export namespace NS { export type Inner = number; }
 export default function f(): number { return 1; }
+export interface Duration { days?: number; hours?: number }

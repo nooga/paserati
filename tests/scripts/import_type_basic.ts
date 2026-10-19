@@ -1,7 +1,7 @@
 // Test basic import type functionality
 // This tests that type-only imports work for simple interfaces
 
-import type { Duration } from "../../../scratch/date-fns/src/types.js";
+import type { Duration } from "./import_type_helper";
 
 // Test 1: Basic type annotation
 const duration: Duration = {

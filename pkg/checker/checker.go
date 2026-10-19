@@ -5783,6 +5783,8 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 		return
 	}
 
+	c.reportUnresolvedModule(node.Source)
+
 	// Validate and process import specifiers
 	for _, spec := range node.Specifiers {
 		switch importSpec := spec.(type) {
@@ -5989,6 +5991,7 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 		if node.Source != nil {
 			// Re-export: export { x } from "module"
 			sourceModule := node.Source.Value
+			c.reportUnresolvedModule(node.Source)
 			debugPrintf("// [Checker] Re-export from: %s\n", sourceModule)
 
 			for _, spec := range node.Specifiers {
@@ -6092,6 +6095,7 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 
 	if node.Exported != nil {
 		// export * as name from "module" or export * as "string" from "module"
+		c.reportUnresolvedModule(node.Source)
 		var exportName string
 		switch exp := node.Exported.(type) {
 		case *parser.Identifier:
@@ -6464,4 +6468,16 @@ func exportedAmbientSignature(node *parser.ExportNamedDeclaration) *parser.Funct
 		return sig
 	}
 	return nil
+}
+
+// reportUnresolvedModule reports TS2307 when the module a declaration names
+// cannot be loaded (ambient module declarations included, which the loader
+// resolves). Without a module loader nothing is checked.
+func (c *Checker) reportUnresolvedModule(source *parser.StringLiteral) {
+	if source == nil || c.moduleLoader == nil {
+		return
+	}
+	if _, err := c.moduleLoader.LoadModule(source.Value, c.currentFilePath()); err != nil {
+		c.addErrorWithCode(source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", source.Value))
+	}
 }
