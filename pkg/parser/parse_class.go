@@ -2124,7 +2124,17 @@ func (p *Parser) parseClassHeritageTsc() (superClass Expression, superTypeArgs [
 			stop(clause, "TS1175", "'implements' clause already seen.")
 		}
 		var types []*lexer.Token
-		for p.peekStartsHeritageElement() {
+		for {
+			if !p.peekStartsHeritageElement() {
+				if bad := p.peekToken; p.skipNonHeritageTokens() {
+					types = append(types, bad)
+					if !p.peekStartsHeritageElement() {
+						break
+					}
+				} else {
+					break
+				}
+			}
 			p.nextToken()
 			tok := p.curToken
 			if isExtends {
@@ -2167,6 +2177,28 @@ func (p *Parser) parseClassHeritageTsc() (superClass Expression, superTypeArgs [
 		}
 	}
 	return superClass, superTypeArgs, implements, true
+}
+
+// skipNonHeritageTokens is tsc's recovery for a heritage element that is
+// not a left-hand-side expression (`extends void {}`): "Expression expected."
+// at it, then its tokens are skipped up to the next element or the class
+// body. It reports whether it skipped anything.
+func (p *Parser) skipNonHeritageTokens() bool {
+	stops := func() bool {
+		switch p.peekToken.Type {
+		case lexer.LBRACE, lexer.EOF, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.COMMA, lexer.SEMICOLON, lexer.RBRACE:
+			return true
+		}
+		return p.peekStartsHeritageElement()
+	}
+	if !p.canRecover() || stops() {
+		return false
+	}
+	p.addErrorWithCode(p.peekToken, "TS1109", "Expression expected.")
+	for !stops() {
+		p.nextToken()
+	}
+	return true
 }
 
 // peekStartsHeritageElement is tsc's isHeritageClauseElement: a

@@ -60,6 +60,10 @@ func (p *Parser) parseConstEnumDeclarationStatement(constToken *lexer.Token) *Ex
 func (p *Parser) parseEnumDeclaration(isConst bool) *EnumDeclaration {
 	enumToken := p.curToken
 
+	if p.tscDiagnostics && !p.peekTokenIs(lexer.IDENT) && tscReservedWords[p.peekToken.Literal] {
+		p.addErrorWithCode(p.peekToken, "TS1359", "Identifier expected. '"+p.peekToken.Literal+"' is a reserved word that cannot be used here.")
+		return nil
+	}
 	if !p.expectPeek(lexer.IDENT) {
 		return nil
 	}
@@ -85,6 +89,14 @@ func (p *Parser) parseEnumDeclaration(isConst bool) *EnumDeclaration {
 				}
 				p.nextToken()
 				continue
+			}
+			if p.tscDiagnostics && p.canRecover() && isPunctuationToken(p.curToken) && p.curToken.Type != lexer.LBRACKET && listAbortsAt(p.curToken) {
+				// tsc's parseDelimitedList(EnumMembers): a token that starts a
+				// statement ends the list; the missing '}' lands on it too.
+				p.addErrorWithCode(p.curToken, "TS1132", "Enum member expected.")
+				p.missingCloseBrace()
+				p.stepBackForMissing()
+				return &EnumDeclaration{Token: enumToken, Name: name, Members: members, IsConst: isConst}
 			}
 			memberStart := p.curToken.StartPos
 			member := p.parseEnumMember()
@@ -185,4 +197,18 @@ func (p *Parser) parseEnumMember() *EnumMember {
 		Name:  name,
 		Value: value,
 	}
+}
+
+// isPunctuationToken reports a token that is not a word, a literal or the
+// end of a body: it cannot be a property name.
+func isPunctuationToken(tok *lexer.Token) bool {
+	switch tok.Type {
+	case lexer.IDENT, lexer.STRING, lexer.NUMBER, lexer.BIGINT, lexer.PRIVATE_IDENT, lexer.RBRACE, lexer.COMMA, lexer.EOF:
+		return false
+	}
+	if tok.Literal == "" {
+		return true
+	}
+	c := tok.Literal[0]
+	return !(c == '_' || c == '$' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80)
 }

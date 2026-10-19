@@ -183,6 +183,9 @@ type Parser struct {
 	subStatementModifierError bool
 	// ambientClass counts enclosing `declare class` bodies.
 	ambientClass int
+	// arrowEnd is EndPos+1 of the last token of the most recently parsed
+	// arrow function (tsc mode stops binary operators after an arrow).
+	arrowEnd int
 	// noIn is tsc's disallowIn context: `in` is not a binary operator in a
 	// for-statement declaration initializer (tsc mode only).
 	noIn bool
@@ -1188,6 +1191,22 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		// After abstract class declaration ending with }, next / should be regex
 		p.rescanPeekAsRegex()
 		return stmt
+	case lexer.DEFAULT:
+		// tsc takes `default` before a declaration for the modifier of a
+		// missing `export`, then parses the declaration.
+		if p.tscDiagnostics && p.canRecover() && p.peekToken.Line == p.curToken.Line {
+			switch p.peekToken.Type {
+			case lexer.CLASS, lexer.ABSTRACT, lexer.FUNCTION, lexer.INTERFACE, lexer.ASYNC:
+				p.addErrorWithCode(p.curToken, errors.TS1005, "'export' expected.")
+				p.nextToken()
+				return p.parseStatement()
+			}
+		}
+		if cannotStartStatement(p.curToken.Type) {
+			p.reportStatementStart()
+			return nil
+		}
+		return p.parseExpressionStatement()
 	case lexer.CATCH, lexer.FINALLY:
 		if !p.canRecover() || !p.stepBackForMissing() {
 			p.reportStatementStart()
@@ -1370,6 +1389,10 @@ func (p *Parser) isDestructuringAssignment() bool {
 
 // --- Function Declaration Statement Parsing ---
 func (p *Parser) parseFunctionDeclarationStatement() *ExpressionStatement {
+	// tsc: a statement-level `function` is a declaration and needs a name.
+	if p.tscDiagnostics && (p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT)) {
+		p.addErrorWithCode(p.peekToken, errors.TS1003, "Identifier expected.")
+	}
 	// Parse the function as an expression (FunctionLiteral)
 	funcExpr := p.parseFunctionLiteral(false)
 	if funcExpr == nil {
@@ -1454,6 +1477,19 @@ func (p *Parser) checkAccessorsHaveBodies(body *ClassBody) {
 
 func (p *Parser) parseAbstractClassDeclarationStatement() Statement {
 	// We're at the 'abstract' token, peek should be 'class'
+	if p.tscDiagnostics && p.canRecover() && p.peekToken.Line == p.curToken.Line {
+		// tsc takes `abstract` as a modifier of any declaration; its checker
+		// rejects it on anything but a class.
+		switch {
+		case p.peekTokenIs(lexer.INTERFACE), p.peekTokenIs(lexer.ENUM), p.peekTokenIs(lexer.FUNCTION),
+			p.peekTokenIs(lexer.VAR), p.peekTokenIs(lexer.LET), p.peekTokenIs(lexer.CONST),
+			p.peekTokenIs(lexer.TYPE),
+			p.peekTokenIs(lexer.IDENT) && (p.peekToken.Literal == "namespace" || p.peekToken.Literal == "module"):
+			p.addGrammarErrorWithCode(p.curToken, "TS1242", "'abstract' modifier can only appear on a class, method, or property declaration.")
+			p.nextToken()
+			return p.parseStatement()
+		}
+	}
 	if !p.expectPeek(lexer.CLASS) {
 		return &ExpressionStatement{
 			Token:      p.curToken,
@@ -2771,6 +2807,14 @@ func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expr
 			if u, ok := leftExp.(*UpdateExpression); ok && !u.Prefix {
 				break
 			}
+		}
+		// tsc returns an arrow function as a whole AssignmentExpression: in
+		// `() => {} || a` the `||` starts the next statement; only a comma
+		// can continue the expression, also around an assignment whose
+		// right side it ends. (A parenthesized arrow ends at its ')' and is
+		// an ordinary operand.)
+		if p.tscDiagnostics && p.arrowEnd == p.curToken.EndPos+1 && !p.peekTokenIs(lexer.COMMA) {
+			break
 		}
 		// TypeScript's non-null assertion `x!` likewise needs no line break
 		// before the `!`; otherwise the `!` starts the next statement.
@@ -5908,7 +5952,12 @@ func (p *Parser) parseGroupedExpression() Expression {
 	if exp == nil {
 		return nil // Propagate error from inner expression
 	}
-	if !p.expectPeek(lexer.RPAREN) {
+	if p.tscDiagnostics && !p.peekTokenIs(lexer.RPAREN) {
+		// tsc's parseExpected: report the ')' and keep the expression.
+		if !p.expectPeekRecover(lexer.RPAREN) {
+			return nil
+		}
+	} else if !p.expectPeek(lexer.RPAREN) {
 		return nil // Missing closing parenthesis
 	}
 	if pe, ok := exp.(interface{ setParenStart(*lexer.Token) }); ok {
@@ -6361,6 +6410,7 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(start int, typeParams []*TypePa
 
 	// curToken is the body's last token ('}' or the expression's end).
 	arrowFunc.SourceStart, arrowFunc.SourceEnd = start+1, p.curToken.EndPos+1
+	p.arrowEnd = p.curToken.EndPos + 1
 	if _, isBlock := arrowFunc.Body.(*BlockStatement); isBlock {
 		p.skipEqualsAfterBlock()
 	}
@@ -6758,6 +6808,11 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 		if spreadExpr, ok := element.(*SpreadElement); ok {
 			// This is a rest element: [...rest]
 			target = spreadExpr.Argument
+			if assign, isAssign := target.(*AssignmentExpression); isAssign && p.tscDiagnostics && p.canRecover() {
+				// checkGrammarBindingElement: reported, then ignored.
+				p.addGrammarErrorWithCode(assign.Token, "TS1186", "A rest element cannot have an initializer.")
+				target = assign.Left
+			}
 			defaultValue = nil
 			isRest = true
 		} else if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
@@ -6956,6 +7011,12 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 			}
 		}
 
+		// A nested pattern with a default (`{x: {a} = d}`) was already
+		// converted while its value was parsed.
+		if lit, def, ok := destructuringPatternLiteral(target); ok && defaultValue == nil {
+			target, defaultValue = lit, def
+		}
+
 		// Validate that the target is a valid destructuring target
 		if !p.isValidDestructuringTarget(target) {
 			msg := fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String())
@@ -7100,28 +7161,10 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken *lexer.Token, isCo
 			target = assignExpr.Left
 			defaultValue = assignExpr.Value
 			isRest = false
-		} else if arrayDestr, ok := element.(*ArrayDestructuringAssignment); ok {
-			// Nested array destructuring with default: [[a, b] = [1, 2]]
-			// Create an ArrayLiteral to represent the pattern
-			arrayPattern := &ArrayLiteral{Token: arrayDestr.Token}
-			for _, el := range arrayDestr.Elements {
-				arrayPattern.Elements = append(arrayPattern.Elements, el.Target)
-			}
-			target = arrayPattern
-			defaultValue = arrayDestr.Value
-			isRest = false
-		} else if objDestr, ok := element.(*ObjectDestructuringAssignment); ok {
-			// Nested object destructuring with default: [{a, b} = {a: 1, b: 2}]
-			// Create an ObjectLiteral to represent the pattern
-			objPattern := &ObjectLiteral{Token: objDestr.Token}
-			for _, prop := range objDestr.Properties {
-				objPattern.Properties = append(objPattern.Properties, &ObjectProperty{
-					Key:   prop.Key,
-					Value: prop.Target,
-				})
-			}
-			target = objPattern
-			defaultValue = objDestr.Value
+		} else if lit, def, ok := destructuringPatternLiteral(element); ok {
+			// Nested pattern with default: [[a, b] = [1, 2]], [{a, b} = {a: 1, b: 2}]
+			target = lit
+			defaultValue = def
 			isRest = false
 		} else {
 			target = element
@@ -9401,6 +9444,12 @@ func (p *Parser) parseObjectLiteral() Expression {
 				// tsc: report the missing comma, then keep parsing members if the
 				// next token can start one, else end the list here.
 				p.addErrorWithCode(p.peekToken, errors.TS1005, "',' expected.")
+				// tsc parses object literal members with
+				// considerSemicolonAsDelimiter: a `;` on the same line is
+				// skipped as if it were the missing comma.
+				if p.tscDiagnostics && p.peekTokenIs(lexer.SEMICOLON) && p.peekToken.Line == p.curToken.Line {
+					p.nextToken()
+				}
 				if p.startsPropertyName(p.peekToken) {
 					continue
 				}
@@ -12004,6 +12053,44 @@ func (p *Parser) isValidDestructuringTarget(expr Expression) bool {
 	default:
 		return false
 	}
+}
+
+// destructuringPatternLiteral turns a nested pattern that was converted
+// together with its default (`{a, ...b} = d` inside a larger pattern) back
+// into the literal form an enclosing conversion expects, keeping element
+// defaults and the rest element. ok is false for any other expression.
+func destructuringPatternLiteral(expr Expression) (pattern, def Expression, ok bool) {
+	withDefault := func(tok *lexer.Token, target, def Expression) Expression {
+		if def == nil {
+			return target
+		}
+		return &AssignmentExpression{Token: tok, Operator: "=", Left: target, Value: def}
+	}
+	switch d := expr.(type) {
+	case *ObjectDestructuringAssignment:
+		lit := &ObjectLiteral{Token: d.Token}
+		for _, prop := range d.Properties {
+			lit.Properties = append(lit.Properties, &ObjectProperty{Key: prop.Key, Value: withDefault(d.Token, prop.Target, prop.Default)})
+		}
+		if d.RestProperty != nil {
+			lit.Properties = append(lit.Properties, &ObjectProperty{Key: &SpreadElement{Token: d.Token, Argument: d.RestProperty.Target}})
+		}
+		return lit, d.Value, true
+	case *ArrayDestructuringAssignment:
+		lit := &ArrayLiteral{Token: d.Token}
+		for _, el := range d.Elements {
+			switch {
+			case el == nil || el.Target == nil:
+				lit.Elements = append(lit.Elements, nil)
+			case el.IsRest:
+				lit.Elements = append(lit.Elements, &SpreadElement{Token: d.Token, Argument: el.Target})
+			default:
+				lit.Elements = append(lit.Elements, withDefault(d.Token, el.Target, el.Default))
+			}
+		}
+		return lit, d.Value, true
+	}
+	return nil, nil, false
 }
 
 // GetSource returns the source file associated with this parser

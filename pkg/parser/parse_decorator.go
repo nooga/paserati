@@ -37,8 +37,15 @@ func (p *Parser) parseDecoratedStatement() Statement {
 
 	default:
 		// tsc parses the statement after the decorators normally and its checker
-		// reports the decorators as misplaced, at the first '@'.
-		if len(decorators) > 0 {
+		// reports the decorators as misplaced, at the first '@'. When no
+		// declaration follows at all, tsc's parseDeclaration produces a
+		// MissingDeclaration instead ("Declaration expected.").
+		if p.tscDiagnostics && !p.startsDeclarationAfterDecorators() && p.prevToken != nil {
+			// Reported at the token's full start: the end of the decorators.
+			end := p.prevToken
+			at := &lexer.Token{Line: end.Line, Column: end.Column + (end.EndPos - end.StartPos), StartPos: end.EndPos, EndPos: end.EndPos}
+			p.addErrorWithCode(at, "TS1146", "Declaration expected.")
+		} else if len(decorators) > 0 {
 			p.addErrorWithCode(decorators[0].Token, errors.TS1206, "Decorators are not valid here.")
 		} else {
 			p.addErrorWithCode(p.curToken, errors.TS1206, "Decorators are not valid here.")
@@ -399,4 +406,23 @@ loop:
 		p.addGrammarErrorWithCode(start, "TS1497", "Expression must be enclosed in parentheses to be used as a decorator.")
 	}
 	return expr
+}
+
+// startsDeclarationAfterDecorators reports whether the token after a
+// statement's decorators starts something tsc's parseDeclarationWorker
+// accepts: a declaration keyword or a modifier.
+func (p *Parser) startsDeclarationAfterDecorators() bool {
+	switch p.curToken.Type {
+	case lexer.FUNCTION, lexer.LET, lexer.CONST, lexer.VAR, lexer.TYPE, lexer.INTERFACE, lexer.ENUM,
+		lexer.IMPORT, lexer.EXPORT, lexer.ASYNC, lexer.STATIC, lexer.READONLY, lexer.PUBLIC,
+		lexer.PRIVATE, lexer.PROTECTED, lexer.ABSTRACT, lexer.CLASS:
+		return true
+	case lexer.AWAIT:
+		return p.peekToken.Literal == "using"
+	}
+	switch p.curToken.Literal {
+	case "declare", "namespace", "module", "global", "using", "accessor", "override":
+		return true
+	}
+	return false
 }

@@ -260,6 +260,12 @@ func (p *Parser) checkClassFieldEnd(last, next *lexer.Token) {
 		return
 	}
 	if next.Line == last.Line {
+		// tsc parseSemicolonAfterPropertyName: a decorator after the name
+		// gets its own message; the decorator then starts the next member.
+		if p.tscDiagnostics && next.Type == lexer.AT {
+			p.addErrorWithCode(next, "TS1436", "Decorators must precede the name and all keywords of property declarations.")
+			return
+		}
 		p.addError(next, "';' expected.")
 	}
 }
