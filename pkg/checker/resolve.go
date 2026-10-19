@@ -4251,8 +4251,10 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 		}
 		return memberType
 	default:
-		c.addError(node.Object, fmt.Sprintf("'%s' is not a namespace or enum type", node.Object.String()))
-		return nil
+		// FIXME: a qualified name through an alias, class or other value
+		// that is not a namespace here is unresolved; tsc resolves the
+		// merged or aliased namespace (or reports TS2503/TS2833).
+		return types.Any
 	}
 }
 

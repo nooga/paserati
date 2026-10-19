@@ -41,6 +41,9 @@ func (c *Checker) primitivePropertyType(t types.Type, propertyName string, node 
 		c.addErrorWithCode(node.Property, errors.TS2339, "Property '"+propertyName+"' does not exist on type '"+t.String()+"'.")
 		return types.Any
 	}
-	c.addError(node.Object, "property access is not supported on type "+t.String())
+	// FIXME: property reads on type kinds not modelled by member access
+	// (instantiated generics that do not substitute, namespace types,
+	// indexed access, typeof this) are unresolved; treated as any rather
+	// than reporting an error tsc does not give.
 	return types.Any
 }

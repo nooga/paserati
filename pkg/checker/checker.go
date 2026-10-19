@@ -4617,8 +4617,13 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 	default:
-		// Optional: Add error for unhandled node types
-		c.addError(nil, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
+		// FIXME: a node kind the checker does not visit as an expression (a
+		// type node reached through invalid syntax, a stray private name)
+		// is typed any; tsc reports these, if at all, from the parser or
+		// grammar checks.
+		if expr, ok := node.(parser.Expression); ok {
+			expr.SetComputedType(types.Any)
+		}
 	}
 }
 

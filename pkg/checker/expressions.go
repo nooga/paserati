@@ -1875,8 +1875,10 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				if checkerDebug {
 					debugPrintf("// [Checker MemberExpr] Mapped type expansion failed, result: %T %s\n", expandedType, expandedType.String())
 				}
-				c.addError(node.Object, fmt.Sprintf("property access is not supported on mapped type %s", obj.String()))
-				resultType = types.Never
+				// FIXME: a mapped type that does not expand (generic keys,
+				// `as` clauses) has its properties unresolved; tsc reads them
+				// through the mapped type's constraint. Treated as any.
+				resultType = types.Any
 			}
 		case *types.InstantiatedType:
 			// Handle property access on instantiated generic types (like Map<K,V>)
@@ -2727,9 +2729,9 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 			baseResultType = types.Any
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
-			// e.g., trying to access property on number, boolean, null, undefined
-			c.addError(node.Object, fmt.Sprintf("property access is not supported on type %s", widenedObjectType.String()))
-			// baseResultType remains types.Never
+			// FIXME: optional chaining on a type kind not modelled here
+			// (indexed access, typeof this, ...) is unresolved; treated as any.
+			baseResultType = types.Any
 		}
 	}
 

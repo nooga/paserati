@@ -397,7 +397,11 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 			return
 		}
 	} else {
-		c.addError(node, fmt.Sprintf("superclass '%s' does not have a constructor", superClassName))
+		// FIXME: a superclass whose constructor type is not modelled (the
+		// global Object, mixin results) leaves the super call unchecked.
+		for _, arg := range node.Arguments {
+			c.visit(arg)
+		}
 		node.SetComputedType(types.Any)
 		return
 	}
