@@ -47,6 +47,15 @@ type ClassMetadata struct {
 	// Indicates this is a class constructor type
 	IsClassConstructor bool
 
+	// ConstructorAccess is the declared accessibility of a class
+	// constructor type's constructor (`private constructor()`).
+	ConstructorAccess AccessModifier
+
+	// DeclFile and DeclStart/DeclEnd locate the class body, for checks
+	// that allow what lexically sits inside the class declaration.
+	DeclFile           string
+	DeclStart, DeclEnd int
+
 	// Reference to the source class declaration (if available)
 	// This is used for inheritance checks and access validation
 	SourceClassName string

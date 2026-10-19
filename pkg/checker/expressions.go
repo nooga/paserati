@@ -2983,6 +2983,8 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		}
 	}
 
+	c.checkConstructorVisibility(node, constructorType)
+
 	if c.newThroughConstructSignatures(node, constructorType) {
 		return
 	}
@@ -4421,4 +4423,35 @@ func unionAccessConflict(members []types.Type, name string) bool {
 		}
 	}
 	return nonPublic && len(decls) > 1
+}
+
+// checkConstructorVisibility reports `new C()` outside the class when C's
+// constructor is private (TS2673), or outside C and its subclasses when it
+// is protected (TS2674).
+func (c *Checker) checkConstructorVisibility(node *parser.NewExpression, ctor types.Type) {
+	if g, ok := ctor.(*types.GenericType); ok {
+		ctor = g.Body
+	}
+	obj, ok := ctor.(*types.ObjectType)
+	if !ok || obj.ClassMeta == nil || !obj.ClassMeta.IsClassConstructor || obj.ClassMeta.ConstructorAccess == types.AccessPublic {
+		return
+	}
+	name := obj.ClassMeta.ClassName
+	var instance *types.ObjectType
+	if sigs := obj.ConstructSigs(); len(sigs) > 0 {
+		instance, _ = sigs[0].ReturnType.(*types.ObjectType)
+	}
+	if c.insideClassDecl(obj.ClassMeta, node) {
+		return
+	}
+	if current := c.currentClassInstanceType; current != nil && current.ClassMeta != nil {
+		if obj.ClassMeta.ConstructorAccess == types.AccessProtected && instance != nil && classChainContains(current, instance, 0) {
+			return
+		}
+	}
+	if obj.ClassMeta.ConstructorAccess == types.AccessPrivate {
+		c.addErrorWithCode(node, "TS2673", fmt.Sprintf("Constructor of class '%s' is private and only accessible within the class declaration.", name))
+	} else {
+		c.addErrorWithCode(node, "TS2674", fmt.Sprintf("Constructor of class '%s' is protected and only accessible within the class declaration.", name))
+	}
 }

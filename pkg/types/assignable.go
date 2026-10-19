@@ -1138,6 +1138,9 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 		len(sourceObj.GenericArgs) == 0 && len(targetObj.GenericArgs) == 0 {
 		return true
 	}
+	if !constructorVisibilitiesCompatible(sourceObj, targetObj) {
+		return false
+	}
 	// Relating Grow<A> to Grow<B> relates their next(): Grow<Wrap<A>> to
 	// Grow<Wrap<B>>, and so on without end. Like tsc's isDeeplyNestedType,
 	// once instantiations of one generic are being related several levels
@@ -1922,4 +1925,25 @@ func isEmptyObject(o *ObjectType) bool {
 // IsEmptyObjectType reports whether o is the empty object type `{}`.
 func IsEmptyObjectType(o *ObjectType) bool {
 	return isEmptyObject(o) && len(o.Bases()) == 0
+}
+
+// constructorVisibilitiesCompatible is tsc's rule for relating two class
+// constructor types: any constructor is assignable to a private one, a
+// public or protected one to a protected one, and only a public one to a
+// public one. Constructor types not declared by classes always relate.
+func constructorVisibilitiesCompatible(source, target *ObjectType) bool {
+	sm, tm := source.ClassMeta, target.ClassMeta
+	if sm == nil || tm == nil || !sm.IsClassConstructor || !tm.IsClassConstructor {
+		return true
+	}
+	if len(source.ConstructSigs()) == 0 || len(target.ConstructSigs()) == 0 {
+		return true
+	}
+	switch tm.ConstructorAccess {
+	case AccessPrivate:
+		return true
+	case AccessProtected:
+		return sm.ConstructorAccess != AccessPrivate
+	}
+	return sm.ConstructorAccess == AccessPublic
 }

@@ -547,6 +547,8 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	}
 	// Class metadata records the static members' access levels.
 	constructorType.AsClassConstructor(node.Name.Value)
+	constructorType.ClassMeta.ConstructorAccess = c.declaredConstructorAccess(node.Body, instanceType)
+	c.recordClassDeclRange(constructorType.ClassMeta, node.Body)
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
@@ -774,6 +776,8 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	}
 	// Class metadata records the static members' access levels.
 	constructorType.AsClassConstructor(node.Name.Value)
+	constructorType.ClassMeta.ConstructorAccess = c.declaredConstructorAccess(node.Body, instanceType)
+	c.recordClassDeclRange(constructorType.ClassMeta, node.Body)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
 	c.deferRelationCheck(func() { c.checkClassIndexConstraints(node.Body, instanceType, constructorType) })
 	c.checkClassInitializationOrder(node.Name.Value, node.Body, instanceType)
@@ -2512,6 +2516,11 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		}
 		// Store both the name and the resolved constructor type for efficient super call resolution
 		instanceType.ClassMeta.SetSuperClassWithConstructor(superClassName, constructorType)
+		// A class whose constructor is private cannot be extended, except
+		// by a class declared inside it.
+		if base, ok := constructorType.(*types.ObjectType); ok && base.ClassMeta != nil && base.ClassMeta.ConstructorAccess == types.AccessPrivate && !c.insideClassDecl(base.ClassMeta, superClassExpr) {
+			c.addErrorWithCode(superClassExpr, "TS2675", fmt.Sprintf("Cannot extend a class '%s'. Class constructor is marked as private.", superClassName))
+		}
 	}
 
 	// Add superclass to BaseTypes for structural inheritance
@@ -3271,4 +3280,52 @@ func inheritSetterAnnotations(body *parser.ClassBody) {
 // identifier rather than a qualified or parenthesized one.
 func isPlainIdentifierName(name string) bool {
 	return name != "" && !strings.ContainsAny(name, ".()<>[] ")
+}
+
+// declaredConstructorAccess is the accessibility of a class's constructor:
+// that of its constructor declarations, or, without one, the base class's
+// (the inherited constructor keeps its declaration).
+func (c *Checker) declaredConstructorAccess(body *parser.ClassBody, instanceType *types.ObjectType) types.AccessModifier {
+	if body != nil {
+		for _, m := range body.Methods {
+			if m == nil || m.Kind != "constructor" {
+				continue
+			}
+			switch {
+			case m.IsPrivate:
+				return types.AccessPrivate
+			case m.IsProtected:
+				return types.AccessProtected
+			}
+			return types.AccessPublic
+		}
+	}
+	if instanceType != nil && instanceType.ClassMeta != nil {
+		if base, ok := instanceType.ClassMeta.SuperConstructorType.(*types.ObjectType); ok && base.ClassMeta != nil {
+			return base.ClassMeta.ConstructorAccess
+		}
+	}
+	return types.AccessPublic
+}
+
+// recordClassDeclRange notes where a class body lies in its file.
+func (c *Checker) recordClassDeclRange(meta *types.ClassMetadata, body *parser.ClassBody) {
+	if meta == nil || body == nil || body.Token == nil {
+		return
+	}
+	meta.DeclFile = c.currentFilePath()
+	meta.DeclStart, meta.DeclEnd = body.Token.StartPos, body.EndPos
+}
+
+// insideClassDecl reports whether node lies inside the body of the class
+// meta describes, in the same file.
+func (c *Checker) insideClassDecl(meta *types.ClassMetadata, node parser.Node) bool {
+	if meta == nil || meta.DeclEnd == 0 || meta.DeclFile != c.currentFilePath() {
+		return false
+	}
+	tok := leftmostToken(node)
+	if tok == nil {
+		return false
+	}
+	return tok.StartPos >= meta.DeclStart && tok.StartPos < meta.DeclEnd
 }
