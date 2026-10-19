@@ -1794,7 +1794,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				propType = c.getPropertyTypeFromType(c.apparentType(obj), propertyName, false)
 			}
 			if propType == types.Never {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on intersection type %s", propertyName, obj.String()))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 			}
 			resultType = propType
 		case *types.ReadonlyType:

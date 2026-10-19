@@ -1,5 +1,5 @@
 // FIXME: super property access in eval not yet supported
-// expect_runtime_error: super expression can only be used within a class or object method
+// expect_runtime_error: 'super' can only be referenced in members of derived classes or object literal expressions
 // Test: super property access in eval within field initializer
 
 class A {

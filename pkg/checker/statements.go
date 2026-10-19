@@ -655,7 +655,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			c.checkTypeRefDefined(param.Constraint)
 			if constraintType := c.resolveTypeAnnotation(param.Constraint); constraintType != nil {
 				if existingGeneric != nil && typeParam.Constraint != nil && !typeParam.Constraint.Equals(constraintType) {
-					c.addError(param.Constraint, fmt.Sprintf("All declarations of '%s' must have identical type parameter constraints.", node.Name.Value))
+					c.addErrorWithCode(node.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
 				}
 				typeParam.Constraint = constraintType
 			}
@@ -664,7 +664,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		if param.DefaultType != nil {
 			if defaultType := c.resolveTypeAnnotation(param.DefaultType); defaultType != nil {
 				if existingGeneric != nil && typeParam.Default != nil && !typeParam.Default.Equals(defaultType) {
-					c.addError(param.DefaultType, fmt.Sprintf("All declarations of '%s' must have identical type parameter defaults.", node.Name.Value))
+					c.addErrorWithCode(node.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
 				}
 				typeParam.Default = defaultType
 
@@ -1722,7 +1722,7 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 	// TS2491: destructuring pattern on LHS of for-in is not allowed
 	switch node.Variable.(type) {
 	case *parser.ArrayDestructuringDeclaration, *parser.ObjectDestructuringDeclaration:
-		c.addError(node.Variable, "The left-hand side of a 'for...in' statement cannot be a destructuring pattern.")
+		c.addErrorWithCode(node.Variable, "TS2491", "The left-hand side of a 'for...in' statement cannot be a destructuring pattern.")
 	}
 
 	originalEnv := c.env
@@ -1811,7 +1811,7 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 							outer.Define(ident.Value, elementType, false)
 							// No error added; body will see the binding.
 						} else if !c.rel.IsAssignable(elementType, varType) {
-							c.addError(ident, fmt.Sprintf("cannot assign property name type '%s' to variable type '%s'", elementType.String(), varType.String()))
+							c.addErrorWithCode(ident, "TS2405", "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'.")
 						}
 						ident.SetComputedType(elementType)
 					}

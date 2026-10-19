@@ -182,7 +182,9 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	if merged {
 		c.env.typeAliases[enumName] = unionType
 	} else if !c.env.DefineTypeAlias(enumName, unionType) {
-		c.addError(node.Name, fmt.Sprintf("failed to define enum type '%s'", enumName))
+		if isPredefinedTypeName(enumName) {
+			c.addErrorWithCode(node.Name, "TS2431", fmt.Sprintf("Enum name cannot be '%s'.", enumName))
+		}
 		return
 	}
 
@@ -280,4 +282,14 @@ func (c *Checker) isUserBinding(name string) bool {
 // isGlobalBuiltinScope reports whether e is the builtin global environment.
 func (c *Checker) isGlobalBuiltinScope(e *Environment) bool {
 	return e.outer == nil
+}
+
+// isPredefinedTypeName reports names a class, enum or interface may not take
+// (tsc's checkTypeNameIsReserved: TS2414, TS2431, TS2427).
+func isPredefinedTypeName(name string) bool {
+	switch name {
+	case "any", "unknown", "never", "number", "bigint", "boolean", "string", "symbol", "void", "object", "undefined":
+		return true
+	}
+	return false
 }

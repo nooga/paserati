@@ -6117,7 +6117,7 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 			if c.moduleLoader != nil {
 				moduleRecord, err := c.moduleLoader.LoadModule(sourceModule, c.source.Path)
 				if err != nil {
-					c.addError(node, "failed to load source module")
+					c.addErrorWithCode(node, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", sourceModule))
 					return
 				}
 

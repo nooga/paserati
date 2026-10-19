@@ -510,7 +510,9 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 		existing, ok := c.env.ResolveTypeLocal(node.Name.Value)
 		iface, isObj := existing.(*types.ObjectType)
 		if !ok || !isObj || iface.ClassMeta != nil {
-			c.addError(node.Name, fmt.Sprintf("failed to pre-define class type '%s'", node.Name.Value))
+			if isPredefinedTypeName(node.Name.Value) {
+				c.addErrorWithCode(node.Name, "TS2414", fmt.Sprintf("Class name cannot be '%s'.", node.Name.Value))
+			}
 			return
 		}
 		iface.ClassMeta = placeholderType.ClassMeta
@@ -2296,7 +2298,11 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		}
 		if !resolveExists {
 			debugPrintf("// [Checker Class] Generic base constructor '%s' not found in environment\n", genRef.Name.Value)
-			c.addError(superClassExpr, fmt.Sprintf("generic superclass '%s' is not defined", genRef.Name.Value))
+			if _, isType := c.env.ResolveType(genRef.Name.Value); isType {
+				c.addErrorWithCode(superClassExpr, errors.TS2689, fmt.Sprintf("Cannot extend an interface '%s'. Did you mean 'implements'?", genRef.Name.Value))
+			} else {
+				c.addErrorWithCode(superClassExpr, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", genRef.Name.Value))
+			}
 			return
 		}
 		debugPrintf("// [Checker Class] Found generic base constructor '%s': %T\n", genRef.Name.Value, baseConstructor)
@@ -2597,7 +2603,7 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 	// 2. Within an object method (for accessing prototype chain)
 	// 3. In eval code called from a method context (allowSuperInEval)
 	if c.currentClassContext == nil && !c.inObjectMethod && !c.allowSuperInEval {
-		c.addError(node, "super expression can only be used within a class or object method")
+		c.addErrorWithCode(node, "TS2660", "'super' can only be referenced in members of derived classes or object literal expressions.")
 		node.SetComputedType(types.Any)
 		return
 	}
@@ -2623,7 +2629,8 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 	// instead of looking it up by name to avoid timing issues
 	classInstanceType := c.currentClassInstanceType
 	if classInstanceType == nil || classInstanceType.ClassMeta == nil {
-		c.addError(node, "super expression can only be used within a class context")
+		// Reached from a computed property name, outside the class body proper.
+		c.addErrorWithCode(node, "TS2466", "'super' cannot be referenced in a computed property name.")
 		node.SetComputedType(types.Any)
 		return
 	}
