@@ -67,6 +67,9 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 
 	pas := createTscPaserati(opts)
 	defer pas.Cleanup()
+	// A single-file test may import itself by its file name.
+	pas.SetSourceFileName(filepath.Base(req.Rel))
+	pas.SetModuleKind(strings.ToLower(strings.TrimSpace(opts["module"])))
 
 	func() {
 		defer func() {

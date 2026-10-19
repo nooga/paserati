@@ -506,8 +506,13 @@ type Checker struct {
 	// legacyModuleFormat names --module when it is a pre-ES2015 format
 	// (CommonJS, AMD, UMD or System); "" otherwise.
 	legacyModuleFormat string
-	classNameNode      *parser.Identifier // class being declared, for diagnostics reported on its name
-	strictNullChecks   bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
+	// sourceFileName is the checked file's base name, for self-imports;
+	// moduleKind is --module, lower case ("" when unset).
+	sourceFileName, moduleKind string
+	pendingSelfImports         []*parser.ImportDeclaration
+	selfImportValues           map[string]string // local import name -> the file's own binding it reads
+	classNameNode              *parser.Identifier // class being declared, for diagnostics reported on its name
+	strictNullChecks           bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
 	// reportedRelationDiagnostics dedupes relation diagnostics reported at the
 	// same position more than once (see addErrorAtStart).
 	reportedRelationDiagnostics map[string]bool
@@ -850,6 +855,12 @@ func (c *Checker) SetAlwaysStrict(strict bool) {
 func (c *Checker) SetUseDefineForClassFields(on bool) {
 	c.noDefineForClassFields = !on
 }
+
+// SetSourceFileName names the checked file (its base name).
+func (c *Checker) SetSourceFileName(name string) { c.sourceFileName = name }
+
+// SetModuleKind records --module, lower case.
+func (c *Checker) SetModuleKind(kind string) { c.moduleKind = kind }
 
 // SetLegacyModuleFormat records --module when the file is emitted in a
 // format older than ES2015 modules, as tsc spells it ("CommonJS", "AMD",
@@ -1807,6 +1818,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 		}
 	}
+	// Imports of this file itself bind once its own types are declared.
+	for _, imp := range c.pendingSelfImports {
+		c.bindSelfImport(imp)
+	}
+	c.pendingSelfImports = nil
 	debugPrintf("// --- Checker - Pass 1: Complete ---\n")
 
 	// --- Pass 2: Initial Declarations (Variables & Function Signatures) ---
@@ -3577,6 +3593,12 @@ func (c *Checker) visit(node parser.Node) {
 		// First try regular resolution, then check with objects
 		c.inferPendingInit(node.Value)
 		typ, isConst, found := c.env.Resolve(node.Value) // Use node.Value directly; UPDATED TO 3 VARS
+		if target, aliased := c.selfImportValues[node.Value]; aliased && found && c.definingEnv(node.Value) == c.fileScope {
+			// An import of this file's own export reads the local binding.
+			if t, _, ok := c.env.Resolve(target); ok && t != nil {
+				typ = t
+			}
+		}
 		if found && node.Value == "arguments" && c.target() < 2015 && c.innermostFunctionIsArrow && !c.declaredInInnermostFunction(node.Value) {
 			// Below ES2015 the arrow's own `arguments` is found before any
 			// outer declaration of that name.
@@ -5806,6 +5828,15 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 		return
 	}
 
+	for _, spec := range node.Specifiers {
+		if named, ok := spec.(*parser.ImportNamedSpecifier); ok && named.Imported != nil {
+			c.reportStringModuleName(named.Imported.Token, named.Imported)
+		}
+	}
+	if c.isSelfModule(sourceModulePath) {
+		c.pendingSelfImports = append(c.pendingSelfImports, node)
+		return
+	}
 	c.reportUnresolvedModule(node.Source)
 
 	// Validate and process import specifiers
@@ -5995,6 +6026,14 @@ func (c *Checker) importTypeNamespace(node *parser.ImportTypeExpression) *types.
 
 // checkExportNamedDeclaration handles type checking for named export statements
 func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaration) {
+	for _, spec := range node.Specifiers {
+		if es, ok := spec.(*parser.ExportNamedSpecifier); ok {
+			c.reportStringModuleNameExpr(es.Local)
+			if es.Exported != es.Local {
+				c.reportStringModuleNameExpr(es.Exported)
+			}
+		}
+	}
 	if c.functionNestingDepth > 0 || c.blockDepth > 0 {
 		c.addErrorWithCode(node, errors.TS1184, "Modifiers cannot appear here.")
 		// The declaration is still checked and, outside functions, binds
@@ -6108,6 +6147,7 @@ func (c *Checker) checkExportDefaultDeclaration(node *parser.ExportDefaultDeclar
 
 // checkExportAllDeclaration handles type checking for export all statements
 func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
+	c.reportStringModuleNameExpr(node.Exported)
 	if node.Source == nil {
 		c.addError(node, "export * statement missing source module")
 		return
@@ -6528,7 +6568,7 @@ func exportedAmbientSignature(node *parser.ExportNamedDeclaration) *parser.Funct
 // cannot be loaded (ambient module declarations included, which the loader
 // resolves). Without a module loader nothing is checked.
 func (c *Checker) reportUnresolvedModule(source *parser.StringLiteral) {
-	if source == nil || c.moduleLoader == nil {
+	if source == nil || c.moduleLoader == nil || c.isSelfModule(source.Value) {
 		return
 	}
 	if _, err := c.moduleLoader.LoadModule(source.Value, c.currentFilePath()); err != nil {

@@ -138,6 +138,17 @@ func (p *Paserati) SetLegacyModuleFormat(name string) {
 	p.checker.SetLegacyModuleFormat(name)
 }
 
+// SetSourceFileName names the file being checked, for a module that imports
+// itself by its file name.
+func (p *Paserati) SetSourceFileName(name string) {
+	p.checker.SetSourceFileName(name)
+}
+
+// SetModuleKind records --module (lower case, "" when unset).
+func (p *Paserati) SetModuleKind(kind string) {
+	p.checker.SetModuleKind(kind)
+}
+
 func (p *Paserati) SetTarget(year int) {
 	p.checker.SetTarget(year)
 }
