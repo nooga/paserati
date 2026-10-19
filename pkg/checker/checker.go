@@ -523,8 +523,9 @@ type Checker struct {
 	pendingAliasEnv             *Environment                          // the environment they resolve in
 	classPlaceholders           map[*types.ObjectType]bool            // Pass 0 class types not filled in yet
 	checkedParameterDefaults    map[*parser.Parameter]bool
-	namespaceBodyDepth          int  // > 0 while checking a namespace body
-	isModule                    bool // Source is a module, so strict mode comes from the module (TS1214)
+	namespaceBodyDepth          int          // > 0 while checking a namespace body
+	fileScope                   *Environment // the program's top-level scope (module scope in a module)
+	isModule                    bool         // Source is a module, so strict mode comes from the module (TS1214)
 	// topLevelAwaitDisallowed: see SetTopLevelAwaitDisallowed.
 	topLevelAwaitDisallowed bool
 	// Identifiers already reported as strict-mode reserved words, so narrowing
@@ -1555,6 +1556,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.env = globalEnv
 		defer func() { c.env = realGlobal }()
 	}
+	c.fileScope = globalEnv
 
 	// Snapshot the globals that exist before any of this program's declarations
 	// are processed, for definite assignment analysis (see Pass 6).
@@ -5983,6 +5985,14 @@ func (c *Checker) importTypeNamespace(node *parser.ImportTypeExpression) *types.
 func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaration) {
 	if c.functionNestingDepth > 0 || c.blockDepth > 0 {
 		c.addErrorWithCode(node, errors.TS1184, "Modifiers cannot appear here.")
+		// The declaration is still checked and, outside functions, binds
+		// its names in the module scope as tsc's export symbols do.
+		if node.Declaration != nil {
+			c.visit(node.Declaration)
+			if c.functionNestingDepth == 0 {
+				c.hoistNestedExportBindings(node.Declaration)
+			}
+		}
 		return
 	}
 	if node.Declaration != nil {
@@ -5992,6 +6002,7 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 
 		// Extract and register exported names
 		c.processExportDeclaration(node.Declaration)
+		c.hoistNestedExportBindings(node.Declaration)
 
 	} else if len(node.Specifiers) > 0 {
 		// Named exports: export { x, y } or export { x } from "module"
@@ -6159,6 +6170,28 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 }
 
 // processExportDeclaration processes a declaration that's being exported directly
+// hoistNestedExportBindings binds the names of an exported variable
+// declaration left inside a statement (`if (c) export const x: T;`, a
+// recovered parse) in the module scope too: tsc declares export symbols in
+// the module's exports wherever they appear.
+func (c *Checker) hoistNestedExportBindings(decl parser.Statement) {
+	if c.fileScope == nil || c.env == c.fileScope {
+		return
+	}
+	switch decl.(type) {
+	case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement:
+	default:
+		return
+	}
+	for _, name := range parser.DeclaredNames(decl) {
+		if t, isConst, ok := c.env.Resolve(name); ok {
+			if _, own := c.fileScope.symbols[name]; !own {
+				c.fileScope.Define(name, t, isConst)
+			}
+		}
+	}
+}
+
 func (c *Checker) processExportDeclaration(decl parser.Statement) {
 	switch node := decl.(type) {
 	case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement,
