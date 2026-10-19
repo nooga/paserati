@@ -2,6 +2,7 @@ package types
 
 import (
 	"github.com/nooga/paserati/pkg/vm"
+	"strconv"
 )
 
 // --- Type Assignability ---
@@ -1174,10 +1175,8 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 		targetOptional := targetObj.IsPropertyOptional(propName)
 		// Private and protected members are nominal: the source must derive
 		// from the class that declares them.
-		if declaring, ok := nonPublicMemberOwner(targetObj, propName, 0); ok {
-			if !classDerivesFrom(sourceObj, declaring, 0) {
-				return false
-			}
+		if !nonPublicMembersRelated(sourceObj, targetObj, propName) {
+			return false
 		}
 		sourcePropType, exists := sourceProps[propName]
 		if !exists {
@@ -1500,34 +1499,69 @@ func mergeIntersectionObjects(inter *IntersectionType) *ObjectType {
 	return merged
 }
 
-// NonPublicMemberOwner returns the name of the class that declares a private
+// NonPublicMemberOwner returns the identity of the class that declares a private
 // or protected instance member name of obj, looking through base types.
 func NonPublicMemberOwner(obj *ObjectType, name string) (string, bool) {
 	return nonPublicMemberOwner(obj, name, 0)
 }
 
-// nonPublicMemberOwner returns the name of the class that declares a private
-// or protected instance member of obj (looking through base types).
+// nonPublicMemberOwner returns the identity of the class that declares a
+// private or protected instance member of obj (looking through base types).
 func nonPublicMemberOwner(obj *ObjectType, name string, depth int) (string, bool) {
+	owner, _, found := nonPublicMember(obj, name, depth)
+	return owner, found
+}
+
+// nonPublicMember is nonPublicMemberOwner plus the member's access level.
+func nonPublicMember(obj *ObjectType, name string, depth int) (string, AccessModifier, bool) {
 	if obj == nil || depth > 8 {
-		return "", false
+		return "", AccessPublic, false
 	}
 	if obj.ClassMeta != nil {
 		if info := obj.ClassMeta.GetMemberAccess(name); info != nil && !info.IsStatic {
 			if info.AccessLevel != AccessPublic {
-				return obj.ClassMeta.ClassName, true
+				return classIdentity(obj.ClassMeta), info.AccessLevel, true
 			}
-			return "", false
+			return "", AccessPublic, false
 		}
 	}
 	for _, base := range obj.Bases() {
 		if bo, ok := resolveBaseType(base).(*ObjectType); ok {
-			if owner, found := nonPublicMemberOwner(bo, name, depth+1); found {
-				return owner, true
+			if owner, level, found := nonPublicMember(bo, name, depth+1); found {
+				return owner, level, true
 			}
 		}
 	}
-	return "", false
+	return "", AccessPublic, false
+}
+
+// classIdentity names a class declaration: two classes of the same name in
+// different scopes are different classes.
+func classIdentity(meta *ClassMetadata) string {
+	if meta.DeclEnd == 0 {
+		return meta.ClassName
+	}
+	return meta.ClassName + "@" + meta.DeclFile + ":" + strconv.Itoa(meta.DeclStart)
+}
+
+// nonPublicMembersRelated applies tsc's accessibility rules for property name
+// (propertiesRelatedTo): a private member on either side must be the same
+// declaration on both, a protected target member needs a source deriving
+// from its class, and a protected source member cannot satisfy a public one.
+func nonPublicMembersRelated(source, target *ObjectType, name string) bool {
+	tOwner, tLevel, tFound := nonPublicMember(target, name, 0)
+	sOwner, sLevel, sFound := nonPublicMember(source, name, 0)
+	if !sFound && !tFound {
+		return true
+	}
+	switch {
+	case tLevel == AccessPrivate || sLevel == AccessPrivate:
+		return sFound && tFound && sOwner == tOwner
+	case tFound:
+		return classDerivesFrom(source, tOwner, 0)
+	default:
+		return false // protected in source, public in target
+	}
 }
 
 // classDerivesFrom reports whether obj is an instance of the named class or of
@@ -1536,7 +1570,7 @@ func classDerivesFrom(obj *ObjectType, className string, depth int) bool {
 	if obj == nil || depth > 8 {
 		return false
 	}
-	if obj.ClassMeta != nil && obj.ClassMeta.ClassName == className {
+	if obj.ClassMeta != nil && classIdentity(obj.ClassMeta) == className {
 		return true
 	}
 	for _, base := range obj.Bases() {

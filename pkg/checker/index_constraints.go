@@ -163,6 +163,7 @@ func membersView(t *types.ObjectType) *types.ObjectType {
 		ReadOnlyProperties: t.ReadOnlyProps(),
 		IndexSignatures:    t.IndexSigs(),
 		BaseTypes:          t.Bases(),
+		ClassMeta:          t.ClassMeta, // private and protected members stay nominal
 	}
 }
 

@@ -359,6 +359,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 					optionalProperties[propName] = true
 				}
 			})
+			c.keepClassBaseForAccess(interfaceType, extendedObjectType)
 			if checkerDebug {
 				debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from extended interface\n",
 					node.Name.Value, len(extendedObjectType.Props()))
@@ -731,6 +732,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
 			extendedObjs = append(extendedObjs, extendedObjectType)
 			c.recordDerived(extendedObjectType, bodyType)
+			c.keepClassBaseForAccess(bodyType, extendedObjectType)
 			rb := newThisRebind(extendedObjectType, bodyType)
 			for _, propName := range extendedObjectType.PropertyNames() {
 				propType := extendedObjectType.Props()[propName]
@@ -2127,4 +2129,20 @@ func isPropertyTarget(e parser.Expression) bool {
 		return true
 	}
 	return false
+}
+
+// keepClassBaseForAccess keeps a class an interface extends among the
+// interface's bases when the class has private or protected members: the
+// members are copied, but their accessibility is nominal and is looked up
+// through the bases (types.NonPublicMemberOwner).
+func (c *Checker) keepClassBaseForAccess(iface, base *types.ObjectType) {
+	if base.ClassMeta == nil {
+		return
+	}
+	for _, name := range base.PropertyNames() {
+		if _, nonPublic := types.NonPublicMemberOwner(base, name); nonPublic {
+			iface.BaseTypes = append(iface.Bases(), base)
+			return
+		}
+	}
 }
