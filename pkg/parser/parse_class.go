@@ -1114,6 +1114,9 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 	if p.curToken.Type == lexer.STRING {
 		// String literal property name: "propertyName"
 		propertyName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.curToken.Type == lexer.NUMBER {
+		// Numeric property name: `1.0 = x` names "1"
+		propertyName = p.numericMemberName()
 	} else {
 		// Identifier property name
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}

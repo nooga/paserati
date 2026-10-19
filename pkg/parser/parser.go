@@ -2,7 +2,9 @@ package parser
 
 import (
 	"fmt"
+	"math"
 	"math/big"
+	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -1285,10 +1287,15 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		// out of a module body its checker reports the modifier (TS1184).
 		if p.tscDiagnostics && p.canRecover() && (inSubStatement || (len(p.blockKinds) > 0 && !p.blockKinds[len(p.blockKinds)-1])) &&
 			p.peekToken.Line == p.curToken.Line && p.startsDeclaration(p.peekToken) {
-			p.addGrammarErrorWithCode(p.curToken, "TS1184", "Modifiers cannot appear here.")
+			exportTok := p.curToken
+			p.addGrammarErrorWithCode(exportTok, "TS1184", "Modifiers cannot appear here.")
 			p.nextToken()
 			p.subStatementModifierError = inSubStatement
-			return p.parseStatement()
+			// Still an export to the checker, which binds it in the file scope.
+			if decl := p.parseStatement(); decl != nil && !reflect.ValueOf(decl).IsNil() {
+				return &ExportNamedDeclaration{Token: exportTok, Declaration: decl}
+			}
+			return nil
 		}
 		return p.parseExportDeclaration()
 	case lexer.LBRACE:
@@ -9832,7 +9839,7 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		}
 	} else if p.curTokenIs(lexer.NUMBER) {
 		// Handle numeric literal property names like { 0: string; 1: number }
-		numIdent := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		numIdent := p.numericMemberName()
 		prop = &InterfaceProperty{
 			Name: numIdent,
 		}
@@ -10376,7 +10383,7 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				}
 			} else if p.curTokenIs(lexer.NUMBER) {
 				// Handle numeric literal property names
-				numIdent := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+				numIdent := p.numericMemberName()
 				prop = &ObjectTypeProperty{
 					Name:     numIdent,
 					Readonly: isReadonly,
@@ -14300,4 +14307,40 @@ func tscIsLeftHandSide(e Expression) bool {
 		return false
 	}
 	return true
+}
+
+// numericMemberName is the member name a numeric literal key denotes (cur is
+// the NUMBER token): its value's ECMAScript ToString, as tsc names the
+// property, so `1.0`, `1.` and `0x1` all name "1". The token keeps the
+// source position.
+func (p *Parser) numericMemberName() *Identifier {
+	tok := p.curToken
+	name := tok.Literal
+	if lit, ok := p.parseNumberLiteral().(*NumberLiteral); ok && lit != nil {
+		name = jsNumberString(lit.Value)
+	}
+	return &Identifier{Token: tok, Value: name}
+}
+
+// jsNumberString is ECMAScript Number::toString for a finite or infinite
+// float64.
+func jsNumberString(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	case f == 0:
+		return "0"
+	}
+	if a := math.Abs(f); a < 1e-6 || a >= 1e21 {
+		s := strconv.FormatFloat(f, 'e', -1, 64)
+		mant, exp, _ := strings.Cut(s, "e")
+		sign := exp[:1]
+		digits := strings.TrimLeft(exp[1:], "0")
+		return mant + "e" + sign + digits
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }
