@@ -3253,7 +3253,7 @@ func inheritSetterAnnotations(body *parser.ClassBody) {
 		if g == nil || g.Kind != "getter" || g.Value == nil || g.Value.ReturnTypeAnnotation != nil {
 			continue
 		}
-		name, ok := g.Key.(*parser.Identifier)
+		name, ok := accessorKeyText(g.Key)
 		if !ok {
 			continue
 		}
@@ -3261,7 +3261,7 @@ func inheritSetterAnnotations(body *parser.ClassBody) {
 			if s == nil || s.Kind != "setter" || s.IsStatic != g.IsStatic || s.Value == nil || len(s.Value.Parameters) == 0 {
 				continue
 			}
-			if sn, ok := s.Key.(*parser.Identifier); ok && sn.Value == name.Value {
+			if sn, ok := accessorKeyText(s.Key); ok && sn == name {
 				if p := s.Value.Parameters[0]; p != nil && p.TypeAnnotation != nil {
 					// FIXME: a type query (`typeof y`) used as the getter's
 					// return annotation resolves to a different type than in
@@ -3274,6 +3274,20 @@ func inheritSetterAnnotations(body *parser.ClassBody) {
 			}
 		}
 	}
+}
+
+// accessorKeyText names an accessor's key for pairing a getter with its
+// setter: the static name, or for a late-bound computed key (an entity name
+// such as `[E.A]`) the key's text, which names the same member when it is
+// the same name. Other computed keys (`[1 << 6]`) name no member.
+func accessorKeyText(key parser.Expression) (string, bool) {
+	if name, ok := getMethodKeyString(key); ok {
+		return name, true
+	}
+	if ck, ok := key.(*parser.ComputedPropertyName); ok && entityNameText(ck.Expr) != "" {
+		return "[" + entityNameText(ck.Expr) + "]", true
+	}
+	return "", false
 }
 
 // isPlainIdentifierName reports whether a heritage name is a single
