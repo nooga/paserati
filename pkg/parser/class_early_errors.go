@@ -2,6 +2,7 @@ package parser
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
@@ -193,6 +194,10 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 
 	for _, block := range body.StaticInitializers {
 		p.checkInitializerEarlyErrors(block)
+	}
+
+	if p.tscDiagnostics && p.experimentalDecorators {
+		p.checkLegacyAccessorDecorators(body)
 	}
 
 	for _, prop := range body.Properties {
@@ -426,6 +431,39 @@ func (p *Parser) checkClassDecoratorPlacement(body *ClassBody) {
 			if _, private := privateKeyName(prop.Key); private {
 				bad(prop.Decorators)
 			}
+		}
+	}
+}
+
+// checkLegacyAccessorDecorators is checkGrammarModifiers' legacy-decorator
+// rule: of a get/set pair only the first accessor may be decorated (TS1207
+// on the second when both are).
+func (p *Parser) checkLegacyAccessorDecorators(body *ClassBody) {
+	type key struct {
+		name     string
+		isStatic bool
+	}
+	first := map[key]*MethodDefinition{}
+	var accessors []*MethodDefinition
+	for _, m := range body.Methods {
+		if m != nil && (m.Kind == "getter" || m.Kind == "setter") {
+			accessors = append(accessors, m)
+		}
+	}
+	sort.SliceStable(accessors, func(i, j int) bool { return accessors[i].Token.StartPos < accessors[j].Token.StartPos })
+	for _, m := range accessors {
+		name, _, _ := propertyKeyName(m.Key)
+		if name == "" {
+			continue
+		}
+		k := key{name, m.IsStatic}
+		f, ok := first[k]
+		if !ok {
+			first[k] = m
+			continue
+		}
+		if f.Kind != m.Kind && len(f.Decorators) > 0 && len(m.Decorators) > 0 && m.Decorators[0] != nil {
+			p.addGrammarErrorWithCode(m.Decorators[0].Token, "TS1207", "Decorators cannot be applied to multiple get/set accessors of the same name.")
 		}
 	}
 }

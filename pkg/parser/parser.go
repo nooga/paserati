@@ -174,6 +174,9 @@ type Parser struct {
 	// bodyMethod as a constructor body.
 	tscNewTargetBad bool
 	tscCtorBody     bool
+	// propertyModifierError: the class property being parsed already has a
+	// modifier/decorator grammar error, so its property grammar is not checked.
+	propertyModifierError bool
 	// noIn is tsc's disallowIn context: `in` is not a binary operator in a
 	// for-statement declaration initializer (tsc mode only).
 	noIn bool
@@ -3756,6 +3759,14 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 		// checker requires it to come first: TS2680).
 		param.IsThis = true
 		param.Name = nil // 'this' parameters don't have a name field
+		if p.tscDiagnostics && (len(decorators) > 0 || param.Token != p.curToken) {
+			// checkGrammarModifiers
+			firstTok := param.Token
+			if len(decorators) > 0 && decorators[0] != nil {
+				firstTok = decorators[0].Token
+			}
+			p.addGrammarErrorWithCode(firstTok, "TS1433", "Neither decorators nor modifiers may be applied to 'this' parameters.")
+		}
 		if !first && p.canRecover() {
 			p.addSemanticErrorWithCode(p.curToken, "TS2680", "A 'this' parameter must be the first parameter.")
 		}
@@ -7377,6 +7388,10 @@ func (p *Parser) parseForStatement() Statement {
 	if p.peekTokenIs(lexer.AWAIT) {
 		isAsync = true
 		p.nextToken() // Consume 'await' token
+		if p.tscDiagnostics && p.inStaticBlock {
+			// checkGrammarForInOrForOfStatement
+			p.addGrammarErrorWithCode(p.curToken, "TS18038", "'for await' loops cannot be used inside a class static block.")
+		}
 	}
 
 	if !p.expectPeek(lexer.LPAREN) {

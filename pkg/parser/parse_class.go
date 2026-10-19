@@ -452,6 +452,13 @@ func (p *Parser) parseClassBody() *ClassBody {
 				}
 				isAbstract = true
 				abstractModTok = p.curToken
+				if abstractClass && p.tscDiagnostics && p.peekToken.Literal != "constructor" {
+					if isStatic {
+						p.addGrammarErrorWithCode(p.curToken, "TS1243", "'static' modifier cannot be used with 'abstract' modifier.")
+					} else if isPrivate {
+						p.addGrammarErrorWithCode(p.curToken, "TS1243", "'private' modifier cannot be used with 'abstract' modifier.")
+					}
+				}
 				if !abstractClass && p.tscDiagnostics {
 					abstractTok = p.curToken
 				}
@@ -546,6 +553,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 			switch m := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride).(type) {
 			case *MethodDefinition:
+				if isAbstract && p.tscDiagnostics {
+					p.addGrammarErrorWithCode(memberKeyToken(m.Key, m.Token), "TS1318", "An abstract accessor cannot have an implementation.")
+				}
 				attachDecorators(m)
 				methods = append(methods, m)
 			case *MethodSignature:
@@ -565,6 +575,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 			switch m := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride).(type) {
 			case *MethodDefinition:
+				if isAbstract && p.tscDiagnostics {
+					p.addGrammarErrorWithCode(memberKeyToken(m.Key, m.Token), "TS1318", "An abstract accessor cannot have an implementation.")
+				}
 				attachDecorators(m)
 				methods = append(methods, m)
 			case *MethodSignature:
@@ -726,7 +739,11 @@ func (p *Parser) parseClassBody() *ClassBody {
 					}
 				} else {
 					// It's a property
+					// checkGrammarModifiers failing (an invalid decorator, see
+					// attachDecorators) skips tsc's checkGrammarProperty.
+					p.propertyModifierError = len(memberDecorators) > 0 && !p.experimentalDecorators && (isAbstract || isDeclare)
 					property := p.parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected, isOverride, isDeclare)
+					p.propertyModifierError = false
 					if property != nil {
 						if isAbstract && property.Value != nil && p.tscDiagnostics {
 							if id, ok := property.Key.(*Identifier); ok {
@@ -1063,12 +1080,14 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 	// (mutually exclusive — TS rejects `name?!:` and `name!?:`).
 	var isOptional bool
 	var hasDefiniteAssignment bool
+	var bangTok, initTok *lexer.Token
 	if p.peekTokenIs(lexer.QUESTION) {
 		p.nextToken() // Move to '?'
 		isOptional = true
 	} else if p.peekTokenIs(lexer.BANG) {
 		p.nextToken() // Move to '!'
 		hasDefiniteAssignment = true
+		bangTok = p.curToken
 	}
 
 	// Now we're either still at fieldName or at '?'/'!'
@@ -1093,6 +1112,7 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 	var initializer Expression
 	if p.curTokenIs(lexer.ASSIGN) {
 		p.nextToken() // move past '='
+		initTok = p.curToken
 		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
 		// This allows chained assignments like: x = obj['lol'] = 42
 		initializer = p.parseFieldInitializer()
@@ -1119,6 +1139,10 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		}
 		// Now curToken should be at the next member or '}'
 		// No additional advancement needed
+	}
+
+	if p.tscDiagnostics && !p.propertyModifierError {
+		p.checkGrammarPropertyTsc(bangTok, initTok, typeAnnotation != nil, isDeclare, isStatic, isReadonly)
 	}
 
 	return &PropertyDefinition{
@@ -2233,4 +2257,37 @@ func (p *Parser) skipAccessorTypeParams(name *lexer.Token) {
 	}
 	p.tryParseTypeParameters()
 	p.addGrammarErrorWithCode(name, "TS1094", "An accessor cannot have type parameters.")
+}
+
+// checkGrammarPropertyTsc is the ambient-initializer and definite-assignment
+// part of tsc's checkGrammarProperty for a class property declaration.
+func (p *Parser) checkGrammarPropertyTsc(bangTok, initTok *lexer.Token, hasType, isDeclare, isStatic, isReadonly bool) {
+	if isDeclare && initTok != nil && (!isReadonly || hasType) {
+		p.addGrammarErrorWithCode(initTok, "TS1039", "Initializers are not allowed in ambient contexts.")
+	}
+	if bangTok != nil && (!hasType || initTok != nil || isDeclare || isStatic) {
+		switch {
+		case initTok != nil:
+			p.addGrammarErrorWithCode(bangTok, "TS1263", "Declarations with initializers cannot also have definite assignment assertions.")
+		case !hasType:
+			p.addGrammarErrorWithCode(bangTok, "TS1264", "Declarations with definite assignment assertions must also have type annotations.")
+		default:
+			p.addGrammarErrorWithCode(bangTok, "TS1255", "A definite assignment assertion '!' is not permitted in this context.")
+		}
+	}
+}
+
+// memberKeyToken is the token tsc's error span starts at for a member name.
+func memberKeyToken(key Expression, fallback *lexer.Token) *lexer.Token {
+	switch k := key.(type) {
+	case *Identifier:
+		return k.Token
+	case *StringLiteral:
+		return k.Token
+	case *NumberLiteral:
+		return k.Token
+	case *ComputedPropertyName:
+		return fallback
+	}
+	return fallback
 }
