@@ -2260,6 +2260,10 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 		return nil
 	}
 
+	if path[0] == "this" {
+		return c.resolveTypeofThisPath(node, path)
+	}
+
 	// Resolve the first segment from the environment.
 	c.inferPendingInit(path[0])
 	varType, _, found := c.env.Resolve(path[0])
@@ -2294,6 +2298,25 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 
 	debugPrintf("// [Checker resolveTypeofType] Found type for '%v': %T\n", path, varType)
 	return varType
+}
+
+// resolveTypeofThisPath checks `typeof this.a.b` the way tsc does: as the
+// expression `this.a.b` at the annotation's position, so the current this
+// type, its narrowing and the usual access errors all apply.
+func (c *Checker) resolveTypeofThisPath(node *parser.TypeofTypeExpression, path []string) types.Type {
+	this := &parser.ThisExpression{Token: node.Token}
+	saved := c.typeQueryThis
+	c.typeQueryThis = this
+	defer func() { c.typeQueryThis = saved }()
+	var expr parser.Expression = this
+	for _, seg := range path[1:] {
+		expr = &parser.MemberExpression{Token: node.Token, Object: expr, Property: &parser.Identifier{Token: node.Token, Value: seg}}
+	}
+	c.visit(expr)
+	if t := expr.GetComputedType(); t != nil {
+		return t
+	}
+	return types.Any
 }
 
 // resolveTypeofTypeIfNeeded resolves a TypeofType forward reference if needed

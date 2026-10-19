@@ -428,7 +428,11 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 
 		// Pattern 5: identifier instanceof Constructor (e.g., date instanceof Date)
 		if infix.Operator == "instanceof" {
-			if ident, ok := infix.Left.(*parser.Identifier); ok {
+			left := infix.Left
+			if this, isThis := left.(*parser.ThisExpression); isThis {
+				left = &parser.Identifier{Token: this.Token, Value: "this"}
+			}
+			if ident, ok := left.(*parser.Identifier); ok {
 				if constructorIdent, ok := infix.Right.(*parser.Identifier); ok {
 					// Special cases for built-in types
 					switch constructorIdent.Value {
@@ -1040,6 +1044,11 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 			debugPrintf("// [TypeNarrowing] Narrowing '%s' from '%s' to more specific type '%s'\n",
 				guard.VariableName, originalType.String(), guard.NarrowedType.String())
 		}
+	} else if _, isObj := originalType.(*types.ObjectType); isObj && guard.Instanceof && guard.NarrowedType != nil &&
+		!isNarrowingMarker(guard.NarrowedType) && !c.isDerivedFrom(originalType, guard.NarrowedType) {
+		// An A that is an instance of an unrelated class B is an A & B.
+		canNarrow = true
+		narrowedType = types.NewIntersectionType(originalType, guard.NarrowedType)
 	} else if _, isObj := originalType.(*types.ObjectType); isObj && guard.Predicate && guard.NarrowedType != nil &&
 		!isNarrowingMarker(guard.NarrowedType) && !c.rel.IsAssignable(originalType, guard.NarrowedType) {
 		// A type predicate for a type unrelated to the declared one narrows
@@ -3228,4 +3237,28 @@ func (c *Checker) nullishDiscriminantGuard(member parser.Expression, value types
 		DiscriminantProp:  prop.Value,
 		DiscriminantValue: value,
 	}
+}
+
+// thisBaseKey binds, next to the "this" narrowing binding, the this type that
+// binding narrows, so a nested function with its own `this` does not see it.
+const thisBaseKey = "this#base"
+
+// narrowedThisType is the type of a `this` expression: the current this type
+// as narrowed by guards on `this` (`this instanceof C`, `isC(this)`), which
+// arrow functions inherit. The first use in a this scope binds "this" so the
+// identifier narrowing machinery can narrow it like a const.
+func (c *Checker) narrowedThisType() types.Type {
+	base, _, found := c.env.Resolve(thisBaseKey)
+	if found && base == c.currentThisType {
+		if t, _, ok := c.env.Resolve("this"); ok && t != nil {
+			return t
+		}
+	}
+	if c.currentThisType != types.Any {
+		if _, own := c.env.symbols["this"]; !own {
+			c.env.Define("this", c.currentThisType, true)
+			c.env.Define(thisBaseKey, c.currentThisType, true)
+		}
+	}
+	return c.currentThisType
 }

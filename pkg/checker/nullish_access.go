@@ -79,7 +79,7 @@ func (c *Checker) reportNullishFacts(operand parser.Expression, hasNull, hasUnde
 	if !c.strictNullChecks || (!hasNull && !hasUndefined) {
 		return
 	}
-	name := entityNameText(operand)
+	name := c.nullishEntityName(operand)
 	if name != "" && len(name) < 100 {
 		switch {
 		case name == "undefined":
@@ -188,4 +188,23 @@ func (c *Checker) reportBadObjectDestructure(node parser.Node, t types.Type) {
 			c.addErrorWithCode(node, errors.TS2532, "Object is possibly 'undefined'.")
 		}
 	}
+}
+
+// nullishEntityName is entityNameText, except that the `this` of a type query
+// (`typeof this.x`) names the entity: tsc parses it as an identifier there.
+func (c *Checker) nullishEntityName(expr parser.Expression) string {
+	switch e := expr.(type) {
+	case *parser.ThisExpression:
+		if e == c.typeQueryThis {
+			return "this"
+		}
+	case *parser.MemberExpression:
+		if id, ok := e.Property.(*parser.Identifier); ok {
+			if left := c.nullishEntityName(e.Object); left != "" {
+				return left + "." + id.Value
+			}
+		}
+		return ""
+	}
+	return entityNameText(expr)
 }

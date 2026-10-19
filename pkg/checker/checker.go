@@ -467,6 +467,9 @@ type Checker struct {
 
 	// Track TypeofTypeExpression nodes with unresolved identifiers for deferred TS2304 reporting
 	unresolvedTypeofNodes []*parser.TypeofTypeExpression
+	// typeQueryThis is the `this` synthesized for the `typeof this...`
+	// query being checked (resolveTypeofThisPath).
+	typeQueryThis *parser.ThisExpression
 	// Parallel to unresolvedTypeofNodes: the name is a type in the scope of the query (TS2693).
 	unresolvedTypeofTypeOnly []bool
 
@@ -3478,7 +3481,7 @@ func (c *Checker) visit(node parser.Node) {
 			if c.noImplicitThis && c.implicitAnyThis && c.currentThisType == types.Any {
 				c.addErrorWithCode(node, "TS2683", "'this' implicitly has type 'any' because it does not have a type annotation.")
 			}
-			node.SetComputedType(c.currentThisType)
+			node.SetComputedType(c.narrowedThisType())
 			if checkerDebug {
 				debugPrintf("// [Checker ThisExpr] Using context this type: %s\n", c.currentThisType.String())
 			}
