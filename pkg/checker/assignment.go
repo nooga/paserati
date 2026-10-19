@@ -579,10 +579,13 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 			restType = &types.ObjectType{Properties: make(map[string]types.Type)}
 		}
 
-		// Set type for rest property target
-		if identTarget, ok := node.RestProperty.Target.(*parser.Identifier); ok {
-			identTarget.SetComputedType(restType)
-			c.env.Update(identTarget.Value, restType)
+		// The remaining properties are assigned to the rest target, which
+		// keeps its declared type.
+		switch target := node.RestProperty.Target.(type) {
+		case *parser.Identifier:
+			c.checkIdentifierTarget(target, restType)
+		case *parser.MemberExpression, *parser.IndexExpression:
+			c.visit(target)
 		}
 	}
 
