@@ -2370,6 +2370,7 @@ func (p *Parser) parseLetStatement() Statement {
 	letToken := p.curToken // Save the 'let' token
 
 	p.nextToken() // Move to what comes after 'let'
+	p.privateBindingName()
 
 	// Any declarator position may hold an identifier or a binding pattern, so
 	// the whole clause is parsed by one shared declarator-list parser - see
@@ -2385,10 +2386,23 @@ func (p *Parser) parseLetStatement() Statement {
 	}
 }
 
+// privateBindingName is tsc's parseIdentifierOrPattern for a private name
+// in a variable declaration: TS18029, then it is parsed as the binding name.
+func (p *Parser) privateBindingName() {
+	if !p.tscDiagnostics || !p.canRecover() || !p.curTokenIs(lexer.PRIVATE_IDENT) {
+		return
+	}
+	p.addErrorWithCode(p.curToken, "TS18029", "Private identifiers are not allowed in variable declarations.")
+	tok := *p.curToken
+	tok.Type = lexer.IDENT
+	p.curToken = &tok
+}
+
 func (p *Parser) parseConstStatement() Statement {
 	constToken := p.curToken // Save the 'const' token
 
 	p.nextToken() // Move to what comes after 'const'
+	p.privateBindingName()
 
 	switch {
 	case p.curTokenIs(lexer.ENUM):
@@ -2408,6 +2422,7 @@ func (p *Parser) parseVarStatement() Statement {
 	varToken := p.curToken // Save the 'var' token
 
 	p.nextToken() // Move to what comes after 'var'
+	p.privateBindingName()
 
 	switch {
 	case p.curTokenIs(lexer.LBRACKET), p.curTokenIs(lexer.LBRACE), p.curTokenIsIdentLike():
@@ -7025,9 +7040,14 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken *lexer.Token, isCo
 
 			// Validate that rest element doesn't have a default value
 			// Invalid: [...x = []]
-			if _, isAssign := target.(*AssignmentExpression); isAssign {
-				p.addError(p.curToken, "rest element cannot have a default value")
-				return nil
+			if assign, isAssign := target.(*AssignmentExpression); isAssign {
+				if !p.tscDiagnostics || !p.canRecover() {
+					p.addError(p.curToken, "rest element cannot have a default value")
+					return nil
+				}
+				// checkGrammarBindingElement: reported, then ignored.
+				p.addGrammarErrorWithCode(assign.Token, "TS1186", "A rest element cannot have an initializer.")
+				target = assign.Left
 			}
 
 			defaultValue = nil
@@ -7677,7 +7697,7 @@ func (p *Parser) parseEmptyStatement() *EmptyStatement {
 	// TS1036: statements are not allowed in ambient contexts. A stray empty
 	// statement inside `declare namespace X { ... }` triggers this in tsc.
 	if p.inAmbientContext > 0 {
-		p.addError(p.curToken, "Statements are not allowed in ambient contexts.")
+		p.addGrammarErrorWithCode(p.curToken, "TS1036", "Statements are not allowed in ambient contexts.")
 	}
 	// Empty statement is just a semicolon, no additional parsing needed
 	return stmt
@@ -8215,6 +8235,16 @@ func (p *Parser) parseSwitchStatement() *SwitchStatement {
 				continue // Continue parsing the next case/default if found
 			}
 			// parseSwitchCase leaves the current token at the start of the *next* case/default or RBRACE
+		} else if p.tscDiagnostics && p.canRecover() {
+			// tsc's parseList(SwitchClauses): report the token, then end the
+			// case block at one an enclosing list can use (the missing '}'
+			// lands on the same token), or skip it.
+			p.addErrorWithCode(p.curToken, "TS1130", "'case' or 'default' expected.")
+			if listAbortsAt(p.curToken) {
+				p.stepBackForMissing()
+				return stmt
+			}
+			p.nextToken()
 		} else {
 			msg := fmt.Sprintf("expected 'case' or 'default' inside switch block, got %s instead", p.curToken.Type)
 			p.addError(p.curToken, msg)
@@ -11618,7 +11648,7 @@ func (p *Parser) parseTypeParameters() ([]*TypeParameter, error) {
 
 	// Handle empty type parameter list
 	if p.curTokenIs(lexer.GT) {
-		p.addError(p.curToken, "Type parameter list cannot be empty.")
+		p.addGrammarErrorWithCode(p.curToken, "TS1098", "Type parameter list cannot be empty.")
 		return typeParams, nil
 	}
 
@@ -12336,6 +12366,12 @@ func (p *Parser) parseTypeofTypeExpression() Expression {
 		p.nextToken() // consume '.'
 		p.nextToken() // move to next segment
 		if !p.curTokenIsIdentLike() && !p.isKeywordThatCanBeIdentifier(p.curToken.Type) {
+			if p.tscDiagnostics && p.canRecover() {
+				// tsc's parseRightSideOfDot: a missing name.
+				p.addErrorWithCode(p.curToken, errors.TS1003, "Identifier expected.")
+				p.stepBackForMissing()
+				break
+			}
 			p.addError(p.curToken, fmt.Sprintf("expected identifier after '.' in typeof expression, got %s", p.curToken.Type))
 			return nil
 		}
@@ -13016,6 +13052,12 @@ func (p *Parser) parseImportAttributes() map[string]string {
 
 	// Verify current token is '{'
 	if p.curToken.Type != lexer.LBRACE {
+		if p.tscDiagnostics && p.canRecover() {
+			// parseExpected('{'): the attributes are missing, the import stays.
+			p.addErrorWithCode(p.curToken, errors.TS1005, "'{' expected.")
+			p.stepBackForMissing()
+			return attributes
+		}
 		p.addError(p.curToken, fmt.Sprintf("Expected '{' to start import attributes, got %s", p.curToken.Type))
 		return nil
 	}
@@ -13030,6 +13072,10 @@ func (p *Parser) parseImportAttributes() map[string]string {
 		var key string
 		if p.curToken.Type == lexer.STRING || p.isIdentifierNameToken(p.curToken) {
 			key = p.curToken.Literal
+		} else if p.curTokenIs(lexer.EOF) && p.tscDiagnostics && p.canRecover() {
+			p.addErrorWithCode(p.curToken, errors.TS1005, "'}' expected.")
+			p.stepBackForMissing()
+			return attributes
 		} else {
 			p.addError(p.curToken, fmt.Sprintf("Expected identifier or string for import attribute key, got %s", p.curToken.Type))
 			return nil
@@ -13255,7 +13301,7 @@ func (p *Parser) parseExportDeclaration() Statement {
 
 	// Check for duplicate 'export' modifier (TS1030)
 	if p.curTokenIs(lexer.EXPORT) {
-		p.addError(p.curToken, "'export' modifier already seen.")
+		p.addGrammarErrorWithCode(p.curToken, "TS1030", "'export' modifier already seen.")
 		p.nextToken() // consume the duplicate export
 	}
 

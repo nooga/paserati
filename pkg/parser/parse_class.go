@@ -815,7 +815,13 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 	constructorToken := p.curToken
 
 	// Try to parse type parameters: constructor<T>()
+	hasTypeParams := p.peekTokenIs(lexer.LT)
 	typeParameters := p.tryParseTypeParameters()
+	if hasTypeParams && len(typeParameters) == 0 && p.tscDiagnostics {
+		// checkGrammarConstructorTypeParameters (the checker reports a
+		// non-empty list)
+		p.addGrammarErrorWithCode(p.curToken, "TS1092", "Type parameters cannot appear on a constructor declaration.")
+	}
 
 	// We're currently at the "constructor" token (or after type params), next should be (
 	if !p.expectPeek(lexer.LPAREN) {
@@ -1838,7 +1844,11 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 	// Check that we have a valid method name token
 	// Use isValidMethodName() to allow keywords like 'yield', 'await', etc. as method names
 	if !p.isValidMethodName() && !p.curTokenIs(lexer.LBRACKET) {
-		p.addError(p.curToken, "expected method name after '*' in generator method")
+		if p.tscDiagnostics {
+			p.addErrorWithCode(p.curToken, errors.TS1003, "Identifier expected.")
+		} else {
+			p.addError(p.curToken, "expected method name after '*' in generator method")
+		}
 		return nil
 	}
 
