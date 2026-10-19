@@ -174,6 +174,9 @@ type Parser struct {
 	// bodyMethod as a constructor body.
 	tscNewTargetBad bool
 	tscCtorBody     bool
+	// noIn is tsc's disallowIn context: `in` is not a binary operator in a
+	// for-statement declaration initializer (tsc mode only).
+	noIn bool
 	// superPropertyDepth > 0 where `super.x` / `super[x]` is legal: method
 	// bodies and class bodies, and arrows within them.
 	superPropertyDepth  int
@@ -1288,7 +1291,7 @@ func (p *Parser) parseStatementNoDoc() Statement {
 	case lexer.ILLEGAL:
 		// Report an ILLEGAL token (unless the scanner already did)
 		if len(p.curToken.Diags) == 0 {
-			p.addErrorWithCode(p.curToken, errors.TS1127, illegalTokenMessage(p.curToken))
+			p.reportIllegalToken(p.curToken)
 		}
 		// Statements end on their last token; the enclosing loop advances.
 		return nil
@@ -4666,6 +4669,7 @@ const (
 // never allows super properties. Strict mode set by the body's directive
 // prologue ends with the body.
 func (p *Parser) parseFunctionBody(params []*Parameter, rest *RestParameter, kind functionBodyKind) *BlockStatement {
+	defer p.withIn()()
 	if !p.curTokenIs(lexer.LBRACE) && p.canRecover() {
 		// expectPeekBraceRecover found no '{': the body is missing (tsc's
 		// parseBlock with a missing list); nothing is consumed.
@@ -5056,11 +5060,30 @@ func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
 	}
 	if t == lexer.ILLEGAL {
 		if len(p.curToken.Diags) == 0 {
-			p.addErrorWithCode(p.curToken, errors.TS1127, illegalTokenMessage(p.curToken))
+			p.reportIllegalToken(p.curToken)
 		}
 		return
 	}
 	p.addErrorWithCode(p.curToken, errors.TS1109, "Expression expected.")
+}
+
+// reportIllegalToken reports the scanner diagnostic for an ILLEGAL token. In
+// tsc mode an unterminated block comment is "'*/' expected." at its end.
+func (p *Parser) reportIllegalToken(tok *lexer.Token) {
+	if p.tscDiagnostics && tok.Literal == "Unterminated multiline comment" && p.source != nil && tok.EndPos <= len(p.source.Content) {
+		text := p.source.Content[tok.StartPos:tok.EndPos]
+		line, col := tok.Line, tok.Column
+		if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+			line += strings.Count(text, "\n")
+			col = len(utf16.Encode([]rune(text[i+1:]))) + 1
+		} else {
+			col += len(utf16.Encode([]rune(text)))
+		}
+		at := &lexer.Token{Type: lexer.EOF, Line: line, Column: col, StartPos: tok.EndPos, EndPos: tok.EndPos}
+		p.addErrorWithCode(at, "TS1010", "'*/' expected.")
+		return
+	}
+	p.addErrorWithCode(tok, errors.TS1127, illegalTokenMessage(tok))
 }
 
 // illegalTokenMessage describes an ILLEGAL token. For malformed literals the
@@ -5074,10 +5097,21 @@ func illegalTokenMessage(tok *lexer.Token) string {
 
 // --- Precedence Helper ---
 func (p *Parser) peekPrecedence() int {
+	if p.noIn && p.peekToken.Type == lexer.IN {
+		return LOWEST
+	}
 	if p, ok := precedences[p.peekToken.Type]; ok {
 		return p
 	}
 	return LOWEST
+}
+
+// withIn parses with tsc's disallowIn context cleared: nested brackets,
+// parentheses and bodies may use `in` again inside a for-statement head.
+func (p *Parser) withIn() func() {
+	saved := p.noIn
+	p.noIn = false
+	return func() { p.noIn = saved }
 }
 
 func (p *Parser) curPrecedence() int {
@@ -5552,6 +5586,7 @@ func (p *Parser) parseSatisfiesExpression(left Expression) Expression {
 
 // parseGroupedExpression handles expressions like (expr) OR arrow functions like () => expr or (a, b) => expr
 func (p *Parser) parseGroupedExpression() Expression {
+	defer p.withIn()()
 	// Save complete lexer state for proper backtracking
 	startState := p.l.SaveState()
 	startCur := p.curToken
@@ -6033,6 +6068,7 @@ func (p *Parser) parseTaggedTemplateInfix(left Expression) Expression {
 
 // parseExpressionList parses a comma-separated list of expressions until a specific end token.
 func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
+	defer p.withIn()()
 	if p.canRecover() {
 		return p.parseArgumentsRecover(end)
 	}
@@ -7714,6 +7750,7 @@ func (p *Parser) parseNonNullExpression(left Expression) Expression {
 
 // --- NEW: Array Literal Parsing ---
 func (p *Parser) parseArrayLiteral() Expression {
+	defer p.withIn()()
 	array := p.arena.NewArrayLiteral()
 	array.Token = p.curToken // '['
 	debugPrint("parseArrayLiteral: start '['")
@@ -7909,6 +7946,12 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 // code it corresponds to. Messages on coded diagnostics must match
 // TypeScript's wording exactly — see checker.addErrorWithCode.
 func (p *Parser) addErrorWithCode(tok *lexer.Token, code string, msg string) {
+	// tsc's scanner reports a bad token as it scans it, before the parser
+	// can complain about what it expected there.
+	if p.tscDiagnostics && tok != nil && tok.Type == lexer.ILLEGAL && len(tok.Diags) == 0 && code != errors.TS1127 && !grammarCodes[code] {
+		p.reportIllegalToken(tok)
+		return
+	}
 	before := len(p.errors)
 	p.addError(tok, msg)
 	if len(p.errors) > before {
@@ -8234,6 +8277,7 @@ func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
 	}
 }
 func (p *Parser) parseObjectLiteral() Expression {
+	defer p.withIn()()
 	objLit := p.arena.NewObjectLiteral()
 	objLit.Token = p.curToken // The '{' token
 	objLit.Properties = []*ObjectProperty{}
@@ -9224,6 +9268,10 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 
 	// Check for type parameters (same pattern as functions)
 	stmt.TypeParameters = p.tryParseTypeParameters()
+
+	if p.tscDiagnostics {
+		p.parseInterfaceHeritageTsc(stmt)
+	}
 
 	// Check for extends clause
 	if p.peekTokenIs(lexer.EXTENDS) {
@@ -10992,6 +11040,7 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 		// Handle assignment
 		p.nextToken()
 		p.nextToken()
+		p.noIn = p.tscDiagnostics
 		if letStmt, ok := varStmt.(*LetStatement); ok {
 			// Use COMMA precedence to stop at comma separators for multi-variable declarations
 			letStmt.Value = p.parseExpression(COMMA)
@@ -11004,6 +11053,7 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 		}
 		// An *ExpressionStatement head never reaches here with '=' pending:
 		// parseInfixContinuation above already consumed it as an assignment.
+		p.noIn = false
 	}
 
 	// Sync Declarations with legacy fields for all statement types

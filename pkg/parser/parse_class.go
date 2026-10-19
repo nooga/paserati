@@ -71,70 +71,9 @@ func (p *Parser) parseClassDeclaration() Statement {
 	// Parse type parameters if present (same pattern as interfaces)
 	typeParameters := p.tryParseTypeParameters()
 
-	var superClass Expression
-	var superTypeArgs []Expression
-	if p.peekTokenIs(lexer.EXTENDS) {
-		p.nextToken() // consume 'extends'
-		p.nextToken() // move to start of expression
-
-		// ECMAScript spec: ClassHeritage takes a LeftHandSideExpression which includes:
-		// - Identifiers (Container)
-		// - Member expressions (a.b.Container)
-		// - Call expressions (fn(), mixin(Base))
-		// - Function/class expressions
-		// - Parenthesized expressions
-		//
-		// For TypeScript, we also need to handle generic types (Container<T>).
-		// We use parseTypeExpression for simple identifiers (with optional generics),
-		// but parseExpression for call expressions and other runtime constructs.
-		//
-		// Detect call expression: identifier followed by '('
-		p.inHeritage++
-		isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
-		// Also detect member expression that might become a call: a.b(...)
-		isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
-		// Also detect computed member access: a["b"], a[0], etc. - always a runtime
-		// expression, never a TS type construct.
-		isIndexedMemberExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LBRACKET)
-
-		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
-			// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
-			p.heritageTypeArgs = nil
-			superClass = p.parseExpression(LOWEST)
-			if _, ok := superClass.(*MemberExpression); ok {
-				superTypeArgs = p.heritageTypeArgs
-			}
-		} else {
-			// Type expression: Container, Container<T>, etc.
-			superClass = p.parseTypeExpression()
-			// Container<T>() — generic mixin call: wrap in CallExpression with explicit type args.
-			// Flatten GenericTypeRef into CallExpression{Function, TypeArguments} so the checker
-			// recognizes it as a generic call rather than a typed expression.
-			if p.peekTokenIs(lexer.LPAREN) && superClass != nil {
-				p.nextToken() // move to '('
-				callExpr := &CallExpression{Token: p.curToken, Function: superClass}
-				if genRef, ok := superClass.(*GenericTypeRef); ok {
-					callExpr.Function = genRef.Name
-					callExpr.TypeArguments = genRef.TypeArguments
-				}
-				callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)
-				superClass = callExpr
-			}
-		}
-
-		p.inHeritage--
-		if superClass == nil {
-			return nil // Failed to parse superclass expression
-		}
-		p.checkClassHeritage(superClass)
-	}
-
-	var implements []*Identifier
-	if p.peekTokenIs(lexer.IMPLEMENTS) {
-		var ok bool
-		if implements, ok = p.parseImplementsList(); !ok {
-			return nil
-		}
+	superClass, superTypeArgs, implements, ok := p.parseClassHeritage()
+	if !ok {
+		return nil
 	}
 
 	if !p.expectPeek(lexer.LBRACE) {
@@ -282,70 +221,9 @@ func (p *Parser) parseClassExpression() Expression {
 	// Note: Anonymous classes (name == nil) can still have type parameters
 	typeParameters := p.tryParseTypeParameters()
 
-	var superClass Expression
-	var superTypeArgs []Expression
-	if p.peekTokenIs(lexer.EXTENDS) {
-		p.nextToken() // consume 'extends'
-		p.nextToken() // move to start of expression
-
-		// ECMAScript spec: ClassHeritage takes a LeftHandSideExpression which includes:
-		// - Identifiers (Container)
-		// - Member expressions (a.b.Container)
-		// - Call expressions (fn(), mixin(Base))
-		// - Function/class expressions
-		// - Parenthesized expressions
-		//
-		// For TypeScript, we also need to handle generic types (Container<T>).
-		// We use parseTypeExpression for simple identifiers (with optional generics),
-		// but parseExpression for call expressions and other runtime constructs.
-		//
-		// Detect call expression: identifier followed by '('
-		p.inHeritage++
-		isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
-		// Also detect member expression that might become a call: a.b(...)
-		isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
-		// Also detect computed member access: a["b"], a[0], etc. - always a runtime
-		// expression, never a TS type construct.
-		isIndexedMemberExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LBRACKET)
-
-		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
-			// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
-			p.heritageTypeArgs = nil
-			superClass = p.parseExpression(LOWEST)
-			if _, ok := superClass.(*MemberExpression); ok {
-				superTypeArgs = p.heritageTypeArgs
-			}
-		} else {
-			// Type expression: Container, Container<T>, etc.
-			superClass = p.parseTypeExpression()
-			// Container<T>() — generic mixin call: wrap in CallExpression with explicit type args.
-			// Flatten GenericTypeRef into CallExpression{Function, TypeArguments} so the checker
-			// recognizes it as a generic call rather than a typed expression.
-			if p.peekTokenIs(lexer.LPAREN) && superClass != nil {
-				p.nextToken() // move to '('
-				callExpr := &CallExpression{Token: p.curToken, Function: superClass}
-				if genRef, ok := superClass.(*GenericTypeRef); ok {
-					callExpr.Function = genRef.Name
-					callExpr.TypeArguments = genRef.TypeArguments
-				}
-				callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)
-				superClass = callExpr
-			}
-		}
-
-		p.inHeritage--
-		if superClass == nil {
-			return nil // Failed to parse superclass expression
-		}
-		p.checkClassHeritage(superClass)
-	}
-
-	var implements []*Identifier
-	if p.peekTokenIs(lexer.IMPLEMENTS) {
-		var ok bool
-		if implements, ok = p.parseImplementsList(); !ok {
-			return nil
-		}
+	superClass, superTypeArgs, implements, ok := p.parseClassHeritage()
+	if !ok {
+		return nil
 	}
 
 	if !p.expectPeek(lexer.LBRACE) {
@@ -1378,6 +1256,7 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		propertyName = ident
 	}
 
+	p.skipAccessorTypeParams(p.curToken)
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
 	}
@@ -1501,6 +1380,7 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		propertyName = ident
 	}
 
+	p.skipAccessorTypeParams(p.curToken)
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
 	}
@@ -2114,4 +1994,226 @@ func (p *Parser) parseFieldInitializer() Expression {
 	p.tscNewTargetBad = true
 	defer func() { p.tscNewTargetBad = saved }()
 	return p.parseExpression(COMMA)
+}
+
+// parseClassHeritage parses a class's `extends` and `implements` clauses
+// (peek is the first clause keyword, if any).
+func (p *Parser) parseClassHeritage() (superClass Expression, superTypeArgs []Expression, implements []*Identifier, ok bool) {
+	if p.tscDiagnostics {
+		return p.parseClassHeritageTsc()
+	}
+	if p.peekTokenIs(lexer.EXTENDS) {
+		p.nextToken() // consume 'extends'
+		p.nextToken() // move to start of expression
+		p.inHeritage++
+		superClass, superTypeArgs = p.parseHeritageSuperClass()
+		p.inHeritage--
+		if superClass == nil {
+			return nil, nil, nil, false // Failed to parse superclass expression
+		}
+		p.checkClassHeritage(superClass)
+	}
+	if p.peekTokenIs(lexer.IMPLEMENTS) {
+		if implements, ok = p.parseImplementsList(); !ok {
+			return nil, nil, nil, false
+		}
+	}
+	return superClass, superTypeArgs, implements, true
+}
+
+// parseClassHeritageTsc is tsc's parseHeritageClauses (any number of
+// clauses, each a delimited list) with checkGrammarClassDeclarationHeritageClauses:
+// the first clause-order error stops the checks, an empty list is TS1097.
+func (p *Parser) parseClassHeritageTsc() (superClass Expression, superTypeArgs []Expression, implements []*Identifier, ok bool) {
+	seenExtends, seenImplements, stopped := false, false, false
+	stop := func(tok *lexer.Token, code, msg string) {
+		if !stopped {
+			stopped = true
+			p.addGrammarErrorWithCode(tok, code, msg)
+		}
+	}
+	for p.peekTokenIs(lexer.EXTENDS) || p.peekTokenIs(lexer.IMPLEMENTS) {
+		p.nextToken()
+		clause := p.curToken
+		isExtends := clause.Type == lexer.EXTENDS
+		switch {
+		case isExtends && seenExtends:
+			stop(clause, "TS1172", "'extends' clause already seen.")
+		case isExtends && seenImplements:
+			stop(clause, "TS1173", "'extends' clause must precede 'implements' clause.")
+		case !isExtends && seenImplements:
+			stop(clause, "TS1175", "'implements' clause already seen.")
+		}
+		var types []*lexer.Token
+		for p.peekStartsHeritageElement() {
+			p.nextToken()
+			tok := p.curToken
+			if isExtends {
+				p.inHeritage++
+				expr, args := p.parseHeritageSuperClass()
+				p.inHeritage--
+				if expr == nil {
+					return nil, nil, nil, false
+				}
+				if superClass == nil && !seenExtends {
+					superClass, superTypeArgs = expr, args
+					p.checkClassHeritage(expr)
+				}
+			} else {
+				// Only the first implements clause reaches the AST, like the
+				// first extends clause.
+				if id := heritageIdentifier(p.parseHeritageType()); id != nil && !seenImplements {
+					implements = append(implements, id)
+				}
+			}
+			types = append(types, tok)
+			if !p.peekTokenIs(lexer.COMMA) {
+				break
+			}
+			p.nextToken() // consume ','
+			if !p.peekStartsHeritageElement() && !stopped {
+				p.addGrammarErrorWithCode(p.curToken, "TS1009", "Trailing comma not allowed.")
+			}
+		}
+		if isExtends && len(types) > 1 {
+			stop(types[1], "TS1174", "Classes can only extend a single class.")
+		}
+		if len(types) == 0 && !stopped {
+			p.addGrammarErrorWithCode(clause, "TS1097", fmt.Sprintf("'%s' list cannot be empty.", clause.Literal))
+		}
+		if isExtends {
+			seenExtends = true
+		} else {
+			seenImplements = true
+		}
+	}
+	return superClass, superTypeArgs, implements, true
+}
+
+// peekStartsHeritageElement is tsc's isHeritageClauseElement: a
+// left-hand-side expression start (an object literal never is, here).
+func (p *Parser) peekStartsHeritageElement() bool {
+	switch p.peekToken.Type {
+	case lexer.IDENT, lexer.THIS, lexer.SUPER, lexer.NEW, lexer.FUNCTION, lexer.CLASS, lexer.LPAREN,
+		lexer.LBRACKET, lexer.STRING, lexer.NUMBER, lexer.NULL, lexer.TRUE, lexer.FALSE, lexer.IMPORT,
+		lexer.UNDEFINED, lexer.BIGINT, lexer.REGEX_LITERAL, lexer.TEMPLATE_START, lexer.LT:
+		return true
+	case lexer.LBRACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.EOF:
+		return false
+	}
+	return p.peekIsIdentifierLike()
+}
+
+// parseHeritageSuperClass parses the expression of an `extends` clause; the
+// current token is its first token.
+func (p *Parser) parseHeritageSuperClass() (superClass Expression, superTypeArgs []Expression) {
+	// ECMAScript spec: ClassHeritage takes a LeftHandSideExpression which includes:
+	// - Identifiers (Container)
+	// - Member expressions (a.b.Container)
+	// - Call expressions (fn(), mixin(Base))
+	// - Function/class expressions
+	// - Parenthesized expressions
+	//
+	// For TypeScript, we also need to handle generic types (Container<T>).
+	// We use parseTypeExpression for simple identifiers (with optional generics),
+	// but parseExpression for call expressions and other runtime constructs.
+	//
+	// Detect call expression: identifier followed by '('
+	isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
+	// Also detect member expression that might become a call: a.b(...)
+	isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
+	// Also detect computed member access: a["b"], a[0], etc. - always a runtime
+	// expression, never a TS type construct.
+	isIndexedMemberExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LBRACKET)
+
+	if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
+		// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
+		p.heritageTypeArgs = nil
+		superClass = p.parseExpression(COMMA) // a heritage is never a comma sequence
+		if _, ok := superClass.(*MemberExpression); ok {
+			superTypeArgs = p.heritageTypeArgs
+		}
+	} else {
+		// Type expression: Container, Container<T>, etc.
+		superClass = p.parseHeritageType()
+		// Container<T>() — generic mixin call: wrap in CallExpression with explicit type args.
+		// Flatten GenericTypeRef into CallExpression{Function, TypeArguments} so the checker
+		// recognizes it as a generic call rather than a typed expression.
+		if p.peekTokenIs(lexer.LPAREN) && superClass != nil {
+			p.nextToken() // move to '('
+			callExpr := &CallExpression{Token: p.curToken, Function: superClass}
+			if genRef, ok := superClass.(*GenericTypeRef); ok {
+				callExpr.Function = genRef.Name
+				callExpr.TypeArguments = genRef.TypeArguments
+			}
+			callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)
+			superClass = callExpr
+		}
+	}
+
+	return superClass, superTypeArgs
+}
+
+// parseHeritageType parses a heritage clause element's type form. tsc parses
+// it as an expression with type arguments, so in tsc mode a following
+// `extends` ends it instead of starting a conditional type.
+func (p *Parser) parseHeritageType() Expression {
+	if !p.tscDiagnostics {
+		return p.parseTypeExpression()
+	}
+	saved := p.disallowCondType
+	p.disallowCondType = false
+	defer func() { p.disallowCondType = saved }()
+	return p.parseTypeExpressionRecursive(TYPE_CONDITIONAL)
+}
+
+// parseInterfaceHeritageTsc is parseClassHeritageTsc for an interface, with
+// checkGrammarInterfaceDeclaration's rules: one `extends` clause, no
+// `implements` clause.
+func (p *Parser) parseInterfaceHeritageTsc(stmt *InterfaceDeclaration) {
+	seenExtends, stopped := false, false
+	for p.peekTokenIs(lexer.EXTENDS) || p.peekTokenIs(lexer.IMPLEMENTS) {
+		p.nextToken()
+		clause := p.curToken
+		isExtends := clause.Type == lexer.EXTENDS
+		if !stopped && isExtends && seenExtends {
+			stopped = true
+			p.addGrammarErrorWithCode(clause, "TS1172", "'extends' clause already seen.")
+		} else if !stopped && !isExtends {
+			stopped = true
+			p.addGrammarErrorWithCode(clause, "TS1176", "Interface declaration cannot have 'implements' clause.")
+		}
+		n := 0
+		for p.peekStartsHeritageElement() {
+			p.nextToken()
+			if t := p.parseHeritageType(); t != nil && isExtends {
+				stmt.Extends = append(stmt.Extends, t)
+			}
+			n++
+			if !p.peekTokenIs(lexer.COMMA) {
+				break
+			}
+			p.nextToken() // consume ','
+			if !p.peekStartsHeritageElement() && !stopped {
+				p.addGrammarErrorWithCode(p.curToken, "TS1009", "Trailing comma not allowed.")
+			}
+		}
+		if n == 0 && !stopped {
+			p.addGrammarErrorWithCode(clause, "TS1097", fmt.Sprintf("'%s' list cannot be empty.", clause.Literal))
+		}
+		if isExtends {
+			seenExtends = true
+		}
+	}
+}
+
+// skipAccessorTypeParams parses type parameters written on an accessor (tsc
+// parses them for any method-like member) and reports checkGrammarAccessor's
+// TS1094 at the name.
+func (p *Parser) skipAccessorTypeParams(name *lexer.Token) {
+	if !p.tscDiagnostics || !p.peekTokenIs(lexer.LT) {
+		return
+	}
+	p.tryParseTypeParameters()
+	p.addGrammarErrorWithCode(name, "TS1094", "An accessor cannot have type parameters.")
 }
