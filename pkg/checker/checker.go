@@ -4892,9 +4892,15 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, valueType.String()))
 				}
 			} else if isArray {
-				// For arrays, numeric keys access array elements
-				if arrType, ok := destructureType.(*types.ArrayType); ok {
-					propType = arrType.ElementType
+				// A named key reads an array member (length, a method).
+				arrType := destructureType.(*types.ArrayType)
+				if propName == "length" {
+					propType = types.Number
+				} else if methodType := c.env.GetPrimitivePrototypeMethodType("array", propName); methodType != nil {
+					propType = c.instantiateGenericMethod(methodType, arrType.ElementType)
+				} else if prop.Default == nil {
+					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, arrType.String()))
+					propType = types.Any
 				}
 			} else if isPrimitiveDestructuringSource(destructureType) {
 				// A primitive is destructured through its apparent type.

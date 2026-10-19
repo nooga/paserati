@@ -617,15 +617,31 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 			}
 
 			var propType types.Type = types.Undefined
+			_, hasDefault := prop.Value.(*parser.AssignmentExpression)
+			_, namedKey := prop.Key.(*parser.Identifier)
 
 			if objType != nil {
-				if foundType, exists := objType.Props()[propName]; exists {
+				if foundType, exists := c.resolveObjectMemberForDestructuring(objType, propName); exists {
 					propType = foundType
+				} else if namedKey && !hasDefault {
+					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, objType.String()))
+					propType = types.Any
 				}
-			} else if _, ok := expectedType.(*types.ArrayType); ok {
-				// For arrays destructured as objects, use element type for numeric keys, any for others
-				if arrType, ok := expectedType.(*types.ArrayType); ok {
+			} else if arrType, ok := expectedType.(*types.ArrayType); ok {
+				// An array destructured as an object: numeric keys read
+				// elements, named keys its members.
+				switch {
+				case !namedKey:
 					propType = arrType.ElementType
+				case propName == "length":
+					propType = types.Number
+				default:
+					if methodType := c.env.GetPrimitivePrototypeMethodType("array", propName); methodType != nil {
+						propType = c.instantiateGenericMethod(methodType, arrType.ElementType)
+					} else if !hasDefault {
+						c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, arrType.String()))
+						propType = types.Any
+					}
 				}
 			}
 
