@@ -1853,7 +1853,6 @@ func (c *Checker) extractConstantPropertyName(expr parser.Expression) string {
 // checkWithStatement performs type checking for 'with' statements
 func (c *Checker) checkWithStatement(node *parser.WithStatement) {
 	if node == nil {
-		c.addError(nil, "nil WithStatement node")
 		return
 	}
 

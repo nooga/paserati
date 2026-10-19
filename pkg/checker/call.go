@@ -368,7 +368,12 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 		// Simple case - resolve the constructor directly
 		superConstructor, _, exists = c.env.Resolve(superClassName)
 		if !exists {
-			c.addError(node, fmt.Sprintf("could not resolve superclass constructor '%s'", superClassName))
+			// FIXME: a heritage expression that is not a plain name (a call,
+			// a mixin application) is not resolved here; the super call is
+			// left unchecked.
+			for _, arg := range node.Arguments {
+				c.visit(arg)
+			}
 			node.SetComputedType(types.Any)
 			return
 		}

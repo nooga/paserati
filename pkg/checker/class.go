@@ -2532,7 +2532,8 @@ func (c *Checker) registerInterfaceImplementation(instanceType *types.ObjectType
 	// Check if interface exists
 	interfaceType, exists := c.env.ResolveType(interfaceName)
 	if !exists {
-		c.addError(nil, fmt.Sprintf("interface '%s' is not defined", interfaceName))
+		// An unresolvable implements target is reported where the clause is
+		// resolved (TS2304); qualified names are not resolved here (FIXME).
 		return
 	}
 
@@ -2565,7 +2566,8 @@ func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.Ob
 	// Check if interface exists (should exist since we registered it earlier)
 	interfaceType, exists := c.env.ResolveType(interfaceName)
 	if !exists {
-		c.addError(nil, fmt.Sprintf("interface '%s' is not defined", interfaceName))
+		// An unresolvable implements target is reported where the clause is
+		// resolved (TS2304); qualified names are not resolved here (FIXME).
 		return
 	}
 

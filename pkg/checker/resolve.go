@@ -4304,11 +4304,12 @@ func (c *Checker) walkTypeofPath(node parser.Node, path []string, varType types.
 		}
 		switch t := varType.(type) {
 		case *types.ObjectType:
-			if prop, ok := t.Props()[seg]; ok {
+			if prop, ok := t.EffectiveProperty(seg); ok {
 				varType = prop
 			} else {
-				c.addError(node, fmt.Sprintf("property '%s' does not exist on type '%s'", seg, t.String()))
-				return nil, false
+				// FIXME: members a type query reaches through the prototype,
+				// index signatures or symbol keys are not resolved here.
+				return types.Any, true
 			}
 		case *types.NamespaceType:
 			if prop, ok := t.ValueShape.Props()[seg]; ok {
