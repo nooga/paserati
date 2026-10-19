@@ -1186,10 +1186,12 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 			}
 			continue
 		}
+		// An optional source property never satisfies a required one,
+		// strictNullChecks or not (tsc's propertiesRelatedTo).
+		if sourceObj.IsPropertyOptional(propName) && !targetOptional {
+			return false
+		}
 		if r.StrictNullChecks {
-			if sourceObj.IsPropertyOptional(propName) && !targetOptional {
-				return false
-			}
 			if targetOptional {
 				targetPropType = NewUnionType(targetPropType, Undefined)
 			}
