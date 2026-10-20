@@ -2954,6 +2954,28 @@ func (c *Checker) newThroughConstructSignatures(node *parser.NewExpression, ctor
 	return true
 }
 
+// hasAbstractConstructSignature is tsc's check before `new`: some construct
+// signature of the callee (a union's combined ones) is abstract.
+func (c *Checker) hasAbstractConstructSignature(t types.Type) bool {
+	var sigs []*types.Signature
+	switch ct := t.(type) {
+	case *types.ObjectType:
+		sigs = ct.ConstructSigs()
+	case *types.GenericType:
+		if body, ok := ct.Body.(*types.ObjectType); ok {
+			sigs = body.ConstructSigs()
+		}
+	case *types.UnionType:
+		sigs, _ = c.unionSignatures(ct, true)
+	}
+	for _, sig := range sigs {
+		if sig.IsAbstract {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	if checkerDebug {
 		debugPrintf("// [Checker NewExpression] Checking new expression with %d type arguments\n", len(node.TypeArguments))
@@ -3007,6 +3029,14 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	c.markContextuallyTypedArguments(node.Arguments, constructorType)
 
 	// Check if trying to instantiate an abstract class
+	if c.hasAbstractConstructSignature(constructorType) {
+		c.addErrorWithCode(node, errors.TS2511, "Cannot create an instance of an abstract class.")
+		for _, arg := range node.Arguments {
+			c.visit(arg)
+		}
+		node.SetComputedType(types.Any)
+		return
+	}
 	if ident, ok := node.Constructor.(*parser.Identifier); ok {
 		if c.abstractClasses[ident.Value] {
 			c.addErrorWithCode(node, errors.TS2511, "Cannot create an instance of an abstract class.")

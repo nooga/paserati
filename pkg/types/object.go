@@ -71,6 +71,10 @@ type Signature struct {
 	// that with strictFunctionTypes its parameters are compared
 	// contravariantly (TypeScript keys this off the target's declaration kind).
 	StrictVariance bool
+	// IsAbstract marks the construct signature of an abstract class or an
+	// `abstract new (...) => T` type: it cannot be called with `new`, nor
+	// stand in for a construct signature that is not abstract.
+	IsAbstract bool
 }
 
 func (sig *Signature) String() string {

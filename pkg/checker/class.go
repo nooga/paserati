@@ -584,6 +584,15 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 4. Create constructor signatures from constructor overloads or implementation
 	constructorSigs := c.createConstructorSignatures(node.Body, instanceType, node.SuperClass != nil)
+	// Signatures inherited from the base are shared: each class gets its own
+	// copies saying whether it is abstract.
+	for i, sig := range constructorSigs {
+		if sig.IsAbstract != node.IsAbstract {
+			cp := *sig
+			cp.IsAbstract = node.IsAbstract
+			constructorSigs[i] = &cp
+		}
+	}
 
 	// 5. Create constructor function type (ObjectType with construct signature)
 	// This represents the class constructor function, not a separate "class type"
@@ -814,6 +823,15 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 6. Create constructor signatures from constructor overloads or implementation
 	constructorSigs := c.createConstructorSignatures(node.Body, instanceType, node.SuperClass != nil)
+	// Signatures inherited from the base are shared: each class gets its own
+	// copies saying whether it is abstract.
+	for i, sig := range constructorSigs {
+		if sig.IsAbstract != node.IsAbstract {
+			cp := *sig
+			cp.IsAbstract = node.IsAbstract
+			constructorSigs[i] = &cp
+		}
+	}
 
 	// 7. Create constructor type
 	constructorType := types.NewConstructorType(constructorSigs[0])

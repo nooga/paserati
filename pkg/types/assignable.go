@@ -1210,6 +1210,11 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 		!r.signaturesRelated(sourceObj.ConstructSigs(), targetObj.ConstructSigs()) {
 		return false
 	}
+	// An abstract constructor cannot stand in for a concrete one.
+	if src, tgt := sourceObj.ConstructSigs(), targetObj.ConstructSigs(); len(src) > 0 && len(tgt) > 0 &&
+		src[0].IsAbstract && !tgt[0].IsAbstract {
+		return false
+	}
 
 	return true
 }
