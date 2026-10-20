@@ -681,6 +681,25 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 	}
 
+	// A union of callable object types calls through tsc's union
+	// signatures (see unionSignatures).
+	if unionType, isUnion := funcNodeType.(*types.UnionType); isUnion {
+		if sigs, ok := c.unionSignatures(unionType, false); ok {
+			if len(sigs) == 0 {
+				c.addErrorWithCode(node.Function, "TS2349", fmt.Sprintf("This expression is not callable.\n  Each member of the union type '%s' has signatures, but none of those signatures are compatible with each other.", unionType.String()))
+				for _, argNode := range node.Arguments {
+					c.visit(argNode)
+				}
+				node.SetComputedType(types.Any)
+				return
+			}
+			combined := types.NewObjectType()
+			combined.Materialize()
+			combined.CallSignatures = sigs
+			funcNodeType = combined
+		}
+	}
+
 	// Handle union of callable types - e.g. string.includes | Uint8Array.includes
 	if unionType, isUnion := funcNodeType.(*types.UnionType); isUnion {
 		// Visit arguments

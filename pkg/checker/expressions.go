@@ -2907,19 +2907,36 @@ func (c *Checker) reportFirstUnassignableRestArgument(args []parser.Expression, 
 // a call of those signatures: overload resolution and type argument
 // inference are the call's (tsc's resolveNewExpression shares them).
 func (c *Checker) newThroughConstructSignatures(node *parser.NewExpression, ctor types.Type) bool {
-	obj, ok := ctor.(*types.ObjectType)
-	if !ok || obj.ClassMeta != nil || len(obj.ConstructSigs()) == 0 {
-		return false
-	}
-	sigs := obj.ConstructSigs()
-	generic := false
-	for _, sig := range sigs {
-		if len(sig.TypeParameters) > 0 {
-			generic = true
+	var sigs []*types.Signature
+	if u, isUnion := ctor.(*types.UnionType); isUnion {
+		unionSigs, ok := c.unionSignatures(u, true)
+		if !ok {
+			return false
 		}
-	}
-	if len(sigs) == 1 && !generic {
-		return false
+		if len(unionSigs) == 0 {
+			c.addErrorWithCode(node.Constructor, "TS2351", fmt.Sprintf("This expression is not constructable.\n  Each member of the union type '%s' has construct signatures, but none of those signatures are compatible with each other.", u.String()))
+			for _, arg := range node.Arguments {
+				c.visit(arg)
+			}
+			node.SetComputedType(types.Any)
+			return true
+		}
+		sigs = unionSigs
+	} else {
+		obj, ok := ctor.(*types.ObjectType)
+		if !ok || obj.ClassMeta != nil || len(obj.ConstructSigs()) == 0 {
+			return false
+		}
+		sigs = obj.ConstructSigs()
+		generic := false
+		for _, sig := range sigs {
+			if len(sig.TypeParameters) > 0 {
+				generic = true
+			}
+		}
+		if len(sigs) == 1 && !generic {
+			return false
+		}
 	}
 	callee := types.NewObjectType()
 	callee.Materialize()

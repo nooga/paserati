@@ -133,7 +133,7 @@ func (c *Checker) firstArgumentMismatch(sig *types.Signature, argTypes []types.T
 	for i, argType := range argTypes {
 		var paramType types.Type
 		switch {
-		case i < len(sig.ParameterTypes) && !(sig.IsVariadic && i == len(sig.ParameterTypes)-1):
+		case i < len(sig.ParameterTypes) && !(sig.IsVariadic && sig.RestParameterType == nil && i == len(sig.ParameterTypes)-1):
 			paramType = sig.ParameterTypes[i]
 		case sig.RestParameterType != nil:
 			if arr, ok := sig.RestParameterType.(*types.ArrayType); ok {
