@@ -1469,7 +1469,7 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
 		StrictVariance:    true,
-		// Note: Constructor type expressions don't track optional parameters
+		IsAbstract:        node.IsAbstract,
 	}
 
 	// Create a unified ObjectType with constructor signature
