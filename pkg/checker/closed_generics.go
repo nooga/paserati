@@ -108,6 +108,8 @@ func (w *closedWalk) foreign(t types.Type, names []string) bool {
 			w.foreign(tt.TrueType, inner) || w.foreign(tt.FalseType, names)
 	case *types.InferType:
 		return false
+	case *types.StringMappingType:
+		return w.foreign(tt.Type, names)
 	case *types.TemplateLiteralType:
 		for _, p := range tt.Parts {
 			if w.foreign(p.Type, names) {

@@ -1249,6 +1249,8 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 		visited[t] = true
 
 		switch typ := t.(type) {
+		case *types.StringMappingType:
+			return containsTypeParameters(typ.Type)
 		case *types.TypeParameterType:
 			// The enclosing declaration's own type parameter is fixed at a
 			// call, not inferred from its arguments.

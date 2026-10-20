@@ -689,6 +689,15 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 		if node.Qualifier != nil {
 			builtinName = ""
 		}
+		// Intrinsic string mappings, unless the program declares the name.
+		if types.IsStringMappingName(builtinName) && len(node.TypeArguments) == 1 {
+			if _, declared := c.env.ResolveType(builtinName); !declared {
+				if arg := c.resolveTypeAnnotation(node.TypeArguments[0]); arg != nil {
+					return types.NewStringMappingType(builtinName, arg)
+				}
+				return nil
+			}
+		}
 		switch builtinName {
 		case "Array":
 			if len(node.TypeArguments) != 1 {
@@ -2172,6 +2181,9 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			FalseType:   newFalseType,
 		}
 
+	case *types.StringMappingType:
+		return types.NewStringMappingType(typ.Kind, c.substituteTypesWithVisited(typ.Type, substitution, visited))
+
 	case *types.TemplateLiteralType:
 		// Substitute types in template literal type parts
 		newParts := make([]types.TemplateLiteralPart, len(typ.Parts))
@@ -2818,6 +2830,10 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		if _, isParam := side.(*types.TypeParameterType); isParam {
 			return nil
 		}
+		// Lowercase<S & string> waits for S as well.
+		if sm, ok := side.(*types.StringMappingType); ok && types.IsGenericStringType(sm.Type) {
+			return nil
+		}
 		if ia, ok := side.(*types.IndexedAccessType); ok {
 			_, objIsParam := ia.ObjectType.(*types.TypeParameterType)
 			_, idxIsParam := ia.IndexType.(*types.TypeParameterType)
@@ -3335,6 +3351,8 @@ func (c *Checker) substituteTypeParameterInTypeMemo(targetType types.Type, param
 	}
 
 	switch typ := targetType.(type) {
+	case *types.StringMappingType:
+		return types.NewStringMappingType(typ.Kind, recur(typ.Type))
 	case *types.TypeParameterType:
 		// If this is the type parameter we're looking for, replace it
 		if typ.Parameter != nil && typ.Parameter.Name == paramName {
@@ -4016,6 +4034,8 @@ func (c *Checker) substituteInType(typ types.Type, substitutions map[string]type
 	}
 
 	switch t := typ.(type) {
+	case *types.StringMappingType:
+		return types.NewStringMappingType(t.Kind, c.substituteInType(t.Type, substitutions))
 	case *types.TypeParameterType:
 		if t.Parameter != nil {
 			if replacement, exists := substitutions[t.Parameter.Name]; exists {
@@ -4780,6 +4800,8 @@ func mayMentionTypeParamNamesAt(t types.Type, names map[string]types.Type, visit
 			}
 		}
 		return mayMentionTypeParamNamesAt(tt.RestElementType, names, visited, shadowed, depth+1)
+	case *types.StringMappingType:
+		return mayMentionTypeParamNamesAt(tt.Type, names, visited, shadowed, depth+1)
 	case *types.TemplateLiteralType:
 		for _, part := range tt.Parts {
 			if !part.IsLiteral && mayMentionTypeParamNamesAt(part.Type, names, visited, shadowed, depth+1) {

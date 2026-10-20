@@ -69,6 +69,10 @@ func matchesTemplateHole(t Type, s string) bool {
 		return false
 	case *TemplateLiteralType:
 		return matchTemplateParts(tt.Parts, s)
+	case *StringMappingType:
+		// s is in Mapping<X> when the mapping leaves it unchanged and X
+		// produces it.
+		return ApplyStringMapping(tt.Kind, s) == s && matchesTemplateHole(tt.Type, s)
 	}
 	switch t {
 	case String, Any:

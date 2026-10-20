@@ -138,6 +138,9 @@ func (r *Relation) isAssignable(source, target Type) bool {
 	if related, decided := homomorphicMappedRelated(source, target); decided {
 		return related
 	}
+	if related, decided := r.stringMappingRelated(source, target); decided {
+		return related
+	}
 	if sm, ok := source.(*MappedType); ok && r.ApparentMapped != nil {
 		if apparent := r.ApparentMapped(sm); apparent != nil {
 			return r.IsAssignable(apparent, target)
