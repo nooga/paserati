@@ -510,9 +510,16 @@ type Checker struct {
 	// moduleKind is --module, lower case ("" when unset).
 	sourceFileName, moduleKind string
 	pendingSelfImports         []*parser.ImportDeclaration
-	selfImportValues           map[string]string // local import name -> the file's own binding it reads
-	classNameNode              *parser.Identifier // class being declared, for diagnostics reported on its name
-	strictNullChecks           bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
+	// currentClassAmbient: the class being checked is ambient (declare).
+	currentClassAmbient bool
+	// parameterProperties marks the properties synthesized from constructor
+	// parameter properties; overrideParamProperty is set while one is
+	// validated for its override modifier.
+	parameterProperties   map[*parser.PropertyDefinition]bool
+	overrideParamProperty bool
+	selfImportValues      map[string]string  // local import name -> the file's own binding it reads
+	classNameNode         *parser.Identifier // class being declared, for diagnostics reported on its name
+	strictNullChecks      bool               // Mirrors --strictNullChecks; when false, TS18050 is not emitted
 	// reportedRelationDiagnostics dedupes relation diagnostics reported at the
 	// same position more than once (see addErrorAtStart).
 	reportedRelationDiagnostics map[string]bool

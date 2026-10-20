@@ -468,6 +468,9 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// Skip for declare classes: ambient bodies have signatures without implementations
 	// and no bodies — that's their intended form.
 	ambient := node.Declare || c.inAmbientNamespace || c.inDeclarationFile()
+	savedAmbientClass := c.currentClassAmbient
+	c.currentClassAmbient = ambient
+	defer func() { c.currentClassAmbient = savedAmbientClass }()
 	if !ambient && node.Name != nil && node.Name.Value == "Object" && c.legacyModuleFormat != "" {
 		c.addErrorAtStart(node.Name, errors.TS2725, fmt.Sprintf(
 			"Class name cannot be 'Object' when targeting ES5 and above with module %s.", c.legacyModuleFormat))
@@ -1592,7 +1595,9 @@ func (c *Checker) validateOverrideProperty(prop *parser.PropertyDefinition, clas
 		return
 	}
 	propName := c.extractPropertyName(prop.Key)
+	c.overrideParamProperty = c.parameterProperties[prop]
 	c.validateClassMemberOverride(prop.Key, propName, prop.IsStatic, prop.IsOverride, false, className, instanceType)
+	c.overrideParamProperty = false
 	debugPrintf("// [Checker Class] Override validation for property '%s' in class '%s'\n", propName, className)
 }
 
@@ -1624,8 +1629,18 @@ func (c *Checker) validateClassMemberOverride(node parser.Node, memberName strin
 		return
 	}
 
-	if c.noImplicitOverride && inherited {
-		if !currentIsAbstract && c.inheritedAbstractClassMember(instanceType, memberName, isStatic) {
+	// tsc's checkMemberForOverrideModifier: not in an ambient class; a
+	// member implementing an abstract one needs no modifier unless it is
+	// abstract itself (TS4116).
+	if c.noImplicitOverride && inherited && !c.currentClassAmbient {
+		if c.inheritedAbstractClassMember(instanceType, memberName, isStatic) {
+			if currentIsAbstract {
+				c.addErrorWithCode(node, "TS4116", fmt.Sprintf("This member must have an 'override' modifier because it overrides an abstract method that is declared in the base class '%s'.", baseName))
+			}
+			return
+		}
+		if c.overrideParamProperty {
+			c.addErrorWithCode(node, "TS4115", fmt.Sprintf("This parameter property must have an 'override' modifier because it overrides a member in base class '%s'.", baseName))
 			return
 		}
 		c.addErrorWithCode(node, errors.TS4114, fmt.Sprintf("This member must have an 'override' modifier because it overrides a member in the base class '%s'.", baseName))
@@ -1711,6 +1726,12 @@ func (c *Checker) objectTypeHasClassMember(obj *types.ObjectType, memberName str
 				if c.objectTypeHasClassMember(baseCtor, memberName, true, visited) {
 					return true
 				}
+			}
+		}
+		// A constructor's bases are its base class constructors.
+		for _, baseType := range obj.Bases() {
+			if baseCtor, ok := baseType.(*types.ObjectType); ok && c.objectTypeHasClassMember(baseCtor, memberName, true, visited) {
+				return true
 			}
 		}
 		return false
@@ -3014,6 +3035,10 @@ func (c *Checker) synthesizeParameterProperties(body *parser.ClassBody) {
 
 			// Add this synthetic property to the class body
 			body.Properties = append(body.Properties, propDef)
+			if c.parameterProperties == nil {
+				c.parameterProperties = map[*parser.PropertyDefinition]bool{}
+			}
+			c.parameterProperties[propDef] = true
 
 			debugPrintf("// [Checker Class] Synthesized parameter property '%s' (public: %t, private: %t, protected: %t, readonly: %t)\n",
 				param.Name.Value, param.IsPublic, param.IsPrivate, param.IsProtected, param.IsReadonly)
