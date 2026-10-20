@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -767,13 +768,32 @@ func classMemberKeyName(key Expression) (name string, tok *lexer.Token, private 
 const wellKnownPrefix = "__@"
 
 // CanonicalNumericName is the property name a numeric literal key denotes
-// (its ToString): `1.0`, `1.` and `1.00` all name "1".
+// (its ToString): `1.0`, `1.` and `1.00` all name "1", `0x10` names "16".
 func CanonicalNumericName(literal string) string {
-	f, err := strconv.ParseFloat(strings.ReplaceAll(literal, "_", ""), 64)
+	clean := strings.ReplaceAll(literal, "_", "")
+	if len(clean) > 2 && clean[0] == '0' {
+		base := 0
+		switch clean[1] {
+		case 'x', 'X':
+			base = 16
+		case 'o', 'O':
+			base = 8
+		case 'b', 'B':
+			base = 2
+		}
+		if base != 0 {
+			if n, ok := new(big.Int).SetString(clean[2:], base); ok {
+				f, _ := new(big.Float).SetInt(n).Float64()
+				return jsNumberString(f)
+			}
+			return literal
+		}
+	}
+	f, err := strconv.ParseFloat(clean, 64)
 	if err != nil {
 		return literal
 	}
-	return strconv.FormatFloat(f, 'g', -1, 64)
+	return jsNumberString(f)
 }
 
 func looksNumeric(s string) bool {

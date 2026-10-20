@@ -3040,14 +3040,17 @@ func (p *Parser) parseNumberLiteral() Expression {
 			// Check if it's an overflow - for very large integers, fall back to float64 parsing
 			// JavaScript numbers are IEEE 754 doubles, so this is the correct behavior
 			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-				// Try parsing as float64 instead
-				floatVal, floatErr := strconv.ParseFloat(cleanedLiteral, 64)
-				if floatErr != nil && base != 10 {
-					// 0b/0o/0x: the exact integer, rounded to the nearest double.
-					if n, ok := new(big.Int).SetString(cleanedLiteral, base); ok {
-						floatVal, _ = new(big.Float).SetInt(n).Float64()
-						floatErr = nil
-					}
+				var floatVal float64
+				var floatErr error
+				if base == 10 {
+					floatVal, floatErr = strconv.ParseFloat(cleanedLiteral, 64)
+				} else if n, ok := new(big.Int).SetString(cleanedLiteral, base); ok {
+					// 0b/0o/0x: the exact integer, rounded to the nearest
+					// double (Infinity past the range). ParseFloat would read
+					// binary and octal digits as decimal.
+					floatVal, _ = new(big.Float).SetInt(n).Float64()
+				} else {
+					floatErr = fmt.Errorf("invalid base-%d digits", base)
 				}
 				if floatErr != nil {
 					msg := fmt.Sprintf("could not parse %q as number: %v", rawLiteral, floatErr)
