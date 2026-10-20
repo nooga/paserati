@@ -2073,6 +2073,10 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		return &types.TupleType{ElementTypes: newElementTypes, OptionalElements: typ.OptionalElements, RestElementType: newRest}
 
 	case *types.MappedType:
+		// A homomorphic mapped type over an array or tuple maps its elements.
+		if mapped := c.mapHomomorphicOverArray(typ, substitution, visited); mapped != nil {
+			return mapped
+		}
 		// Recursively substitute types in mapped type
 		var newConstraintType types.Type
 		if keyof, ok := typ.ConstraintType.(*types.KeyofType); ok {

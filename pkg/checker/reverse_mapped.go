@@ -94,7 +94,7 @@ func (c *Checker) isMappedIndexedAccess(x types.Type, pType *types.MappedType, t
 		return false
 	}
 	obj, ok := ia.ObjectType.(*types.TypeParameterType)
-	if !ok || obj.Parameter != t {
+	if !ok || obj.Parameter == nil || (obj.Parameter != t && obj.Parameter.Name != t.Name) {
 		return false
 	}
 	idx, ok := ia.IndexType.(*types.TypeParameterType)
@@ -176,4 +176,109 @@ func (c *Checker) replaceInSignature(sig *types.Signature, rec func(types.Type) 
 		cp.RestParameterType = rec(sig.RestParameterType)
 	}
 	return &cp
+}
+
+// apparentMappedType is tsc's getResolvedApparentTypeOfMappedType: a
+// homomorphic mapped type over T whose constraint is an array or tuple type
+// is the mapping of that constraint, an array or tuple itself.
+func (c *Checker) apparentMappedType(mt *types.MappedType) types.Type {
+	keyof, ok := mt.ConstraintType.(*types.KeyofType)
+	if !ok {
+		return nil
+	}
+	tp, ok := keyof.OperandType.(*types.TypeParameterType)
+	if !ok || tp.Parameter == nil || tp.Parameter.Constraint == nil {
+		return nil
+	}
+	constraint := tp.Parameter.Constraint
+	switch k := constraint.(type) {
+	case *types.ArrayType, *types.TupleType:
+	case *types.ReadonlyType:
+		if !types.IsReadonlyArrayLike(k) {
+			return nil
+		}
+	default:
+		return nil
+	}
+	expanded := c.expandIfMappedType(c.substituteTypes(mt, map[string]types.Type{tp.Parameter.Name: constraint}))
+	if _, still := expanded.(*types.MappedType); still {
+		return nil
+	}
+	return expanded
+}
+
+// mapHomomorphicOverArray is tsc's instantiateMappedArrayType and
+// instantiateMappedTupleType: `{ [K in keyof T]: X }` with T an array or tuple
+// is an array or tuple of X for each element, with the mapped type's ? and
+// readonly modifiers applied to it. nil when T is not substituted by one.
+func (c *Checker) mapHomomorphicOverArray(mt *types.MappedType, substitution map[string]types.Type, visited map[types.Type]types.Type) types.Type {
+	keyof, ok := mt.ConstraintType.(*types.KeyofType)
+	if !ok {
+		return nil
+	}
+	tp, ok := keyof.OperandType.(*types.TypeParameterType)
+	if !ok || tp.Parameter == nil {
+		return nil
+	}
+	repl, ok := substitution[tp.Parameter.Name]
+	if !ok {
+		return nil
+	}
+	readonly := false
+	if ro, isRO := repl.(*types.ReadonlyType); isRO {
+		readonly, repl = true, ro.InnerType
+	}
+	switch repl.(type) {
+	case *types.ArrayType, *types.TupleType:
+	default:
+		return nil
+	}
+	keySub := make(map[string]types.Type, len(substitution)+1)
+	for k, v := range substitution {
+		keySub[k] = v
+	}
+	keySub[mt.TypeParameter] = types.Number
+	element := func(e types.Type) types.Type {
+		v := c.replaceMappedIndexedAccess(mt.ValueType, mt, tp.Parameter, e, map[types.Type]types.Type{})
+		return c.substituteTypesWithVisited(v, keySub, make(map[types.Type]types.Type))
+	}
+	var result types.Type
+	switch src := repl.(type) {
+	case *types.ArrayType:
+		elem := element(src.ElementType)
+		if mt.OptionalModifier == "+" {
+			elem = types.NewUnionType(elem, types.Undefined)
+		}
+		result = &types.ArrayType{ElementType: elem}
+	case *types.TupleType:
+		elems := make([]types.Type, len(src.ElementTypes))
+		for i, e := range src.ElementTypes {
+			elems[i] = element(e)
+		}
+		optional := src.OptionalElements
+		switch mt.OptionalModifier {
+		case "+":
+			optional = make([]bool, len(elems))
+			for i := range optional {
+				optional[i] = true
+			}
+		case "-":
+			optional = nil
+		}
+		var rest types.Type
+		if src.RestElementType != nil {
+			rest = element(src.RestElementType)
+		}
+		result = &types.TupleType{ElementTypes: elems, OptionalElements: optional, RestElementType: rest}
+	}
+	switch mt.ReadonlyModifier {
+	case "+":
+		readonly = true
+	case "-":
+		readonly = false
+	}
+	if readonly {
+		return &types.ReadonlyType{InnerType: result}
+	}
+	return result
 }

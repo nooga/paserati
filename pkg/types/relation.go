@@ -31,6 +31,12 @@ type Relation struct {
 	// reaches the relation unexpanded.
 	ExpandMapped func(Type) Type
 
+	// ApparentMapped is tsc's getResolvedApparentTypeOfMappedType: a
+	// homomorphic mapped type over a type parameter constrained to arrays or
+	// tuples is related as its mapping of that constraint (or nil). The
+	// checker supplies it.
+	ApparentMapped func(*MappedType) Type
+
 	// ResolveClassRef resolves a reference a generic class makes to itself
 	// or another class in its own body (List<List<T>>) to the instance type
 	// it names. The checker supplies it.

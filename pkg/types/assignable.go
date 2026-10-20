@@ -138,6 +138,11 @@ func (r *Relation) isAssignable(source, target Type) bool {
 	if related, decided := homomorphicMappedRelated(source, target); decided {
 		return related
 	}
+	if sm, ok := source.(*MappedType); ok && r.ApparentMapped != nil {
+		if apparent := r.ApparentMapped(sm); apparent != nil {
+			return r.IsAssignable(apparent, target)
+		}
+	}
 
 	// Handle forward references - they should be treated as equivalent to each other
 	// This is a simple approach for now - in a full implementation, we'd resolve them properly
