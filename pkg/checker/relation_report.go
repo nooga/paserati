@@ -254,7 +254,7 @@ func staticPropertyName(key parser.Expression) (string, bool) {
 	case *parser.StringLiteral:
 		return k.Value, true
 	case *parser.NumberLiteral:
-		return fmt.Sprintf("%v", k.Value), true
+		return jsNumberKey(k.Value), true
 	}
 	return "", false
 }

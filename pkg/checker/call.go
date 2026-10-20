@@ -2894,7 +2894,7 @@ func (c *Checker) contextualMemberType(expected types.Type, key parser.Expressio
 	case *parser.StringLiteral:
 		name = k.Value
 	case *parser.NumberLiteral:
-		name, numeric = fmt.Sprintf("%v", k.Value), true
+		name, numeric = jsNumberKey(k.Value), true
 	default:
 		return nil, false
 	}

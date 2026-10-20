@@ -40,13 +40,13 @@ func getMethodKeyString(key parser.Expression) (string, bool) {
 	case *parser.StringLiteral:
 		return k.Value, true
 	case *parser.NumberLiteral:
-		return fmt.Sprintf("%v", k.Value), true
+		return jsNumberKey(k.Value), true
 	case *parser.ComputedPropertyName:
 		switch e := k.Expr.(type) {
 		case *parser.StringLiteral:
 			return e.Value, true
 		case *parser.NumberLiteral:
-			return fmt.Sprintf("%v", e.Value), true
+			return jsNumberKey(e.Value), true
 		}
 		return wellKnownSymbolKey(k.Expr)
 	}
@@ -272,10 +272,14 @@ func (c *Checker) extractPropertyName(key parser.Expression) string {
 		} else if literal, ok := k.Expr.(*parser.StringLiteral); ok {
 			return literal.Value
 		} else if literal, ok := k.Expr.(*parser.NumberLiteral); ok {
-			return fmt.Sprintf("%v", literal.Value)
+			return jsNumberKey(literal.Value)
 		} else {
 			return fmt.Sprintf("__computed_%p", k.Expr)
 		}
+	case *parser.StringLiteral:
+		return k.Value
+	case *parser.NumberLiteral:
+		return jsNumberKey(k.Value)
 	default:
 		return fmt.Sprintf("__unknown_%p", key)
 	}
@@ -288,7 +292,7 @@ func (c *Checker) tryExtractConstantComputedPropertyName(expr parser.Expression)
 	case *parser.StringLiteral:
 		return e.Value, true
 	case *parser.NumberLiteral:
-		return fmt.Sprintf("%v", e.Value), true
+		return jsNumberKey(e.Value), true
 	case *parser.MemberExpression:
 		// A well-known symbol (Symbol.iterator, Symbol.hasInstance, ...).
 		if key, ok := wellKnownSymbolKey(e); ok {

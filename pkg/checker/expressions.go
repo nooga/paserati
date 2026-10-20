@@ -355,7 +355,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 		case *parser.StringLiteral:
 			keyName = key.Value
 		case *parser.NumberLiteral:
-			keyName = fmt.Sprintf("%v", key.Value)
+			keyName = jsNumberKey(key.Value)
 		case *parser.BigIntLiteral:
 			keyName = key.Value
 		case *parser.SpreadElement:
@@ -373,7 +373,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
-				keyName = fmt.Sprintf("%v", literal.Value)
+				keyName = jsNumberKey(literal.Value)
 			} else if symKey, ok := wellKnownSymbolKey(key.Expr); ok {
 				keyName = symKey
 			} else {
@@ -651,7 +651,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			keyName = key.Value
 		case *parser.NumberLiteral: // Allow number literals as keys, convert to string
 			// Note: JavaScript converts number keys to strings internally
-			keyName = fmt.Sprintf("%v", key.Value) // Simple conversion
+			keyName = jsNumberKey(key.Value) // Simple conversion
 		case *parser.BigIntLiteral: // Allow bigint literals as keys, convert to string
 			// Note: JavaScript converts bigint keys to strings internally
 			keyName = key.Value // BigIntLiteral.Value is already a string
@@ -688,7 +688,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
-				keyName = fmt.Sprintf("%v", literal.Value)
+				keyName = jsNumberKey(literal.Value)
 			} else if literal, ok := key.Expr.(*parser.BigIntLiteral); ok {
 				keyName = literal.Value
 			} else if memberExpr, ok := key.Expr.(*parser.MemberExpression); ok {
@@ -828,7 +828,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		case *parser.StringLiteral:
 			keyName = key.Value
 		case *parser.NumberLiteral:
-			keyName = fmt.Sprintf("%v", key.Value)
+			keyName = jsNumberKey(key.Value)
 		case *parser.BigIntLiteral:
 			keyName = key.Value
 		case *parser.SpreadElement:
@@ -838,7 +838,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
-				keyName = fmt.Sprintf("%v", literal.Value)
+				keyName = jsNumberKey(literal.Value)
 			} else if literal, ok := key.Expr.(*parser.BigIntLiteral); ok {
 				keyName = literal.Value
 			} else if memberExpr, ok := key.Expr.(*parser.MemberExpression); ok {
@@ -983,7 +983,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		case *parser.StringLiteral:
 			keyName = key.Value
 		case *parser.NumberLiteral:
-			keyName = fmt.Sprintf("%v", key.Value)
+			keyName = jsNumberKey(key.Value)
 		case *parser.SpreadElement:
 			continue // Skip spread elements
 		case *parser.ComputedPropertyName:
@@ -991,7 +991,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
-				keyName = fmt.Sprintf("%v", literal.Value)
+				keyName = jsNumberKey(literal.Value)
 			} else if memberExpr, ok := key.Expr.(*parser.MemberExpression); ok {
 				// Check for Symbol.iterator access
 				if objectIdent, ok := memberExpr.Object.(*parser.Identifier); ok {
@@ -2209,6 +2209,9 @@ func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardRe
 }
 
 func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
+	if len(c.expandoNames) > 0 {
+		c.declareExpandoRead(node)
+	}
 	if key, ok := node.Index.(*parser.StringLiteral); ok && c.checkGlobalThisMember(node.Left, key.Value, node.Left) {
 		node.SetComputedType(types.Any)
 		return
@@ -2368,6 +2371,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 						}
 						if !found {
 							resultType = types.Any
+							c.reportImplicitAnyIndex(node, base, leftType.String(), indexStringValue, indexType)
 						}
 					}
 				} else {

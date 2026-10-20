@@ -1861,7 +1861,7 @@ func (c *Checker) extractConstantPropertyName(expr parser.Expression) string {
 	case *parser.StringLiteral:
 		return e.Value
 	case *parser.NumberLiteral:
-		return fmt.Sprintf("%v", e.Value)
+		return jsNumberKey(e.Value)
 	case *parser.Identifier:
 		// For now, we can't resolve identifiers to their constant values during interface checking
 		// TODO: Add constant folding support

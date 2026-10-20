@@ -433,7 +433,7 @@ func (c *Checker) checkSymbolKeyedMember(key parser.Node, tok *lexer.Token, expr
 func numericLiteralKey(id *parser.Identifier) string {
 	if id.Token != nil && id.Token.Type == lexer.NUMBER {
 		if f, err := strconv.ParseFloat(strings.ReplaceAll(id.Value, "_", ""), 64); err == nil {
-			return strconv.FormatFloat(f, 'g', -1, 64)
+			return jsNumberKey(f)
 		}
 	}
 	return id.Value

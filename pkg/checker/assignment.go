@@ -703,6 +703,17 @@ func collectExpandoNames(program *parser.Program) map[string]map[string]bool {
 						assigned[obj.Value][prop.Value] = true
 					}
 				}
+				// F["prop"] = ... declares prop like F.prop = ... does.
+				if ix, ok := as.Left.(*parser.IndexExpression); ok {
+					obj, ok1 := ix.Left.(*parser.Identifier)
+					key, ok2 := ix.Index.(*parser.StringLiteral)
+					if ok1 && ok2 {
+						if assigned[obj.Value] == nil {
+							assigned[obj.Value] = map[string]bool{}
+						}
+						assigned[obj.Value][key.Value] = true
+					}
+				}
 			}
 		case *parser.ConstStatement:
 			for _, decl := range d.Declarations {
@@ -728,16 +739,12 @@ func collectExpandoNames(program *parser.Program) map[string]map[string]bool {
 // declareExpandoRead gives a function's expando property a placeholder
 // before its assignment is checked, for reads checked earlier (a hoisted
 // function body reading its own expando property).
-func (c *Checker) declareExpandoRead(node *parser.MemberExpression) {
-	obj, ok := node.Object.(*parser.Identifier)
-	if !ok {
+func (c *Checker) declareExpandoRead(node parser.Expression) {
+	objName, propName, ok := expandoMember(node)
+	if !ok || !c.expandoNames[objName][propName] {
 		return
 	}
-	prop, ok := node.Property.(*parser.Identifier)
-	if !ok || !c.expandoNames[obj.Value][prop.Value] {
-		return
-	}
-	t, _, found := c.env.Resolve(obj.Value)
+	t, _, found := c.env.Resolve(objName)
 	if !found {
 		return
 	}
@@ -745,12 +752,12 @@ func (c *Checker) declareExpandoRead(node *parser.MemberExpression) {
 	if !ok || !ot.IsCallable() || ot.IsClassConstructor() {
 		return
 	}
-	if _, has := ot.Props()[prop.Value]; !has {
-		ot.WithProperty(prop.Value, types.Any)
+	if _, has := ot.Props()[propName]; !has {
+		ot.WithProperty(propName, types.Any)
 		if c.expandoProps == nil {
 			c.expandoProps = map[expandoKey]bool{}
 		}
-		c.expandoProps[expandoKey{ot, prop.Value}] = true
+		c.expandoProps[expandoKey{ot, propName}] = true
 	}
 }
 
@@ -762,22 +769,14 @@ func (c *Checker) expandoAssignmentTarget(node *parser.AssignmentExpression) (*t
 	if node.Operator != "=" || len(c.expandoNames) == 0 {
 		return nil, ""
 	}
-	m, ok := node.Left.(*parser.MemberExpression)
+	objName, propName, ok := expandoMember(node.Left)
 	if !ok {
 		return nil, ""
 	}
-	obj, ok := m.Object.(*parser.Identifier)
-	if !ok {
+	if c.expandoNames[objName] == nil {
 		return nil, ""
 	}
-	prop, ok := m.Property.(*parser.Identifier)
-	if !ok {
-		return nil, ""
-	}
-	if c.expandoNames[obj.Value] == nil {
-		return nil, ""
-	}
-	t, _, found := c.env.Resolve(obj.Value)
+	t, _, found := c.env.Resolve(objName)
 	if !found {
 		return nil, ""
 	}
@@ -785,14 +784,34 @@ func (c *Checker) expandoAssignmentTarget(node *parser.AssignmentExpression) (*t
 	if !ok || !ot.IsCallable() || ot.IsClassConstructor() {
 		return nil, ""
 	}
-	if pt, has := ot.Props()[prop.Value]; has && pt != types.Any && !c.expandoProps[expandoKey{ot, prop.Value}] {
+	if pt, has := ot.Props()[propName]; has && pt != types.Any && !c.expandoProps[expandoKey{ot, propName}] {
 		return nil, ""
 	}
 	if c.expandoProps == nil {
 		c.expandoProps = map[expandoKey]bool{}
 	}
-	c.expandoProps[expandoKey{ot, prop.Value}] = true
-	return ot, prop.Value
+	c.expandoProps[expandoKey{ot, propName}] = true
+	return ot, propName
+}
+
+// expandoMember splits an expando property reference, `f.prop` or
+// `f["prop"]`, into the function's and the property's names.
+func expandoMember(e parser.Expression) (obj, prop string, ok bool) {
+	switch m := e.(type) {
+	case *parser.MemberExpression:
+		o, ok1 := m.Object.(*parser.Identifier)
+		p, ok2 := m.Property.(*parser.Identifier)
+		if ok1 && ok2 {
+			return o.Value, p.Value, true
+		}
+	case *parser.IndexExpression:
+		o, ok1 := m.Left.(*parser.Identifier)
+		p, ok2 := m.Index.(*parser.StringLiteral)
+		if ok1 && ok2 {
+			return o.Value, p.Value, true
+		}
+	}
+	return "", "", false
 }
 
 type expandoKey struct {

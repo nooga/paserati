@@ -3271,9 +3271,49 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 		PropertyOrder:      propertyOrder,
 		OptionalProperties: optionalProperties,
 		ReadOnlyProperties: readOnlyProperties,
-		CallSignatures:     []*types.Signature{},      // Mapped types don't create call signatures
-		IndexSignatures:    []*types.IndexSignature{}, // TODO: Handle index signatures if needed
+		CallSignatures:     []*types.Signature{}, // Mapped types don't create call signatures
+		IndexSignatures:    c.mappedIndexSignatures(mappedType, sourceObjectType),
 	}
+}
+
+// mappedIndexSignatures maps the index signatures of a homomorphic mapped
+// type's source (`{ [P in keyof Foo]: X }` with Foo's `[x: string]: V`):
+// each becomes one whose value is X for that key type, with the mapped
+// type's ? and readonly modifiers applied.
+func (c *Checker) mappedIndexSignatures(mt *types.MappedType, source *types.ObjectType) []*types.IndexSignature {
+	if source == nil {
+		return []*types.IndexSignature{}
+	}
+	var sigs []*types.IndexSignature
+	for _, sig := range source.IndexSigs() {
+		if sig == nil || sig.IsMapped || sig.Synthetic || (sig.KeyType != types.String && sig.KeyType != types.Number) {
+			continue
+		}
+		value := c.substituteTypeParameterInType(mt.ValueType, mt.TypeParameter, sig.KeyType)
+		if ia, ok := value.(*types.IndexedAccessType); ok {
+			if obj, isObj := ia.ObjectType.(*types.ObjectType); isObj && obj == source && ia.IndexType == sig.KeyType {
+				value = sig.ValueType
+			}
+		}
+		if value == nil {
+			value = types.Any
+		}
+		if mt.OptionalModifier == "+" {
+			value = types.NewUnionType(value, types.Undefined)
+		}
+		readonly := sig.Readonly
+		switch mt.ReadonlyModifier {
+		case "+":
+			readonly = true
+		case "-":
+			readonly = false
+		}
+		sigs = append(sigs, &types.IndexSignature{KeyType: sig.KeyType, ValueType: value, Readonly: readonly})
+	}
+	if sigs == nil {
+		return []*types.IndexSignature{}
+	}
+	return sigs
 }
 
 // substituteTypeParameterInType substitutes a type parameter with a concrete type
