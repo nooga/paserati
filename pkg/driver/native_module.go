@@ -328,8 +328,14 @@ func (m *ModuleBuilder) Constructor(name string, fn interface{}) *ModuleBuilder 
 // Class adds a class/struct to the module with a custom constructor function
 // Usage: m.Class("Point", (*Point)(nil), func(x, y float64) *Point { return &Point{X: x, Y: y} })
 func (m *ModuleBuilder) Class(name string, goStruct interface{}, constructor interface{}) *ModuleBuilder {
-	// Create a constructor function type from the constructor function
-	constructorType := m.goFunctionToTSType(constructor)
+	// The class is constructed with `new`, so it needs a construct signature.
+	// FIXME: type it from the Go constructor and struct. Instances are any for
+	// now, and extra arguments are ignored at runtime (paserati#278).
+	constructorType := types.NewObjectType().WithConstructSignature(&types.Signature{
+		RestParameterType: &types.ArrayType{ElementType: types.Any},
+		IsVariadic:        true,
+		ReturnType:        types.Any,
+	})
 
 	// Export the constructor as the class
 	m.exports[name] = constructorType

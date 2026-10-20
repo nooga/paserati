@@ -267,9 +267,9 @@ func (c *Checker) analyzeNamespaceScope(ns *parser.NamespaceDeclaration) {
 	for _, s := range ns.Body.Statements {
 		if exp, exported := s.(*parser.ExportNamedDeclaration); exported {
 			// An exported variable is still a variable inside the body.
-			switch d := exp.Declaration.(type) {
+			switch exp.Declaration.(type) {
 			case *parser.VarStatement, *parser.LetStatement, *parser.ConstStatement:
-				stmts = append(stmts, d.(parser.Statement))
+				stmts = append(stmts, exp.Declaration)
 				continue
 			}
 			// Still analyze functions and nested namespaces declared there.

@@ -582,14 +582,14 @@ func TestValuesNullUndefined(t *testing.T) {
 		{"let x = false; let y = null; return x != y;", "true"},
 
 		// Truthiness
-		{"return !null;", "true"},
+		{"let x = null; return !x;", "true"}, // !null itself is TS2873
 		// {"return !undefined;", "true"},          // Cannot use 'undefined' keyword
 		{"return !false;", "true"},
 		{"return !true;", "false"},
 		{"return !0;", "true"}, // 0 is considered falsey
 		{"return !1;", "false"},
-		{"return !\"\";", "true"}, // Empty string is falsey
-		{"return !\"a\";", "false"},
+		{"let x = \"\"; return !x;", "true"}, // Empty string is falsey
+		{"let x = \"a\"; return !x;", "false"},
 	}
 
 	for _, tt := range tests {
