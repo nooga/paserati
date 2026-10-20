@@ -54,13 +54,26 @@ func (c *Checker) isBlockScopedGlobal(env *Environment, name string) bool {
 }
 
 // checkGlobalThisMember reports TS2339 for globalThis.name (or
-// globalThis["name"]) naming a block-scoped global.
+// globalThis["name"], or this.name at the top level of a script, where
+// `this` is globalThis) naming a block-scoped global.
 func (c *Checker) checkGlobalThisMember(obj parser.Expression, name string, at parser.Node) bool {
-	id, ok := obj.(*parser.Identifier)
-	if !ok || id.Value != "globalThis" || c.globalScope == nil {
+	if c.globalScope == nil {
 		return false
 	}
-	if t, _, found := c.env.Resolve("globalThis"); !found || !c.isBuiltinGlobalThis("globalThis", t) {
+	switch o := obj.(type) {
+	case *parser.Identifier:
+		if o.Value != "globalThis" {
+			return false
+		}
+		if t, _, found := c.env.Resolve("globalThis"); !found || !c.isBuiltinGlobalThis("globalThis", t) {
+			return false
+		}
+	case *parser.ThisExpression:
+		if c.currentThisType != nil || c.isModule {
+			return false
+		}
+		c.visit(o)
+	default:
 		return false
 	}
 	if !c.isBlockScopedGlobal(c.globalScope, name) {

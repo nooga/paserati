@@ -593,7 +593,8 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 
 	if !hasExplicitThisParam {
 		// No explicit 'this' parameter - only set to 'any' if not already set by calling context
-		if c.currentThisType == nil {
+		// (an arrow at the top level keeps the file's `this`).
+		if c.currentThisType == nil && !ctx.IsArrow {
 			c.currentThisType = types.Any
 			// A function with no this of its own: reading it is TS2683.
 			c.implicitAnyThis = !ctx.IsArrow && !c.hasContextualThis(ctx.Body)
