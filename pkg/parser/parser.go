@@ -547,7 +547,11 @@ func NewParser(l *lexer.Lexer) *Parser {
 			p.addError(p.curToken, fmt.Sprintf("expected 'new' after 'abstract' in type, got %s", p.curToken.Type))
 			return nil
 		}
-		return p.parseConstructorTypeExpression()
+		ct := p.parseConstructorTypeExpression()
+		if c, ok := ct.(*ConstructorTypeExpression); ok && c != nil {
+			c.IsAbstract = true
+		}
+		return ct
 	})
 	// Literal types in TYPE context too
 	p.registerTypePrefix(lexer.STRING, p.parseStringLiteral)

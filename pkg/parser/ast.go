@@ -3154,6 +3154,7 @@ type ConstructorTypeExpression struct {
 	OptionalParams []bool           // Which parameters were written `name?: T`
 	RestParameter  Expression       // Rest parameter type for variadic constructors
 	ReturnType     Expression       // The constructed type (T in `new (): T`)
+	IsAbstract     bool             // `abstract new (...) => T`
 }
 
 func (cte *ConstructorTypeExpression) expressionNode()      {}
