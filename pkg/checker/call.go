@@ -2049,6 +2049,11 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		}
 
 	case *types.MappedType:
+		// `{ [K in keyof T]: X }` infers T itself (see reverseMappedConstraint).
+		if con, ok := c.reverseMappedConstraint(pType, argType); ok {
+			constraints = append(constraints, con)
+			break
+		}
 		// Handle mapped types like { [P in K]: V } (e.g., Record<K, V>)
 		// When matching against an object literal, infer K from keys and V from values
 		if aType, isObject := argType.(*types.ObjectType); isObject {
