@@ -174,16 +174,25 @@ func (c *Checker) isNonBindableDynamicName(key parser.Node) bool {
 			return false
 		}
 	}
-	// A symbol-typed key (`const k = Symbol()`) is a unique symbol in tsc.
 	if cpn.Expr.GetComputedType() == nil {
 		c.visit(cpn.Expr)
 	}
-	if t := cpn.Expr.GetComputedType(); t != nil && strings.Contains(t.String(), "symbol") {
+	t := cpn.Expr.GetComputedType()
+	// A name typed by a string or number literal binds the member.
+	if lit, isLit := t.(*types.LiteralType); isLit && (lit.Value.IsNumber() || lit.Value.Type() == vm.TypeString) {
 		return false
 	}
-	// Class members are typed before top-level consts are, so look for the
-	// declaration itself.
-	if id, ok := cpn.Expr.(*parser.Identifier); ok && c.program != nil && constDeclaredAsSymbol(c.program.Statements, id.Value) {
+	if _, constant := c.tryExtractConstantComputedPropertyName(cpn.Expr); constant {
+		return false
+	}
+	if id, ok := cpn.Expr.(*parser.Identifier); ok {
+		// A unique symbol (`const k = Symbol()`) binds it; a plain
+		// `symbol` does not. Class members are typed before top-level
+		// consts are, so look for the declaration itself.
+		return c.program == nil || !constDeclaredAsSymbol(c.program.Statements, id.Value)
+	}
+	// A symbol-typed key (`const k = Symbol()`) is a unique symbol in tsc.
+	if t != nil && strings.Contains(t.String(), "symbol") {
 		return false
 	}
 	return true
@@ -199,6 +208,10 @@ func constDeclaredAsSymbol(stmts []parser.Statement, name string) bool {
 		for _, d := range cs.Declarations {
 			if d == nil || d.Name == nil || d.Name.Value != name {
 				continue
+			}
+			// A `symbol` annotation widens it to a plain symbol.
+			if d.TypeAnnotation != nil && d.TypeAnnotation.String() != "unique symbol" {
+				return false
 			}
 			if call, ok := d.Value.(*parser.CallExpression); ok {
 				if fn, ok := call.Function.(*parser.Identifier); ok && fn.Value == "Symbol" {
