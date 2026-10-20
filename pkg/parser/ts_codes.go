@@ -26,6 +26,9 @@ var tsMessageRules = []tsMessageRule{
 	{re: regexp.MustCompile(`^Declaration or statement expected\.$`), code: errors.TS1128},
 	{re: regexp.MustCompile(`^Accessibility modifier already seen\.$`), code: "TS1028"},
 	{re: regexp.MustCompile(`^'[a-z]+' modifier must precede '[a-z]+' modifier\.$`), code: "TS1029"},
+	{re: regexp.MustCompile(`^'[a-z]+' modifier already seen\.$`), code: "TS1030"},
+	{re: regexp.MustCompile(`^'[a-z]+' modifier cannot be used in an ambient context\.$`), code: "TS1040"},
+	{re: regexp.MustCompile(`^'[a-z]+' modifier cannot appear on a constructor declaration\.$`), code: "TS1089"},
 	{re: regexp.MustCompile(`^Line terminator not permitted before arrow$`), code: "TS1200", msg: "Line terminator not permitted before arrow."},
 	{re: regexp.MustCompile(`^An? 'declare' modifier cannot be used in an already ambient context\.$`), code: "TS1038"},
 	{re: regexp.MustCompile(`^'[a-z]+' modifier cannot appear on a type member\.$`), code: "TS1070"},
@@ -39,7 +42,7 @@ var tsMessageRules = []tsMessageRule{
 // grammarCodes are diagnostics tsc reports from the checker's grammarError*
 // helpers; they are suppressed when the file has any parse diagnostic.
 var grammarCodes = map[string]bool{
-	"TS1009": true, "TS1028": true, "TS1029": true, "TS1031": true, "TS1038": true, "TS1049": true,
+	"TS1009": true, "TS1028": true, "TS1029": true, "TS1030": true, "TS1040": true, "TS1031": true, "TS1038": true, "TS1049": true,
 	"TS1054": true, "TS1070": true, "TS1071": true, "TS1089": true, "TS1108": true,
 	"TS1155": true, "TS1163": true, "TS1183": true, "TS1200": true, "TS1206": true,
 	"TS18041": true, "TS1042": true, "TS1341": true, "TS1368": true, "TS1044": true, "TS1184": true, "TS1104": true, "TS1105": true, "TS1107": true,

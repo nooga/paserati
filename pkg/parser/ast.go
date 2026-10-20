@@ -338,6 +338,7 @@ type Parameter struct {
 	IsPrivate   bool // true if marked with 'private' (constructor parameter property)
 	IsProtected bool // true if marked with 'protected' (constructor parameter property)
 	IsReadonly  bool // true if marked with 'readonly' (constructor parameter property)
+	IsOverride  bool // true if marked with 'override' (constructor parameter property)
 
 	Decorators []*Decorator // parameter decorators (@dec x); parsed, not interpreted
 }

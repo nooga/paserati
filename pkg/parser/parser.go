@@ -3985,11 +3985,11 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 		case lexer.READONLY:
 			param.IsReadonly = true
 		case lexer.OVERRIDE:
-			// `override` on a parameter property: accepted, not tracked
 			if p.tscDiagnostics && param.IsReadonly {
 				p.addGrammarErrorWithCode(p.curToken, "TS1029", "'override' modifier must precede 'readonly' modifier.")
 			}
 			sawOverride = true
+			param.IsOverride = true
 		}
 		p.nextToken() // Consume the modifier and move to the next token
 	}

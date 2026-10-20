@@ -412,6 +412,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 		firstModTok := p.curToken
 		staticBlockMods := false
+		var overrideTok *lexer.Token
 		for {
 			if p.tscDiagnostics && p.curTokenIs(lexer.STATIC) && p.peekTokenIs(lexer.LBRACE) {
 				// `public static {`: a static block after other modifiers.
@@ -444,6 +445,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 				}
 			} else if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "declare" && !isFieldName() {
 				// 'declare' modifier on class member (valid for properties; only error if method has body)
+				if seenOverride && p.tscDiagnostics {
+					modError(overrideTok, "'override' modifier cannot be used in an ambient context.")
+				}
 				isDeclare = true
 				declareTok = p.curToken
 				p.nextToken()
@@ -485,7 +489,11 @@ func (p *Parser) parseClassBody() *ClassBody {
 					abstractTok = p.curToken
 				}
 				p.nextToken()
+			} else if p.curTokenIs(lexer.OVERRIDE) && isOverride && !isFieldName() && p.tscDiagnostics {
+				modError(p.curToken, "'override' modifier already seen.")
+				p.nextToken()
 			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride && !isFieldName() {
+				overrideTok = p.curToken
 				if seenAsync {
 					modError(p.curToken, "'override' modifier must precede 'async' modifier.")
 				}
@@ -515,6 +523,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		}
 
+		if overrideTok != nil && p.tscDiagnostics && p.curToken.Literal == "constructor" && p.peekTokenIs(lexer.LPAREN) && !isStatic {
+			modError(overrideTok, "'override' modifier cannot appear on a constructor declaration.")
+		}
 		if staticBlockMods {
 			if !modErrSeen {
 				p.addGrammarErrorWithCode(firstModTok, "TS1184", "Modifiers cannot appear here.")
