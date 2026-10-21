@@ -2925,6 +2925,12 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		if _, isParam := side.(*types.TypeParameterType); isParam {
 			return nil
 		}
+		// keyof T is not known until T is, and neither is a conditional
+		// still waiting for such a type (trpc's ValidateShape is
+		// `Exclude<keyof TActual, keyof TExpected> extends never`).
+		if waitsForTypeParameter(side, 0) {
+			return nil
+		}
 		// Lowercase<S & string> waits for S as well.
 		if sm, ok := side.(*types.StringMappingType); ok && types.IsGenericStringType(sm.Type) {
 			return nil
@@ -3636,6 +3642,7 @@ func cloneSignaturesWithTypes(signatures []*types.Signature, rewrite func(types.
 		}
 		result[i] = &types.Signature{
 			TypeParameters:    sig.TypeParameters,
+			OuterSubstitution: sig.OuterSubstitution,
 			ParameterNames:    append([]string(nil), sig.ParameterNames...),
 			ParameterTypes:    paramTypes,
 			ReturnType:        rewrite(sig.ReturnType),
@@ -3831,6 +3838,22 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 
 	if checkerDebug {
 		debugPrintf("// [TryInfer] Trying to infer from %s to %s\n", checkType.String(), extendsType.String())
+	}
+	// any (an any-typed parameter of the checked function) matches any
+	// pattern part, and infers any for the `infer` placeholders in it.
+	if checkType == types.Any {
+		if _, isInfer := extendsType.(*types.InferType); !isInfer {
+			var names []string
+			collectInferTypeNames(extendsType, &names, map[types.Type]bool{})
+			for _, name := range names {
+				if existing, found := inferences[name]; found {
+					inferences[name] = types.NewUnionType(existing, types.Any)
+				} else {
+					inferences[name] = types.Any
+				}
+			}
+			return true
+		}
 	}
 	switch et := extendsType.(type) {
 	case *types.InferType:
@@ -4100,6 +4123,27 @@ func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams 
 	}
 }
 
+// waitsForTypeParameter reports whether t is keyof a type parameter, or a
+// conditional type whose check or extends side is a type parameter or waits
+// for one, so that no conditional checking it can be decided yet.
+func waitsForTypeParameter(t types.Type, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.KeyofType:
+		_, isParam := tt.OperandType.(*types.TypeParameterType)
+		return isParam
+	case *types.ConditionalType:
+		for _, side := range []types.Type{tt.CheckType, tt.ExtendsType} {
+			if _, isParam := side.(*types.TypeParameterType); isParam || waitsForTypeParameter(side, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // evaluateConditionalType evaluates a conditional type after substitution.
 // It distributes over union check types (TypeScript's distributive conditional types).
 // For example, Exclude<"a" | "b" | "c", "b"> distributes as:
@@ -4339,6 +4383,7 @@ func (c *Checker) substituteTypesPreservingInferVisited(typ types.Type, substitu
 
 				newSigs[i] = &types.Signature{
 					TypeParameters:    sig.TypeParameters,
+					OuterSubstitution: sig.OuterSubstitution,
 					ParameterNames:    sig.ParameterNames,
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
@@ -4353,6 +4398,14 @@ func (c *Checker) substituteTypesPreservingInferVisited(typ types.Type, substitu
 				newObj.WithCallSignature(sig)
 			}
 			return newObj
+		}
+		// An object type without `infer` in it (the RuntimeConfigOptions<
+		// TContext, TMeta> of `TOptions extends RuntimeConfigOptions<...>`)
+		// is substituted as usual.
+		var inferNames []string
+		collectInferTypeNames(t, &inferNames, map[types.Type]bool{})
+		if len(inferNames) == 0 {
+			return c.substituteTypesWithVisited(typ, substitution, visited)
 		}
 		return typ
 
@@ -5191,12 +5244,24 @@ func (c *Checker) substituteSignatures(sigs []*types.Signature, substitution map
 			sigSubstitution, sigVisited = unshadowed, make(map[types.Type]types.Type)
 		}
 		sub := func(t types.Type) types.Type { return c.substituteTypesWithVisited(t, sigSubstitution, sigVisited) }
+		// A method's own type parameters constrained by the outer ones
+		// (`create<TOptions extends RuntimeConfigOptions<TContext, TMeta>>`
+		// of a TRPCBuilder<object, object>) keep their identity; the call
+		// substitutes their constraints (constraintOf).
+		outer := sig.OuterSubstitution
+		for _, tp := range sig.TypeParameters {
+			if tp != nil && tp.Constraint != nil {
+				outer = mergeOuterSubstitution(sig.OuterSubstitution, sigSubstitution)
+				break
+			}
+		}
 		params := make([]types.Type, len(sig.ParameterTypes))
 		for j, p := range sig.ParameterTypes {
 			params[j] = sub(p)
 		}
 		out[i] = &types.Signature{
 			TypeParameters:    sig.TypeParameters,
+			OuterSubstitution: outer,
 			ParameterNames:    sig.ParameterNames,
 			ParameterTypes:    params,
 			ReturnType:        sub(sig.ReturnType),
@@ -5207,6 +5272,21 @@ func (c *Checker) substituteSignatures(sigs []*types.Signature, substitution map
 		}
 	}
 	return out
+}
+
+// mergeOuterSubstitution adds a later substitution's entries (a `this`
+// binding) to an earlier outer substitution, whose own entries stay.
+func mergeOuterSubstitution(earlier, later map[string]types.Type) map[string]types.Type {
+	if len(earlier) == 0 {
+		return later
+	}
+	merged := maps.Clone(earlier)
+	for name, t := range later {
+		if _, ok := merged[name]; !ok {
+			merged[name] = t
+		}
+	}
+	return merged
 }
 
 // checkIndexedAccessKeyExists reports TS2339 for `T['nope']` where T is an

@@ -319,6 +319,9 @@ type Checker struct {
 	// type with its infer placeholders inferred from the check type's
 	// constraint (see baseConstraint).
 	conditionalTrueConstraints map[*types.ConditionalType]types.Type
+	callOuterSubstitution      map[*types.TypeParameter]map[string]types.Type // the call being inferred: its type parameters' outer substitution
+	outerConstraints           map[outerConstraintKey]types.Type              // constraintOf's substituted constraints
+	apparentDepth              int                                            // > 0 while apparentContextualType takes base constraints
 	// augmentations are the file's module augmentations, merged into their
 	// targets once the file is checked (see augment.go).
 	augmentations []moduleAugmentation
@@ -5127,6 +5130,17 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		}
 	}
 
+	// A generic expected type gives a literal or function its context
+	// through its base constraint, as tsc's getApparentTypeOfContextualType
+	// does: trpc's create(opts?: ValidateShape<TOptions, RuntimeConfigOptions>)
+	// types `errorFormatter: (fmt) => ...` by RuntimeConfigOptions.
+	switch node.(type) {
+	case *parser.ObjectLiteral, *parser.ArrowFunctionLiteral, *parser.FunctionLiteral:
+		if apparent := c.apparentContextualType(context.ExpectedType); apparent != context.ExpectedType {
+			context = &ContextualType{ExpectedType: apparent, IsContextual: context.IsContextual}
+		}
+	}
+
 	c.markContextuallyTypedFunction(node, context.ExpectedType)
 
 	// Handle specific node types that benefit from contextual typing
@@ -5435,9 +5449,12 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			// 3. Check function body and determine return type
 			// If we want return type inference (contextualReturnType is nil), pass nil to checkFunctionBody
 			var expectedReturnTypeForBodyCheck types.Type
-			if ctx.ContextualReturnType == types.Void && node.ReturnTypeAnnotation == nil {
+			if (ctx.ContextualReturnType == types.Void || ctx.ContextualReturnType == types.Any) && node.ReturnTypeAnnotation == nil {
 				// A callback contextually typed to return void may return
-				// anything: its body is not checked against void.
+				// anything: its body is not checked against void. Nor is it
+				// against any, and its return type is inferred from the
+				// body, as tsc does (trpc's errorFormatter: (opts) => shape
+				// against ErrorFormatter<ctx, any>).
 				expectedReturnTypeForBodyCheck = nil
 			} else if ctx.ContextualReturnType != nil {
 				expectedReturnTypeForBodyCheck = preliminarySignature.ReturnType

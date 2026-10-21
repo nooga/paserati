@@ -71,6 +71,10 @@ type Signature struct {
 	// that with strictFunctionTypes its parameters are compared
 	// contravariantly (TypeScript keys this off the target's declaration kind).
 	StrictVariance bool
+	// OuterSubstitution is the substitution that instantiated this member
+	// signature of a generic type when its own type parameters' constraints
+	// mention the type's parameters: a call substitutes them by it.
+	OuterSubstitution map[string]Type
 	// IsAbstract marks the construct signature of an abstract class or an
 	// `abstract new (...) => T` type: it cannot be called with `new`, nor
 	// stand in for a construct signature that is not abstract.

@@ -1,6 +1,8 @@
 package checker
 
 import (
+	"reflect"
+
 	"github.com/nooga/paserati/pkg/types"
 )
 
@@ -66,8 +68,12 @@ func (c *Checker) baseConstraint(t types.Type, depth int) types.Type {
 			return t
 		}
 		var parts []types.Type
-		if tt.Parameter.Constraint != nil {
-			parts = append(parts, tt.Parameter.Constraint)
+		constraint := tt.Parameter.Constraint
+		if c.apparentDepth > 0 {
+			constraint = c.constraintOf(tt.Parameter)
+		}
+		if constraint != nil {
+			parts = append(parts, constraint)
 		}
 		parts = append(parts, c.trueBranchConstraints[tt.Parameter]...)
 		switch len(parts) {
@@ -168,4 +174,81 @@ func (c *Checker) satisfiesTypeArgConstraint(arg, constraint types.Type) func() 
 		}
 		return base != arg && c.isAssignableWithExpansion(base, constraint)
 	}
+}
+
+// apparentContextualType is a contextual type with its conditional and type
+// parameter members replaced by their base constraints (when known), as
+// tsc's getApparentTypeOfContextualType maps them.
+func (c *Checker) apparentContextualType(t types.Type) types.Type {
+	switch tt := t.(type) {
+	case *types.ConditionalType, *types.TypeParameterType:
+		// Only here (and for an uninferred type parameter) are the call's
+		// outer-substituted constraints used: relating with them is costly.
+		c.apparentDepth++
+		base := c.baseConstraint(t, 0)
+		c.apparentDepth--
+		if base != nil && base != types.Unknown {
+			return base
+		}
+	case *types.UnionType:
+		members := make([]types.Type, len(tt.Types))
+		changed := false
+		for i, m := range tt.Types {
+			members[i] = c.apparentContextualType(m)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
+	}
+	return t
+}
+
+// outerConstraintKey is a type parameter and the outer substitution (by map
+// identity) its constraint is substituted by.
+type outerConstraintKey struct {
+	tp    *types.TypeParameter
+	outer uintptr
+}
+
+// constraintOf is tp's constraint, substituted by the outer substitution of
+// the call being inferred when tp is that call's own type parameter (a method
+// of an instantiated generic type: Signature.OuterSubstitution).
+func (c *Checker) constraintOf(tp *types.TypeParameter) types.Type {
+	if tp == nil || tp.Constraint == nil {
+		return nil
+	}
+	if outer := c.callOuterSubstitution[tp]; outer != nil {
+		key := outerConstraintKey{tp, reflect.ValueOf(outer).Pointer()}
+		if done, ok := c.outerConstraints[key]; ok {
+			return done
+		}
+		if c.outerConstraints == nil {
+			c.outerConstraints = map[outerConstraintKey]types.Type{}
+		}
+		c.outerConstraints[key] = tp.Constraint // while substituting
+		substituted := c.substituteTypes(tp.Constraint, outer)
+		c.outerConstraints[key] = substituted
+		return substituted
+	}
+	return tp.Constraint
+}
+
+// withCallOuterSubstitution runs fn with sig's type parameters' constraints
+// substituted by its outer substitution.
+func (c *Checker) withCallOuterSubstitution(sig *types.Signature, fn func()) {
+	if sig == nil || sig.OuterSubstitution == nil {
+		fn()
+		return
+	}
+	saved := c.callOuterSubstitution
+	c.callOuterSubstitution = make(map[*types.TypeParameter]map[string]types.Type, len(saved)+len(sig.TypeParameters))
+	for tp, outer := range saved {
+		c.callOuterSubstitution[tp] = outer
+	}
+	for _, tp := range sig.TypeParameters {
+		c.callOuterSubstitution[tp] = sig.OuterSubstitution
+	}
+	defer func() { c.callOuterSubstitution = saved }()
+	fn()
 }

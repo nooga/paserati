@@ -1394,13 +1394,35 @@ func (c *Checker) isLikelyFunctionArgument(argNode parser.Expression) bool {
 		// defers context-sensitive arguments.
 		// FIXME: tsc still infers from the literal's other properties in
 		// its first pass; here the whole literal waits.
-		for _, prop := range arg.Properties {
-			if prop != nil && hasUnannotatedParams(prop.Value) {
+		return isContextSensitive(arg, 0)
+	}
+	return false
+}
+
+// isContextSensitive reports whether expr is a context-sensitive function or
+// an object or array literal holding one, at any depth, as tsc's
+// isContextSensitive does (`{ transformer: { serialize: (v) => v } }`).
+func isContextSensitive(expr parser.Expression, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	switch e := expr.(type) {
+	case *parser.ObjectLiteral:
+		for _, prop := range e.Properties {
+			if prop != nil && isContextSensitive(prop.Value, depth+1) {
 				return true
 			}
 		}
+		return false
+	case *parser.ArrayLiteral:
+		for _, el := range e.Elements {
+			if isContextSensitive(el, depth+1) {
+				return true
+			}
+		}
+		return false
 	}
-	return false
+	return hasUnannotatedParams(expr)
 }
 
 // partialObjectLiteralType types an object literal argument without its
@@ -1409,7 +1431,7 @@ func (c *Checker) isLikelyFunctionArgument(argNode parser.Expression) bool {
 func (c *Checker) partialObjectLiteralType(obj *parser.ObjectLiteral) types.Type {
 	partial := &parser.ObjectLiteral{BaseExpression: obj.BaseExpression, Token: obj.Token}
 	for _, prop := range obj.Properties {
-		if prop == nil || hasUnannotatedParams(prop.Value) {
+		if prop == nil || isContextSensitive(prop.Value, 0) {
 			continue
 		}
 		if _, computed := prop.Key.(*parser.ComputedPropertyName); computed {
@@ -1507,7 +1529,12 @@ func (c *Checker) collectRestArgConstraints(sig *types.Signature, i int, argType
 }
 
 // inferGenericFunctionCall attempts to infer type arguments for a generic function call
-func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, genericSig *types.Signature) *types.Signature {
+func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, genericSig *types.Signature) (inferred *types.Signature) {
+	c.withCallOuterSubstitution(genericSig, func() { inferred = c.inferGenericFunctionCallIn(callNode, genericSig) })
+	return inferred
+}
+
+func (c *Checker) inferGenericFunctionCallIn(callNode *parser.CallExpression, genericSig *types.Signature) *types.Signature {
 	savedSpreads := c.inferSpreadArgs
 	c.inferSpreadArgs = make(map[int]bool, len(callNode.Arguments))
 	for i, arg := range callNode.Arguments {
@@ -1802,10 +1829,11 @@ func (c *Checker) applyTypeParameterConstraints(sig *types.Signature, solution m
 		if _, inferred := solution[tp]; inferred || tp.Default != nil || tp.Constraint == nil {
 			continue
 		}
-		if c.typeContainsTypeParameter(tp.Constraint) || c.isAssignableWithExpansion(types.Unknown, tp.Constraint) {
+		constraint := tp.Constraint
+		if c.typeContainsTypeParameter(constraint) || c.isAssignableWithExpansion(types.Unknown, constraint) {
 			continue
 		}
-		solution[tp] = tp.Constraint
+		solution[tp] = constraint
 	}
 }
 
@@ -2258,6 +2286,13 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			constraints = append(constraints, c.collectConstraintsFromTypeSeen(memberType, argType, seen)...)
 		}
 
+	case *types.ConditionalType:
+		// A conditional still waiting for its type parameters is inferred
+		// to through both branches, as tsc's inferToConditionalType does
+		// (trpc's create(opts?: ValidateShape<TOptions, ...>)).
+		constraints = append(constraints, c.collectConstraintsFromTypeSeen(pType.TrueType, argType, seen)...)
+		constraints = append(constraints, c.collectConstraintsFromTypeSeen(pType.FalseType, argType, seen)...)
+
 	case *types.IndexedAccessType:
 		// R['_def']['ctx'] from S['_def']['ctx']: object from object and
 		// index from index, as tsc infers between two indexed accesses.
@@ -2701,6 +2736,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 
 	return &types.Signature{
 		TypeParameters:    sig.TypeParameters,
+		OuterSubstitution: outerSubstitutionOf(sig, solution),
 		ParameterNames:    sig.ParameterNames,
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
@@ -2709,6 +2745,27 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 		StrictVariance:    sig.StrictVariance,
 		RestParameterType: newRestParamType,
 	}
+}
+
+// outerSubstitutionOf is the substitution a generic member signature's own
+// type parameter constraints are to be read through once solution
+// instantiates the type it belongs to (Signature.OuterSubstitution).
+func outerSubstitutionOf(sig *types.Signature, solution map[*types.TypeParameter]types.Type) map[string]types.Type {
+	constrained := false
+	for _, tp := range sig.TypeParameters {
+		if tp != nil && tp.Constraint != nil {
+			constrained = true
+			break
+		}
+	}
+	if !constrained || len(solution) == 0 {
+		return sig.OuterSubstitution
+	}
+	later := make(map[string]types.Type, len(solution))
+	for tp, t := range solution {
+		later[tp.Name] = t
+	}
+	return mergeOuterSubstitution(sig.OuterSubstitution, later)
 }
 
 // substituteMemberSignature substitutes in a signature that is a member of an
@@ -2755,6 +2812,7 @@ func (c *Checker) substituteInSignature(sig *types.Signature, solution map[*type
 
 	return &types.Signature{
 		TypeParameters:    sig.TypeParameters,
+		OuterSubstitution: outerSubstitutionOf(sig, solution),
 		ParameterNames:    sig.ParameterNames,
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
