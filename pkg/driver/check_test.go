@@ -238,6 +238,45 @@ func TestCheckFilesTypeofAliasAcrossModules(t *testing.T) {
 	}
 }
 
+// A module's imports are its own: a module checked after it does not see
+// them as globals.
+func TestCheckFilesImportsDoNotLeakAsGlobals(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"b.ts":    "export const procedureTypes = ['query'] as const;\n",
+		"a.ts":    "import { procedureTypes } from './b';\nexport const n = procedureTypes.length;\n",
+		"main.ts": "import { n } from './a';\nexport type P = (typeof procedureTypes)[number];\nexport const m = n;\n",
+	}
+	for p, content := range files {
+		if err := os.WriteFile(filepath.Join(root, p), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPaserati()
+	var got []string
+	for _, r := range p.CheckFilesWithOptions([]string{"main.ts"}, DefaultCheckOptions()) {
+		if r.LoadError != nil {
+			t.Fatalf("%s: load error: %v", r.Path, r.LoadError)
+		}
+		for _, d := range r.Diagnostics {
+			got = append(got, d.Code()+" "+d.Message())
+		}
+	}
+	want := "TS2304 Cannot find name 'procedureTypes'."
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("diagnostics = %q, want only %q", got, want)
+	}
+}
+
 // A module augmentation merges into the module it names, as vitest adds its
 // snapshot matchers to Assertion: from a chunk the augmented module itself
 // imports (so the target is still being checked), through a re-export, and

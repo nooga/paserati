@@ -100,12 +100,25 @@ func (c *Checker) publishGlobals(env *Environment, before globalsSnapshot) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// A module's imports are bound in the environment it shares with the
+	// globals (see ModuleEnvironment.DefineImport), but they are its own
+	// names, not globals other files see.
+	var imported map[string]*ImportBinding
+	if c.moduleEnv != nil {
+		imported = c.moduleEnv.ImportedNames
+	}
 	for name, sym := range env.symbols {
+		if _, isImport := imported[name]; isImport {
+			continue
+		}
 		if prev, seen := before.values[name]; sym.Type != nil && (!seen || prev != sym.Type) {
 			g.values[name] = sym.Type
 		}
 	}
 	for name, t := range env.typeAliases {
+		if _, isImport := imported[name]; isImport {
+			continue
+		}
 		if prev, seen := before.types[name]; t != nil && (!seen || prev != t) {
 			g.types[name] = t
 		}
