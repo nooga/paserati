@@ -45,6 +45,11 @@ func (a *AbortControllerInitializer) InitTypes(ctx *TypeContext) error {
 	if err := ctx.DefineGlobal("AbortSignal", abortSignalConstructorType); err != nil {
 		return err
 	}
+	// The type AbortSignal names, so a declaration merging into the global
+	// interface (@types/node's) reaches AbortController's signal too.
+	if err := ctx.DefineTypeAlias("AbortSignal", abortSignalType); err != nil {
+		return err
+	}
 
 	// AbortController type
 	abortControllerType := types.NewObjectType().

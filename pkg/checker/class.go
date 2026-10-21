@@ -554,7 +554,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 			placeholderType = pending.AsClassInstance(node.Name.Value)
 		}
 	}
-	if !c.env.DefineTypeAlias(node.Name.Value, placeholderType) {
+	if c.declaredInterface(node.Name.Value) || !c.env.DefineTypeAlias(node.Name.Value, placeholderType) {
 		// An interface of the same name declared first merges with the class:
 		// the class members are added to the interface's own type.
 		existing, ok := c.env.ResolveTypeLocal(node.Name.Value)
@@ -820,6 +820,11 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	var instanceType *types.ObjectType
 	if mergeInto != nil {
 		body := mergeInto.Body.(*types.ObjectType).AsClassInstance(node.Name.Value)
+		// The interface's members (its own and those it inherits) are public
+		// members of the class, as in the non-generic merge.
+		for memberName := range body.Props() {
+			body.ClassMeta.AddMember(memberName, types.AccessPublic, false, false)
+		}
 		instanceType = c.createInstanceTypeInPlace(node.Name.Value, node.Body, heritageRef(node.SuperClass, node.SuperTypeArgs), node.Implements, body)
 	} else {
 		instanceType = c.createInstanceType(node.Name.Value, node.Body, heritageRef(node.SuperClass, node.SuperTypeArgs), node.Implements)
@@ -2553,7 +2558,9 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 				}
 			} else if genericType, isGeneric := constructorType.(*types.GenericType); isGeneric {
 				// Generic class constructor - extract instance type from body's ConstructSignatures
-				if bodyObj, ok := genericType.Body.(*types.ObjectType); ok {
+				if inst := c.defaultGenericInstance(ident); inst != nil {
+					superInstanceType = inst
+				} else if bodyObj, ok := genericType.Body.(*types.ObjectType); ok {
 					if len(bodyObj.ConstructSigs()) > 0 && bodyObj.ConstructSigs()[0].ReturnType != nil {
 						if instType, ok := bodyObj.ConstructSigs()[0].ReturnType.(*types.ObjectType); ok {
 							debugPrintf("// [Checker Class] Extracted instance type from generic constructor body for '%s'\n", ident.Value)
@@ -2836,6 +2843,10 @@ func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, i
 			return
 		}
 
+		// The class's `this` is the class here.
+		if types.MentionsTypeParameter(classProperty, types.PolymorphicThis) {
+			classProperty = c.substituteTypes(classProperty, map[string]types.Type{"this": classType})
+		}
 		// Check type compatibility - handle generic methods specially
 		if !c.isCompatibleWithInterfaceProperty(classProperty, propType) {
 			report(fmt.Sprintf("Types of property '%s' are incompatible.", propName))
@@ -3435,4 +3446,44 @@ func (c *Checker) insideClassDecl(meta *types.ClassMetadata, node parser.Node) b
 		return false
 	}
 	return tok.StartPos >= meta.DeclStart && tok.StartPos < meta.DeclEnd
+}
+
+// declaredInterface reports whether name is an interface already declared
+// in this scope, which a class of that name merges into even when it has no
+// members of its own (`interface EventEmitter extends NodeJS.EventEmitter {}`).
+func (c *Checker) declaredInterface(name string) bool {
+	existing, ok := c.env.ResolveTypeLocal(name)
+	if !ok {
+		return false
+	}
+	iface, ok := existing.(*types.ObjectType)
+	return ok && !iface.Pending && iface.ClassMeta == nil && iface.DisplayName == name
+}
+
+// defaultGenericInstance is the instance type a bare generic class name
+// stands for (`extends Base` with no type arguments): Base instantiated with
+// its type parameters' defaults. nil when name is no generic type.
+// FIXME: tsc reports TS2314 for a parameter without a default; it is any
+// here, quietly, as runtime code relies on (`class MyAgent extends Agent`).
+func (c *Checker) defaultGenericInstance(name *parser.Identifier) *types.ObjectType {
+	typeSide, found := c.env.ResolveType(name.Value)
+	if !found {
+		return nil
+	}
+	g, ok := typeSide.(*types.GenericType)
+	if !ok {
+		return nil
+	}
+	args := make([]types.Type, len(g.TypeParameters))
+	filled := make(map[string]types.Type, len(g.TypeParameters))
+	for i, tp := range g.TypeParameters {
+		args[i] = types.Any
+		if tp.Default != nil {
+			// A default may name the parameters before it (<A, B = A>).
+			args[i] = c.substituteTypes(tp.Default, filled)
+		}
+		filled[tp.Name] = args[i]
+	}
+	inst, _ := c.instantiateGenericType(g, args, nil).(*types.ObjectType)
+	return inst
 }

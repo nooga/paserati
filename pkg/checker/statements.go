@@ -330,6 +330,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			c.reportInvalidInterfaceBase(extendedInterfaceExpr, nil)
 			continue
 		}
+		if c.deferQualifiedBase(interfaceType, nil, extendedInterfaceExpr) {
+			continue
+		}
 		errorsBefore := len(c.errors)
 		extendedType := c.resolveTypeAnnotation(extendedInterfaceExpr)
 		if extendedType == nil {
@@ -353,9 +356,12 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// Copy all properties from the extended interface
 			rb := newThisRebind(extendedObjectType, interfaceType)
 			forEachEffectiveMember(extendedObjectType, func(owner *types.ObjectType, propName string) {
-				if _, own := properties[propName]; !own {
-					inherited[propName] = true
+				if _, own := properties[propName]; own && !inherited[propName] {
+					// Declared by an earlier declaration (or the class
+					// merged in): a base member does not replace it.
+					return
 				}
+				inherited[propName] = true
 				propType := owner.Props()[propName]
 				interfaceType.SetProperty(propName, c.rebindThisType(propType, rb))
 				interfaceType.SetPropertyDoc(propName, owner.PropertyDoc(propName))
@@ -384,9 +390,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				c.recordDerived(baseObject, interfaceType)
 				rb := newThisRebind(baseObject, interfaceType)
 				forEachEffectiveMember(baseObject, func(owner *types.ObjectType, propName string) {
-					if _, own := properties[propName]; !own {
-						inherited[propName] = true
+					if _, own := properties[propName]; own && !inherited[propName] {
+						return
 					}
+					inherited[propName] = true
 					propType := owner.Props()[propName]
 					interfaceType.SetProperty(propName, c.rebindThisType(propType, rb))
 					interfaceType.SetPropertyDoc(propName, owner.PropertyDoc(propName))
@@ -716,6 +723,10 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 
 	// Handle extends clause with generic environment
 	for _, extendedInterfaceExpr := range node.Extends {
+		generic, _ := c.lookupTypeNoPending(node.Name.Value).(*types.GenericType)
+		if c.deferQualifiedBase(bodyType, generic, extendedInterfaceExpr) {
+			continue
+		}
 		// Resolve the extended interface type expression in the generic environment first
 		extendedType := c.resolveTypeAnnotation(extendedInterfaceExpr)
 		if extendedType == nil {
@@ -921,10 +932,18 @@ type thisRebind struct {
 	from, to *types.ObjectType
 	visited  map[types.Type]types.Type
 	reach    *types.Reacher
+	// this replaces from: to, or the polymorphic this when to is a class
+	// instance type (an interface merged into a class), whose `this` is the
+	// receiver's type.
+	this types.Type
 }
 
 func newThisRebind(from, to *types.ObjectType) *thisRebind {
-	return &thisRebind{from: from, to: to, visited: make(map[types.Type]types.Type), reach: types.NewReacher(from)}
+	var this types.Type = to
+	if to != nil && to.ClassMeta != nil && to.ClassMeta.IsClassInstance {
+		this = &types.TypeParameterType{Parameter: types.PolymorphicThis}
+	}
+	return &thisRebind{from: from, to: to, visited: make(map[types.Type]types.Type), reach: types.NewReacher(from), this: this}
 }
 
 func (c *Checker) rebindThisType(t types.Type, rb *thisRebind) types.Type {
@@ -933,7 +952,7 @@ func (c *Checker) rebindThisType(t types.Type, rb *thisRebind) types.Type {
 		return nil
 	}
 	if t == from {
-		return to
+		return rb.this
 	}
 
 	switch typ := t.(type) {
@@ -1025,7 +1044,18 @@ func (c *Checker) rebindThisType(t types.Type, rb *thisRebind) types.Type {
 		for i, elementType := range typ.ElementTypes {
 			newElementTypes[i] = c.rebindThisType(elementType, rb)
 		}
-		return &types.TupleType{ElementTypes: newElementTypes}
+		cp := *typ
+		cp.ElementTypes = newElementTypes
+		cp.RestElementType = c.rebindThisType(typ.RestElementType, rb)
+		return &cp
+
+	case *types.GenericType:
+		// A generic method (`on<K>(...): this`).
+		if body := c.rebindThisType(typ.Body, rb); body != typ.Body {
+			cp := *typ
+			cp.Body = body
+			return &cp
+		}
 	}
 
 	return t

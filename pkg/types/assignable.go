@@ -1209,6 +1209,10 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 				targetPropType = NewUnionType(targetPropType, Undefined)
 			}
 		}
+		// A class member's `this` is the source being related (tsc
+		// instantiates both sides' this types with the source).
+		sourcePropType = bindPolymorphicThis(sourcePropType, sourceObj)
+		targetPropType = bindPolymorphicThis(targetPropType, sourceObj)
 		if !r.isAssignable(sourcePropType, targetPropType) {
 			return false
 		}
@@ -2010,4 +2014,48 @@ func constructorVisibilitiesCompatible(source, target *ObjectType) bool {
 		return sm.ConstructorAccess != AccessPrivate
 	}
 	return sm.ConstructorAccess == AccessPublic
+}
+
+// bindPolymorphicThis replaces the polymorphic `this` of a class member's
+// type with receiver. Only `this` written as a member's type or a method's
+// parameter or return type (m(): this) is looked for.
+func bindPolymorphicThis(t Type, receiver Type) Type {
+	if !mentionsThisShallow(t) {
+		return t
+	}
+	return substituteTypeMemo(t, map[*TypeParameter]Type{PolymorphicThis: receiver}, make(map[*ObjectType]*ObjectType))
+}
+
+func mentionsThisShallow(t Type) bool {
+	isThis := func(t Type) bool {
+		if tp, ok := t.(*TypeParameterType); ok {
+			return tp.Parameter == PolymorphicThis
+		}
+		if u, ok := t.(*UnionType); ok {
+			for _, m := range u.Types {
+				if tp, ok := m.(*TypeParameterType); ok && tp.Parameter == PolymorphicThis {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if isThis(t) {
+		return true
+	}
+	o, ok := t.(*ObjectType)
+	if !ok {
+		return false
+	}
+	for _, sig := range o.CallSigs() {
+		if isThis(sig.ReturnType) || isThis(sig.RestParameterType) {
+			return true
+		}
+		for _, p := range sig.ParameterTypes {
+			if isThis(p) {
+				return true
+			}
+		}
+	}
+	return false
 }

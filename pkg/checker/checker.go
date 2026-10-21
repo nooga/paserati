@@ -653,6 +653,11 @@ type Checker struct {
 	// Computed key expressions in class/interface bodies are checked after Pass 3
 	// so that const/let declarations earlier in the file are already in scope.
 	deferredComputedKeyChecks []deferredComputedKeyCheck
+	// deferredHeritages are interface bases in namespaces not declared yet
+	// (see deferred_heritage.go); resolvingDeferredHeritage is set while
+	// they are resolved.
+	deferredHeritages         []deferredHeritage
+	resolvingDeferredHeritage bool
 	deferredHeritageChecks    []deferredHeritageCheck
 	typeRefNode               parser.Node                    // type reference being instantiated, for arity diagnostics
 	mentionScratch            map[types.Type]bool            // objectMayMention's visited set
@@ -1836,6 +1841,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.bindSelfImport(imp)
 	}
 	c.pendingSelfImports = nil
+	c.resolveDeferredHeritages()
 	debugPrintf("// --- Checker - Pass 1: Complete ---\n")
 
 	// --- Pass 2: Initial Declarations (Variables & Function Signatures) ---
