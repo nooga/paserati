@@ -4193,8 +4193,22 @@ func (c *Checker) substituteTypesPreservingInferVisited(typ types.Type, substitu
 		return types.NewUnionType(substitutedTypes...)
 
 	case *types.ObjectType:
+		// A callable with members besides its call signatures is copied by
+		// the regular substitution, which keeps them.
+		if len(t.CallSigs()) > 0 && (len(t.Props()) > 0 || len(t.ConstructSigs()) > 0 || len(t.IndexSigs()) > 0) {
+			return c.substituteTypesWithVisited(typ, substitution, visited)
+		}
 		// For function types, recursively handle call signatures
 		if len(t.CallSigs()) > 0 {
+			// A callable may return itself (`type C = () => C`): the copy
+			// is memoized before its signatures are substituted.
+			if done, ok := visited[t]; ok && visited != nil {
+				return done
+			}
+			newObj := types.NewObjectType()
+			if visited != nil {
+				visited[t] = newObj
+			}
 			newSigs := make([]*types.Signature, len(t.CallSigs()))
 			for i, sig := range t.CallSigs() {
 				// Substitute in signature parameters and return type while preserving infer
@@ -4216,8 +4230,6 @@ func (c *Checker) substituteTypesPreservingInferVisited(typ types.Type, substitu
 				}
 			}
 
-			// Create new ObjectType with substituted signatures
-			newObj := types.NewObjectType()
 			for _, sig := range newSigs {
 				newObj.WithCallSignature(sig)
 			}

@@ -99,6 +99,10 @@ type ModuleLoader interface {
 	// its imports in the background, if parse-ahead is enabled.
 	ParseAhead(specifier, fromPath string)
 
+	// GlobalAugmentingModules waits for the parses ahead and returns the
+	// paths of the parsed modules with a top-level `declare global`.
+	GlobalAugmentingModules() []string
+
 	// SetAmbientModules installs the lookup for modules that ambient module
 	// declarations (`declare module "fs" { ... }`) declare: a non-relative
 	// specifier it answers is that module, ahead of the resolvers.

@@ -152,6 +152,50 @@ func TestCheckFilesGlobalDeclarations(t *testing.T) {
 	}
 }
 
+// A global declared by a module loaded late (vitest's index.d.ts imports
+// 'chai' after the chunk that maps over Chai.Assertion) is visible to the
+// modules checked before it: tsc binds every file's globals first.
+func TestCheckFilesGlobalDeclaredLater(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"lib.d.ts": "type VA<A> = { [K in keyof A]: A[K] extends Chai.Assertion ? Asrt : A[K] };\n" +
+			"export interface Asrt extends VA<Chai.Assertion> { toBe(v: any): void; }\n" +
+			"export declare function expect(v: any): Asrt;\n",
+		"chai.d.ts": "declare global { namespace Chai { interface Assertion { not: Assertion; } } }\nexport {};\n",
+		"idx.d.ts":  "export * from './lib';\nimport './chai';\n",
+		"main.ts":   "import { expect } from './idx';\nexpect(1).not.toBe(2);\nconst bad: number = expect(1).not;\nexport {};\n",
+	}
+	for p, content := range files {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPaserati()
+	var got []string
+	for _, r := range p.CheckFilesWithOptions([]string{"main.ts"}, DefaultCheckOptions()) {
+		if r.LoadError != nil {
+			t.Fatalf("%s: load error: %v", r.Path, r.LoadError)
+		}
+		for _, d := range r.Diagnostics {
+			got = append(got, d.Code()+" "+d.Message())
+		}
+	}
+	want := "TS2322 Type 'Asrt' is not assignable to type 'number'."
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("diagnostics = %q, want only %q", got, want)
+	}
+}
+
 // A module augmentation merges into the module it names, as vitest adds its
 // snapshot matchers to Assertion: from a chunk the augmented module itself
 // imports (so the target is still being checked), through a re-export, and

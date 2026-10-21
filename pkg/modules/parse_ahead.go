@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"sort"
 	"sync"
 
 	paseratiErrors "github.com/nooga/paserati/pkg/errors"
@@ -27,6 +28,10 @@ type parseAhead struct {
 
 	// slots bounds the parses running at once.
 	slots chan struct{}
+
+	// pending counts the parses started and not yet finished, with the
+	// imports they start.
+	pending sync.WaitGroup
 }
 
 // aheadParse is one module's background parse; its fields are set before
@@ -61,8 +66,49 @@ func (ml *moduleLoader) EnableParseAhead() {
 // enabled.
 func (ml *moduleLoader) ParseAhead(specifier, fromPath string) {
 	if ml.ahead != nil {
+		ml.ahead.pending.Add(1)
 		go ml.ahead.start(specifier, fromPath)
 	}
+}
+
+// GlobalAugmentingModules waits for every parse ahead to finish and returns
+// the paths, sorted, of the parsed modules that declare a top-level
+// `declare global { ... }`. tsc binds the globals of every file before it
+// checks any; loading these first gives the modules checked before them
+// the same view.
+func (ml *moduleLoader) GlobalAugmentingModules() []string {
+	if ml.ahead == nil {
+		return nil
+	}
+	pa := ml.ahead
+	pa.pending.Wait()
+	pa.mu.Lock()
+	defer pa.mu.Unlock()
+	var paths []string
+	for path, p := range pa.parses {
+		if p.readErr == nil && len(p.errs) == 0 && declaresGlobal(p.program) {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// declaresGlobal reports whether program has a top-level `declare global`.
+func declaresGlobal(program *parser.Program) bool {
+	if program == nil {
+		return false
+	}
+	for _, stmt := range program.Statements {
+		var node parser.Node = stmt
+		if es, ok := stmt.(*parser.ExpressionStatement); ok {
+			node = es.Expression
+		}
+		if ns, ok := node.(*parser.NamespaceDeclaration); ok && ns.AmbientModule && ns.Name != nil && ns.Name.Value == "global" {
+			return true
+		}
+	}
+	return false
 }
 
 // start resolves specifier and parses the file it names, unless that file
@@ -70,6 +116,7 @@ func (ml *moduleLoader) ParseAhead(specifier, fromPath string) {
 // ordinary way (a native module, an unresolvable specifier) is left to the
 // loader.
 func (pa *parseAhead) start(specifier, fromPath string) {
+	defer pa.pending.Done()
 	resolved, err := pa.ml.resolveModule(specifier, fromPath)
 	if err != nil || resolved.ResolvedPath == "" || resolved.Source == nil {
 		return
@@ -105,6 +152,7 @@ func (pa *parseAhead) start(specifier, fromPath string) {
 func (pa *parseAhead) startImports(src *source.SourceFile, program *parser.Program, path string) {
 	if src != nil {
 		for _, ref := range TripleSlashReferences(src.Content) {
+			pa.pending.Add(1)
 			go pa.start(ref, path)
 		}
 	}
@@ -115,6 +163,7 @@ func (pa *parseAhead) startImports(src *source.SourceFile, program *parser.Progr
 		if spec.Attributes != nil && spec.Attributes["type"] == "json" {
 			continue
 		}
+		pa.pending.Add(1)
 		go pa.start(spec.ModulePath, path)
 	}
 }

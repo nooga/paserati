@@ -134,6 +134,12 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 		p.moduleLoader.ParseAhead(r.spec, from)
 	}
 
+	// Globals declared by any module (`declare global`) are in place before
+	// the modules that use them without importing their declarer are
+	// checked, as tsc binds every file's globals first.
+	for _, path := range p.moduleLoader.GlobalAugmentingModules() {
+		_, _ = p.moduleLoader.LoadModule(path, from)
+	}
 	for _, spec := range opts.Types {
 		if _, err := p.moduleLoader.LoadModule(spec, typesFrom); err != nil {
 			loadErrors = append(loadErrors, FileDiagnostics{Path: spec, LoadError: fmt.Errorf("cannot find type definition file for '%s': %w", spec, err)})
