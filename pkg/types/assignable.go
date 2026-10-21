@@ -657,6 +657,9 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 				return false
 			}
 		}
+		if rest, ok := sourceTuple.RestElementType.(*ArrayType); ok {
+			return r.isAssignable(rest.ElementType, targetArray.ElementType)
+		}
 		return true
 	}
 
@@ -683,6 +686,27 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 		// Check if source has extra elements that target can't handle
 		if sourceLen > targetLen && targetTuple.RestElementType == nil {
 			return false
+		}
+		// The source's extra elements and its rest go into the target's
+		// rest element. A rest that is not a plain array (a variadic
+		// `...T`) is not related here.
+		targetRest, targetRestIsArray := targetTuple.RestElementType.(*ArrayType)
+		if targetTuple.RestElementType != nil && !targetRestIsArray {
+			return true
+		}
+		for i := targetLen; i < sourceLen; i++ {
+			if !r.isAssignable(sourceTuple.ElementTypes[i], targetRest.ElementType) {
+				return false
+			}
+		}
+		if sourceTuple.RestElementType != nil {
+			sourceRest, ok := sourceTuple.RestElementType.(*ArrayType)
+			if !ok {
+				return true
+			}
+			if targetTuple.RestElementType == nil || !r.isAssignable(sourceRest.ElementType, targetRest.ElementType) {
+				return false
+			}
 		}
 
 		return true

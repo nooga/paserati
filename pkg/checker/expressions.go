@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
+	"slices"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
@@ -129,6 +130,10 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 		}
 
 		hasRestElement := tupleType.RestElementType != nil
+		if hasTopLevelSpread(node) {
+			c.checkTupleLiteralWithSpreads(node, tupleType)
+			return
+		}
 		maxAllowed := len(tupleType.ElementTypes)
 		if hasRestElement {
 			maxAllowed = -1 // No upper limit with rest element
@@ -232,8 +237,19 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 			}
 			return
 		} else {
-			// Elements don't match - fall back to regular array checking but don't return error
-			// (the regular checking will handle type errors)
+			// Still a tuple of what its elements are, as in tsc: the
+			// mismatching element is then reported, and the others keep
+			// their contextual types (`[[v], [null, ...reg]]`).
+			if !hasTopLevelSpread(node) {
+				elemTypes := make([]types.Type, len(node.Elements))
+				for i, elemNode := range node.Elements {
+					if elemTypes[i] = elemNode.GetComputedType(); elemTypes[i] == nil {
+						elemTypes[i] = types.Any
+					}
+				}
+				node.SetComputedType(&types.TupleType{ElementTypes: elemTypes})
+				return
+			}
 			debugPrintf("// [Checker ArrayLitContext] Element types don't match tuple. Falling back to regular array checking.\n")
 			c.checkArrayLiteral(node)
 			return
@@ -4588,4 +4604,90 @@ func (c *Checker) checkConstructorVisibility(node *parser.NewExpression, ctor ty
 	} else {
 		c.addErrorWithCode(node, "TS2674", fmt.Sprintf("Constructor of class '%s' is protected and only accessible within the class declaration.", name))
 	}
+}
+
+// hasTopLevelSpread reports whether an array literal spreads anything into
+// itself.
+func hasTopLevelSpread(lit *parser.ArrayLiteral) bool {
+	for _, e := range lit.Elements {
+		if _, isSpread := e.(*parser.SpreadElement); isSpread {
+			return true
+		}
+	}
+	return false
+}
+
+// checkTupleLiteralWithSpreads types an array literal with spreads against a
+// tuple, as tsc does: a spread of a fixed-length tuple fills the positions it
+// covers (`[null, ...reg]` against `[null | number, Kind, number]`), any other
+// spread and what follows it go into the rest (`[[obj], ...chunks]`). Each
+// element takes the contextual type of its position, and the literal is a
+// tuple of what it holds.
+func (c *Checker) checkTupleLiteralWithSpreads(node *parser.ArrayLiteral, tuple *types.TupleType) {
+	fixed := len(tuple.ElementTypes)
+	var restElem types.Type
+	if arr, ok := tuple.RestElementType.(*types.ArrayType); ok {
+		restElem = arr.ElementType
+	}
+	contextAt := func(pos int) types.Type {
+		if pos < fixed {
+			return tuple.ElementTypes[pos]
+		}
+		return restElem
+	}
+	var elemTypes, restTypes []types.Type
+	inRest := false
+	add := func(t types.Type) {
+		if inRest {
+			restTypes = append(restTypes, t)
+		} else {
+			elemTypes = append(elemTypes, t)
+		}
+	}
+	for _, e := range node.Elements {
+		spread, isSpread := e.(*parser.SpreadElement)
+		if !isSpread {
+			if expected := contextAt(len(elemTypes)); expected != nil && !inRest {
+				c.visitWithContext(e, &ContextualType{ExpectedType: expected, IsContextual: true})
+			} else if inRest && restElem != nil {
+				c.visitWithContext(e, &ContextualType{ExpectedType: restElem, IsContextual: true})
+			} else {
+				c.visit(e)
+			}
+			t := e.GetComputedType()
+			if t == nil {
+				t = types.Any
+			}
+			add(t)
+			continue
+		}
+		c.visit(spread.Argument)
+		spreadType := spread.Argument.GetComputedType()
+		if spreadType == nil {
+			spreadType = types.Any
+		}
+		spread.SetComputedType(spreadType)
+		t := stripReadonlyArrays(spreadType)
+		if st, isTuple := t.(*types.TupleType); isTuple && st.RestElementType == nil && !slices.Contains(st.OptionalElements, true) {
+			for _, et := range st.ElementTypes {
+				add(et)
+			}
+			continue
+		}
+		if arr, isArray := t.(*types.ArrayType); isArray {
+			t = arr.ElementType
+		} else if t != types.Any && c.isSpreadableIterableType(t) {
+			t = c.getSpreadElementType(t)
+		} else if t != types.Any {
+			c.reportNotIterable(spread.Argument, t)
+			t = types.Any
+		}
+		inRest = true
+		restTypes = append(restTypes, t)
+	}
+	result := &types.TupleType{ElementTypes: elemTypes}
+	if len(restTypes) > 0 {
+		result.RestElementType = &types.ArrayType{ElementType: types.NewUnionType(restTypes...)}
+	}
+	node.SetComputedType(result)
 }
