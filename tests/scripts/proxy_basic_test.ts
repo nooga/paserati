@@ -13,7 +13,7 @@ const handler = {
   },
 };
 
-const proxy = new Proxy(target, handler);
+const proxy: any = new Proxy(target, handler);
 
 console.log("proxy.x:", proxy.x);
 proxy.z = 3;

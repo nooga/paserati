@@ -19,14 +19,18 @@ func (p *ProxyInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Proxy constructor type with both call signature and static methods
 	proxyConstructor := types.NewObjectType()
 
-	// Add call signature (for new Proxy(...))
-	callSignature := &types.Signature{
-		ParameterTypes: []types.Type{types.Any, types.Any},
-		ReturnType:     types.Any,
+	// new <T extends object>(target: T, handler): T, as lib.d.ts's
+	// ProxyConstructor (which cannot be called without new).
+	target := &types.TypeParameter{Name: "T", Constraint: types.NonPrimitive}
+	constructSignature := &types.Signature{
+		TypeParameters: []*types.TypeParameter{target},
+		ParameterNames: []string{"target", "handler"},
+		ParameterTypes: []types.Type{&types.TypeParameterType{Parameter: target}, types.Any},
+		ReturnType:     &types.TypeParameterType{Parameter: target},
 		OptionalParams: []bool{false, false},
 	}
 	proxyConstructor.Materialize()
-	proxyConstructor.CallSignatures = []*types.Signature{callSignature}
+	proxyConstructor.ConstructSignatures = []*types.Signature{constructSignature}
 
 	// Add Proxy.revocable static method
 	revocableReturnType := types.NewObjectType()

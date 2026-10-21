@@ -7,7 +7,7 @@
 // one (issue #65 followup: stale frame.ip, not the swallow bug itself).
 let results: string[] = [];
 
-const p1 = new Proxy({}, { has() { throw new TypeError("nope"); } });
+const p1: any = new Proxy({}, { has() { throw new TypeError("nope"); } });
 let r1 = "not caught";
 try {
   "a" in p1;
@@ -16,7 +16,7 @@ try {
 }
 results.push(r1);
 
-const p2 = new Proxy({}, { deleteProperty() { throw new TypeError("nope"); } });
+const p2: any = new Proxy({}, { deleteProperty() { throw new TypeError("nope"); } });
 let r2 = "not caught";
 try {
   delete p2.x;

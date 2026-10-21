@@ -3,7 +3,7 @@
 class Handler {
   private accessCount = 0;
 
-  makeProxy(target: object) {
+  makeProxy(target: object): any {
     const self = this;
     return new Proxy(target, {
       get(t, k) {
