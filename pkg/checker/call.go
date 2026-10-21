@@ -608,6 +608,13 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	}
 
 	funcNodeType = c.stripNullishCallee(node, funcNodeType)
+	// A callee typed by an alias imported from a module in an import cycle
+	// before it was declared (`formatter: AnyProcedureErrorFormatter`).
+	if ref, ok := funcNodeType.(*types.GenericTypeAliasForwardReference); ok {
+		if resolved := c.resolveTypeAlias(ref); resolved != nil {
+			funcNodeType = resolved
+		}
+	}
 	c.markContextuallyTypedArguments(node.Arguments, funcNodeType)
 	if c.noImplicitAny {
 		c.markFunctionsUnder(node.Function, 5) // an immediately invoked function takes its parameter types from the arguments
@@ -1884,6 +1891,21 @@ const (
 	maxInferWalkDepth = 100
 )
 
+// aliasReferenceIsTypeAlias reports whether ref names a generic type alias
+// whose body is not an object type.
+func (c *Checker) aliasReferenceIsTypeAlias(ref *types.GenericTypeAliasForwardReference) bool {
+	t, ok := c.env.ResolveType(ref.AliasName)
+	if ref.Scope != nil {
+		t, ok = ref.Scope(ref.AliasName)
+	}
+	g, isGeneric := t.(*types.GenericType)
+	if !ok || !isGeneric {
+		return false
+	}
+	_, isObject := g.Body.(*types.ObjectType)
+	return !isObject
+}
+
 // aliasReferenceNames reports whether ref names generic.
 func (c *Checker) aliasReferenceNames(ref *types.GenericTypeAliasForwardReference, generic *types.GenericType) bool {
 	if ref.Scope != nil {
@@ -1929,6 +1951,15 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 				constraints = append(constraints, c.collectConstraintsFromTypeSeen(pa, aObj.GenericArgs[i], seen)...)
 			}
 			return constraints
+		}
+		// A type alias infers through its instantiation:
+		// `inferRouterContext<TRouter>` is TRouter['_def']['_config']['$types']['ctx'].
+		// (Interfaces are left alone: their instances relate member by
+		// member, and instantiating every one of zod's is costly.)
+		if c.aliasReferenceIsTypeAlias(ref) {
+			if inst := c.instantiateAliasReference(ref); inst != nil && inst != paramType {
+				return c.collectConstraintsFromTypeSeen(inst, argType, seen)
+			}
 		}
 	}
 	pObj, _ := paramType.(*types.ObjectType)
@@ -2199,11 +2230,28 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			constraints = append(constraints, c.collectConstraintsFromTypeSeen(memberType, argType, seen)...)
 		}
 
+	case *types.IndexedAccessType:
+		// R['_def']['ctx'] from S['_def']['ctx']: object from object and
+		// index from index, as tsc infers between two indexed accesses.
+		if a, ok := argType.(*types.IndexedAccessType); ok {
+			constraints = append(constraints, c.collectConstraintsFromTypeSeen(pType.ObjectType, a.ObjectType, seen)...)
+			constraints = append(constraints, c.collectConstraintsFromTypeSeen(pType.IndexType, a.IndexType, seen)...)
+		}
+
 	case *types.UnionType:
 		// T | undefined (one naked type parameter beside fixed members): the
 		// argument's members matching a fixed member are left out, and the
-		// rest infers T, as tsc's inferFromMatchingTypes does.
-		if tp, fixed := c.nakedTypeParamUnion(pType); tp != nil {
+		// rest infers T, as tsc's inferFromMatchingTypes does. So does an
+		// indexed access beside fixed members (inferRouterContext<R> |
+		// undefined).
+		var target types.Type
+		tp, fixed := c.nakedTypeParamUnion(pType)
+		if tp != nil {
+			target = tp
+		} else if ia, iaFixed := c.indexedAccessUnion(pType); ia != nil {
+			target, fixed = ia, iaFixed
+		}
+		if target != nil {
 			var rest []types.Type
 			argMembers := []types.Type{argType}
 			if au, ok := argType.(*types.UnionType); ok {
@@ -2226,7 +2274,7 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 				if len(rest) > 1 {
 					src = types.NewUnionType(rest...)
 				}
-				constraints = append(constraints, c.collectConstraintsFromTypeSeen(tp, src, seen)...)
+				constraints = append(constraints, c.collectConstraintsFromTypeSeen(target, src, seen)...)
 			}
 			break
 		}
@@ -3244,6 +3292,31 @@ func (c *Checker) nakedTypeParamUnion(u *types.UnionType) (*types.TypeParameterT
 		return nil, nil
 	}
 	return tp, fixed
+}
+
+// indexedAccessUnion is nakedTypeParamUnion for a union whose one generic
+// member is an indexed access.
+func (c *Checker) indexedAccessUnion(u *types.UnionType) (*types.IndexedAccessType, []types.Type) {
+	var ia *types.IndexedAccessType
+	var fixed []types.Type
+	for _, m := range u.Types {
+		// An indexed access left unresolved is generic.
+		if t, ok := m.(*types.IndexedAccessType); ok {
+			if ia != nil {
+				return nil, nil
+			}
+			ia = t
+			continue
+		}
+		if c.typeContainsTypeParameter(m) {
+			return nil, nil
+		}
+		fixed = append(fixed, m)
+	}
+	if len(fixed) == 0 {
+		return nil, nil
+	}
+	return ia, fixed
 }
 
 // constrainedTypeParams maps each type parameter with a literal-like
