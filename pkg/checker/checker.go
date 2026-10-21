@@ -775,6 +775,7 @@ func newCheckerInEnv(globalEnv *Environment) *Checker {
 	c.rel.ConditionalConstraint = func(ct *types.ConditionalType) types.Type { return c.baseConstraint(ct, 0) }
 	c.rel.ApparentMapped = c.apparentMappedType
 	c.rel.ResolveClassRef = c.resolveParameterizedForwardReference
+	c.rel.ResolveTypeof = func(q *types.TypeofType) types.Type { return c.resolveTypeofTypeIfNeeded(q) }
 	return c
 }
 
@@ -5296,6 +5297,11 @@ func (c *Checker) contextualTypeFromUnion(node parser.Node, union *types.UnionTy
 				}
 			}
 		}
+		// Tuples of other lengths do not fit: `[v]` against
+		// `[unknown] | []` is the first (trpc's jsonl EncodedValue).
+		if len(candidates) > 1 {
+			candidates = tupleCandidatesByArity(n, candidates)
+		}
 	case *parser.ObjectLiteral:
 		for _, t := range union.Types {
 			switch ot := t.(type) {
@@ -6689,4 +6695,34 @@ func (c *Checker) reportUnresolvedModule(source *parser.StringLiteral) {
 	if _, err := c.moduleLoader.LoadModule(source.Value, c.currentFilePath()); err != nil {
 		c.addErrorWithCode(source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", source.Value))
 	}
+}
+
+// tupleCandidatesByArity drops the tuple candidates an array literal without
+// spreads has too few or too many elements for.
+func tupleCandidatesByArity(lit *parser.ArrayLiteral, candidates []types.Type) []types.Type {
+	for _, e := range lit.Elements {
+		if _, isSpread := e.(*parser.SpreadElement); isSpread {
+			return candidates
+		}
+	}
+	n := len(lit.Elements)
+	var kept []types.Type
+	for _, t := range candidates {
+		if tuple, ok := t.(*types.TupleType); ok {
+			required := 0
+			for i := range tuple.ElementTypes {
+				if i >= len(tuple.OptionalElements) || !tuple.OptionalElements[i] {
+					required = i + 1
+				}
+			}
+			if n < required || tuple.RestElementType == nil && n > len(tuple.ElementTypes) {
+				continue
+			}
+		}
+		kept = append(kept, t)
+	}
+	if len(kept) == 0 {
+		return candidates
+	}
+	return kept
 }

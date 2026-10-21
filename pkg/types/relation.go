@@ -47,6 +47,11 @@ type Relation struct {
 	// it names. The checker supplies it.
 	ResolveClassRef func(*ParameterizedForwardReferenceType) Type
 
+	// ResolveTypeof resolves a `typeof x` query written before x was typed
+	// (a hoisted function's annotation), or returns it unchanged. The
+	// checker supplies it.
+	ResolveTypeof func(*TypeofType) Type
+
 	// maybe holds, like tsc's maybeKeys, the (source, target) pairs
 	// isAssignable is relating or has related within the current top-level
 	// query, with their index in maybeStack. A pair in it relates by

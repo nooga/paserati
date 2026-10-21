@@ -412,7 +412,7 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				c.typeRefNode = node
 				return c.instantiateGenericType(genericType, []types.Type{}, []parser.Expression{})
 			}
-			return resolvedAlias
+			return c.settleAliasTypeofs(resolvedAlias)
 		}
 
 		// Special case: 'Object' (capital O) as a type annotation means the Object interface,
@@ -2442,6 +2442,35 @@ func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 	}
 	// Not a TypeofType, return as-is
 	return c.resolveDeferredTypeofIndex(t, false)
+}
+
+// settleAliasTypeofs resolves the `typeof` queries an alias declared before
+// their values were typed still holds, alone or as union members (trpc's
+// `const X = 0; type X = typeof X;` and a union of such aliases).
+func (c *Checker) settleAliasTypeofs(t types.Type) types.Type {
+	switch tt := t.(type) {
+	case *types.TypeofType:
+		return c.resolveTypeofTypeIfNeeded(t)
+	case *types.UnionType:
+		var members []types.Type
+		for i, m := range tt.Types {
+			if _, ok := m.(*types.TypeofType); !ok {
+				continue
+			}
+			r := c.resolveTypeofTypeIfNeeded(m)
+			if r == m {
+				continue
+			}
+			if members == nil {
+				members = append([]types.Type(nil), tt.Types...)
+			}
+			members[i] = r
+		}
+		if members != nil {
+			return types.NewUnionType(members...)
+		}
+	}
+	return t
 }
 
 // resolveDeferredTypeofIndex resolves `(typeof X)[K]`, alone or in a union,

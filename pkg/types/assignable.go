@@ -179,6 +179,18 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 	}
 	source = simplifyKeyof(source)
 	target = simplifyKeyof(target)
+	if r.ResolveTypeof != nil {
+		if q, ok := source.(*TypeofType); ok {
+			if resolved := r.ResolveTypeof(q); resolved != source {
+				return r.IsAssignable(resolved, target)
+			}
+		}
+		if q, ok := target.(*TypeofType); ok {
+			if resolved := r.ResolveTypeof(q); resolved != target {
+				return r.IsAssignable(source, resolved)
+			}
+		}
+	}
 	if related, decided := homomorphicMappedRelated(source, target); decided {
 		return related
 	}
