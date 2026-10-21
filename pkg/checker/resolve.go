@@ -238,6 +238,39 @@ func reachesPending(t types.Type, depth int, seen map[types.Type]bool) bool {
 	return false
 }
 
+// reachesUnresolvedTypeof reports whether t reaches a `typeof x` whose x has
+// no type yet (a const declared after the interface whose heritage names
+// `(typeof xs)[number]`): a check against t waits for it.
+func (c *Checker) reachesUnresolvedTypeof(t types.Type, depth int) bool {
+	if t == nil || depth > 6 {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.TypeofType:
+		_, unresolved := c.resolveTypeofTypeIfNeeded(tt).(*types.TypeofType)
+		return unresolved
+	case *types.IndexedAccessType:
+		return c.reachesUnresolvedTypeof(tt.ObjectType, depth+1) || c.reachesUnresolvedTypeof(tt.IndexType, depth+1)
+	case *types.KeyofType:
+		return c.reachesUnresolvedTypeof(tt.OperandType, depth+1)
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if c.reachesUnresolvedTypeof(m, depth+1) {
+				return true
+			}
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if c.reachesUnresolvedTypeof(m, depth+1) {
+				return true
+			}
+		}
+	case *types.ArrayType:
+		return c.reachesUnresolvedTypeof(tt.ElementType, depth+1)
+	}
+	return false
+}
+
 // mentionsUndeclared reports whether t refers to a class not filled in yet or
 // a generic the program declares later and that cannot be instantiated yet.
 func (c *Checker) mentionsUndeclared(t types.Type, depth int) bool {
@@ -1767,7 +1800,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 					argType.String(), constraintType.String())
 			}
 
-			if reachesPending(argType, 0, nil) || reachesPending(constraintType, 0, nil) {
+			if reachesPending(argType, 0, nil) || reachesPending(constraintType, 0, nil) || c.reachesUnresolvedTypeof(constraintType, 0) {
 				// A class or interface not filled in yet is reachable (a
 				// hoisted alias names it, or `interface BB extends AA<BB>`
 				// names BB in its own heritage): its members are filled in
@@ -1784,6 +1817,14 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 				c.deferRelationCheck(func() {
 					if satisfied() {
 						return
+					}
+					// `(typeof xs)[number]` reads as its value once xs is typed.
+					if ia, ok := constraint.(*types.IndexedAccessType); ok && !c.reachesUnresolvedTypeof(constraint, 0) {
+						if _, wasTypeof := ia.ObjectType.(*types.TypeofType); wasTypeof {
+							if computed := c.computeIndexedAccessType(c.resolveTypeofTypeIfNeeded(ia.ObjectType), ia.IndexType); computed != nil {
+								constraint = computed
+							}
+						}
 					}
 					msg := fmt.Sprintf("Type '%s' does not satisfy the constraint '%s'.", arg.String(), constraint.String())
 					if argNode != nil {
