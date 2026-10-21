@@ -188,7 +188,7 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 
 	case *ObjectType:
 		// Deep copy and substitute in properties
-		if done, ok := memo[t]; ok {
+		if done, ok := memo[t]; ok && done != mentionsMarker {
 			return done
 		}
 		if t.Pending {
@@ -581,26 +581,34 @@ func substituteSignatureMemo(sig *Signature, substitutions map[*TypeParameter]Ty
 	}
 }
 
-// mentionsSubstituted is mentionsTypeParameter for one substitution. An
-// object type the substitution leaves as it is maps to itself in memo: when a
-// walk finds no parameter, no object it visited mentions one either, so each
-// is recorded and not walked again.
+// mentionsMarker is memo's entry for an object type a substitution has found
+// to mention one of its parameters but has not copied yet.
+var mentionsMarker = &ObjectType{}
+
+// mentionsSubstituted is mentionsTypeParameter for one substitution, with
+// every object type's answer remembered in memo: an object the substitution
+// leaves as it is maps to itself, one it will copy to mentionsMarker (or to
+// its copy). Objects on a cycle are settled together, as Tarjan's algorithm
+// settles a strongly connected component, so substituting into each member of
+// a large graph does not walk the graph again.
 func mentionsSubstituted(t Type, substitutions map[*TypeParameter]Type, memo map[*ObjectType]*ObjectType) bool {
 	if o, ok := t.(*ObjectType); ok {
 		if done, ok := memo[o]; ok {
 			return done != o
 		}
 	}
-	visited := make(map[Type]bool)
-	if mentionsTypeParameter(t, substitutions, visited, nil, nil) {
-		return true
-	}
-	for v := range visited {
-		if o, ok := v.(*ObjectType); ok && !o.Pending {
-			if _, ok := memo[o]; !ok {
-				memo[o] = o
+	w := &mentionWalker{params: substitutions, memo: memo, index: map[*ObjectType]int{}, onStack: map[*ObjectType]bool{}}
+	if w.mentions(t) {
+		// What is left on the stack reaches an object on the path to the
+		// mention, so it mentions a parameter too.
+		for _, o := range w.stack {
+			if !o.Pending {
+				if _, ok := memo[o]; !ok {
+					memo[o] = mentionsMarker
+				}
 			}
 		}
+		return true
 	}
 	return false
 }
@@ -608,119 +616,96 @@ func mentionsSubstituted(t Type, substitutions map[*TypeParameter]Type, memo map
 // mentionsTypeParameter reports whether t refers to any of the given type
 // parameters (visited guards against self-referential types).
 func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited, known map[Type]bool, target Type) bool {
+	w := &mentionWalker{params: params, visited: visited, known: known, target: target}
+	return w.mentions(t)
+}
+
+// mentionWalker walks a type for mentions of params (or of target). With
+// memo set it is mentionsSubstituted's walk, and object types are tracked
+// with Tarjan's index, low link and stack; otherwise visited (and known)
+// guard against cycles.
+type mentionWalker struct {
+	params         map[*TypeParameter]Type
+	target         Type
+	visited, known map[Type]bool
+
+	memo    map[*ObjectType]*ObjectType
+	index   map[*ObjectType]int
+	onStack map[*ObjectType]bool
+	stack   []*ObjectType
+	low     int
+}
+
+func (w *mentionWalker) mentions(t Type) bool {
 	if t == nil {
 		return false
 	}
-	if target != nil && t == target {
+	if w.target != nil && t == w.target {
 		return true
 	}
 	switch tt := t.(type) {
 	case *TypeParameterType:
-		_, ok := params[tt.Parameter]
+		_, ok := w.params[tt.Parameter]
 		return ok
 	case *ArrayType:
-		return mentionsTypeParameter(tt.ElementType, params, visited, known, target)
+		return w.mentions(tt.ElementType)
 	case *ReadonlyType:
-		return mentionsTypeParameter(tt.InnerType, params, visited, known, target)
+		return w.mentions(tt.InnerType)
 	case *UnionType:
 		for _, m := range tt.Types {
-			if mentionsTypeParameter(m, params, visited, known, target) {
+			if w.mentions(m) {
 				return true
 			}
 		}
 	case *IntersectionType:
 		for _, m := range tt.Types {
-			if mentionsTypeParameter(m, params, visited, known, target) {
+			if w.mentions(m) {
 				return true
 			}
 		}
 	case *InstantiatedType:
 		for _, a := range tt.TypeArguments {
-			if mentionsTypeParameter(a, params, visited, known, target) {
+			if w.mentions(a) {
 				return true
 			}
 		}
 	case *ObjectType:
-		if visited[t] || known[t] {
+		if w.memo != nil {
+			return w.objectInComponent(tt)
+		}
+		if w.visited[t] || w.known[t] {
 			return false
 		}
-		visited[t] = true
-		if tt.ClosedInstance {
-			for _, a := range tt.GenericArgs {
-				if mentionsTypeParameter(a, params, visited, known, target) {
-					return true
-				}
-			}
-			return false
-		}
-		for _, p := range tt.Props() {
-			if mentionsTypeParameter(p, params, visited, known, target) {
-				return true
-			}
-		}
-		for _, sigs := range [][]*Signature{tt.CallSigs(), tt.ConstructSigs()} {
-			for _, sig := range sigs {
-				for _, p := range sig.ParameterTypes {
-					if mentionsTypeParameter(p, params, visited, known, target) {
-						return true
-					}
-				}
-				if mentionsTypeParameter(sig.ReturnType, params, visited, known, target) || mentionsTypeParameter(sig.RestParameterType, params, visited, known, target) ||
-					mentionsTypeParameter(sig.ThisType, params, visited, known, target) {
-					return true
-				}
-				for _, tp := range sig.TypeParameters {
-					if tp != nil && (mentionsTypeParameter(tp.Constraint, params, visited, known, target) || mentionsTypeParameter(tp.Default, params, visited, known, target)) {
-						return true
-					}
-				}
-			}
-		}
-		for _, idx := range tt.IndexSigs() {
-			if mentionsTypeParameter(idx.KeyType, params, visited, known, target) || mentionsTypeParameter(idx.ValueType, params, visited, known, target) ||
-				mentionsTypeParameter(idx.ConstraintType, params, visited, known, target) {
-				return true
-			}
-		}
-		for _, base := range tt.Bases() {
-			if mentionsTypeParameter(base, params, visited, known, target) {
-				return true
-			}
-		}
-		for _, a := range tt.GenericArgs {
-			if mentionsTypeParameter(a, params, visited, known, target) {
-				return true
-			}
-		}
+		w.visited[t] = true
+		return w.objectMembers(tt)
 	case *TupleType:
 		for _, e := range tt.ElementTypes {
-			if mentionsTypeParameter(e, params, visited, known, target) {
+			if w.mentions(e) {
 				return true
 			}
 		}
-		return mentionsTypeParameter(tt.RestElementType, params, visited, known, target)
+		return w.mentions(tt.RestElementType)
 	case *MappedType:
-		return mentionsTypeParameter(tt.ConstraintType, params, visited, known, target) || mentionsTypeParameter(tt.ValueType, params, visited, known, target)
+		return w.mentions(tt.ConstraintType) || w.mentions(tt.ValueType)
 	case *ConditionalType:
-		return mentionsTypeParameter(tt.CheckType, params, visited, known, target) || mentionsTypeParameter(tt.ExtendsType, params, visited, known, target) ||
-			mentionsTypeParameter(tt.TrueType, params, visited, known, target) || mentionsTypeParameter(tt.FalseType, params, visited, known, target)
+		return w.mentions(tt.CheckType) || w.mentions(tt.ExtendsType) || w.mentions(tt.TrueType) || w.mentions(tt.FalseType)
 	case *IndexedAccessType:
-		return mentionsTypeParameter(tt.ObjectType, params, visited, known, target) || mentionsTypeParameter(tt.IndexType, params, visited, known, target)
+		return w.mentions(tt.ObjectType) || w.mentions(tt.IndexType)
 	case *KeyofType:
-		return mentionsTypeParameter(tt.OperandType, params, visited, known, target)
+		return w.mentions(tt.OperandType)
 	case *GenericType:
 		// A generic method of a generic interface (Iterator<T>.map<U>)
 		// mentions the outer parameters in its body.
-		return mentionsTypeParameter(tt.Body, params, visited, known, target)
+		return w.mentions(tt.Body)
 	case *GenericTypeAliasForwardReference:
 		for _, a := range tt.TypeArguments {
-			if mentionsTypeParameter(a, params, visited, known, target) {
+			if w.mentions(a) {
 				return true
 			}
 		}
 	case *TemplateLiteralType:
 		for _, part := range tt.Parts {
-			if !part.IsLiteral && mentionsTypeParameter(part.Type, params, visited, known, target) {
+			if !part.IsLiteral && w.mentions(part.Type) {
 				return true
 			}
 		}
@@ -732,6 +717,101 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited, know
 			return false
 		}
 		return true
+	}
+	return false
+}
+
+// objectInComponent is the object step of mentionsSubstituted's walk. An
+// object whose walk finds no mention and reaches nothing still open below its
+// own index closes a component: all of it is recorded in memo as mentioning
+// nothing. A mention ends the whole walk, and mentionsSubstituted records what
+// is still on the stack.
+func (w *mentionWalker) objectInComponent(o *ObjectType) bool {
+	if done, ok := w.memo[o]; ok {
+		return done != o
+	}
+	if i, ok := w.index[o]; ok {
+		if w.onStack[o] && i < w.low {
+			w.low = i
+		}
+		return false
+	}
+	i := len(w.index)
+	w.index[o] = i
+	w.onStack[o] = true
+	w.stack = append(w.stack, o)
+	outer := w.low
+	w.low = i
+	if w.objectMembers(o) {
+		return true
+	}
+	low := w.low
+	if low < outer {
+		w.low = low
+	} else {
+		w.low = outer
+	}
+	if low == i {
+		for {
+			top := w.stack[len(w.stack)-1]
+			w.stack = w.stack[:len(w.stack)-1]
+			w.onStack[top] = false
+			if !top.Pending {
+				w.memo[top] = top
+			}
+			if top == o {
+				break
+			}
+		}
+	}
+	return false
+}
+
+func (w *mentionWalker) objectMembers(tt *ObjectType) bool {
+	if tt.ClosedInstance {
+		for _, a := range tt.GenericArgs {
+			if w.mentions(a) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, p := range tt.Props() {
+		if w.mentions(p) {
+			return true
+		}
+	}
+	for _, sigs := range [][]*Signature{tt.CallSigs(), tt.ConstructSigs()} {
+		for _, sig := range sigs {
+			for _, p := range sig.ParameterTypes {
+				if w.mentions(p) {
+					return true
+				}
+			}
+			if w.mentions(sig.ReturnType) || w.mentions(sig.RestParameterType) || w.mentions(sig.ThisType) {
+				return true
+			}
+			for _, tp := range sig.TypeParameters {
+				if tp != nil && (w.mentions(tp.Constraint) || w.mentions(tp.Default)) {
+					return true
+				}
+			}
+		}
+	}
+	for _, idx := range tt.IndexSigs() {
+		if w.mentions(idx.KeyType) || w.mentions(idx.ValueType) || w.mentions(idx.ConstraintType) {
+			return true
+		}
+	}
+	for _, base := range tt.Bases() {
+		if w.mentions(base) {
+			return true
+		}
+	}
+	for _, a := range tt.GenericArgs {
+		if w.mentions(a) {
+			return true
+		}
 	}
 	return false
 }

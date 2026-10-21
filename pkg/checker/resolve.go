@@ -5019,10 +5019,12 @@ func mappedKeyCaptures(substitution map[string]types.Type, name string, value ty
 		if param == name || t == nil {
 			continue
 		}
-		if !mayMentionTypeParamNames(t, key, map[types.Type]bool{}, map[string]map[types.Type]bool{}) {
+		// The value is usually small (`T[P]`) and t may be a whole library
+		// graph, so the value is asked first.
+		if !mayMentionTypeParamNames(value, map[string]types.Type{param: t}, map[types.Type]bool{}, map[string]map[types.Type]bool{}) {
 			continue
 		}
-		if mayMentionTypeParamNames(value, map[string]types.Type{param: t}, map[types.Type]bool{}, map[string]map[types.Type]bool{}) {
+		if mayMentionTypeParamNames(t, key, map[types.Type]bool{}, map[string]map[types.Type]bool{}) {
 			return true
 		}
 	}
