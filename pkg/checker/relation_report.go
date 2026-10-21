@@ -604,6 +604,11 @@ func (c *Checker) elaborate(expr parser.Expression, source, target types.Type, h
 		}
 		srcReturn := srcObj.CallSigs()[0].ReturnType
 		tgtReturn := types.NewUnionType(tgtReturns...)
+		if e.IsAsync {
+			// An async body is related by its awaited value.
+			srcReturn = c.getAwaitedType(srcReturn)
+			tgtReturn = c.getAwaitedType(tgtReturn)
+		}
 		if tgtReturn == types.Void || tgtReturn == types.Any || c.assignableToFresh(body, srcReturn, tgtReturn) {
 			return false
 		}

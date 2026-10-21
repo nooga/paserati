@@ -5415,6 +5415,16 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				}
 			}
 			finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBodyCheck)
+			// A return type inferred from an async body is the awaited value:
+			// wrap it, as checkArrowFunctionLiteral does. The contextual
+			// return type itself is already the whole return type.
+			if node.IsAsync && (finalReturnType == nil || finalReturnType != expectedReturnTypeForBodyCheck) {
+				inner := finalReturnType
+				if inner == nil {
+					inner = types.Void
+				}
+				finalReturnType = c.createPromiseType(c.getAwaitedType(inner))
+			}
 			if checkerDebug {
 				debugPrintf("// [Checker ArrowFuncContext] Inferred final return type: %s\n", finalReturnType.String())
 			}
