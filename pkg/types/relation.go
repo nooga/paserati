@@ -42,9 +42,18 @@ type Relation struct {
 	// it names. The checker supplies it.
 	ResolveClassRef func(*ParameterizedForwardReferenceType) Type
 
-	// visited holds the (source, target) pairs isAssignable is relating, so a
-	// recursive type relates to itself by assumption.
-	visited map[assignPair]bool
+	// maybe holds, like tsc's maybeKeys, the (source, target) pairs
+	// isAssignable is relating or has related within the current top-level
+	// query, with their index in maybeStack. A pair in it relates by
+	// assumption: a recursive type relates to itself, and a pair met again
+	// is not related again. A pair that fails drops everything pushed after
+	// it, since that may have assumed it; the query's end clears it all.
+	maybe      map[assignPair]int
+	maybeStack []assignPair
+	depth      int
+	// cutOff records that a nesting cut-off (maxRelatedNesting) assumed a
+	// relation inside the pair being related, which is then not kept.
+	cutOff bool
 
 	// relatingInstances counts, per generic, the instantiations of it that
 	// objectAssignable is relating (source and target sides together).

@@ -103,7 +103,7 @@ func (r *Relation) IsAssignableForCallArgument(source, target Type) bool {
 // each side before objectAssignable assumes they relate.
 const maxRelatedNesting = 3
 
-// assignPair keys Relation.visited.
+// assignPair keys Relation.maybe.
 type assignPair struct{ source, target Type }
 
 // enterInstantiation records that isAssignable expands a reference to g. It
@@ -127,15 +127,45 @@ func (r *Relation) isAssignable(source, target Type) bool {
 
 	// Every Type is a pointer, so the pair itself is the key.
 	pairKey := assignPair{source, target}
-	if r.visited[pairKey] {
+	if _, ok := r.maybe[pairKey]; ok {
 		return true
 	}
-	if r.visited == nil {
-		r.visited = make(map[assignPair]bool)
+	if r.maybe == nil {
+		r.maybe = make(map[assignPair]int)
 	}
-	r.visited[pairKey] = true
-	defer delete(r.visited, pairKey)
+	start := len(r.maybeStack)
+	r.maybe[pairKey] = start
+	r.maybeStack = append(r.maybeStack, pairKey)
+	r.depth++
+	related := false
+	outerCutOff := r.cutOff
+	r.cutOff = false
+	defer func() {
+		r.depth--
+		if r.cutOff {
+			// Related only because a nesting cut-off assumed the rest: met
+			// again less deeply, the pair is related again.
+			delete(r.maybe, pairKey)
+		}
+		r.cutOff = r.cutOff || outerCutOff
+		if r.depth == 0 {
+			r.cutOff = false
+			clear(r.maybe)
+			r.maybeStack = r.maybeStack[:0]
+		} else if !related {
+			// What was assumed or concluded under this pair no longer holds.
+			for _, k := range r.maybeStack[start:] {
+				delete(r.maybe, k)
+			}
+			r.maybeStack = r.maybeStack[:start]
+		}
+	}()
+	related = r.isAssignableStep(source, target)
+	return related
+}
 
+// isAssignableStep is isAssignable for a pair not already assumed.
+func (r *Relation) isAssignableStep(source, target Type) bool {
 	// Simplify mapped types (e.g., Record<string, T>) to ObjectType with index signatures
 	source = simplifyMappedType(source)
 	target = simplifyMappedType(target)
@@ -372,6 +402,7 @@ func (r *Relation) isAssignable(source, target Type) bool {
 			defer done()
 			return r.isAssignable(sourceInst.Substitute(), target)
 		}
+		r.cutOff = true
 		return true
 	}
 	if targetInst, ok := target.(*InstantiatedType); ok {
@@ -379,6 +410,7 @@ func (r *Relation) isAssignable(source, target Type) bool {
 			defer done()
 			return r.isAssignable(source, targetInst.Substitute())
 		}
+		r.cutOff = true
 		return true
 	}
 
@@ -1186,6 +1218,7 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 	sg, tg := sourceObj.Instantiates, targetObj.Instantiates
 	if sg != nil && tg != nil {
 		if r.relatingInstances[sg] >= maxRelatedNesting && r.relatingInstances[tg] >= maxRelatedNesting {
+			r.cutOff = true
 			return true
 		}
 		if r.relatingInstances == nil {
@@ -1208,7 +1241,11 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 		return false
 	}
 
-	for propName, targetPropType := range targetProps {
+	// Declaration order, as tsc: the first failing property ends the check,
+	// and which members (and lazily instantiated graphs) get related must
+	// not depend on map order.
+	for _, propName := range orderedPropertyNames(targetObj, targetProps) {
+		targetPropType := targetProps[propName]
 		targetOptional := targetObj.IsPropertyOptional(propName)
 		// Private and protected members are nominal: the source must derive
 		// from the class that declares them.
@@ -1455,7 +1492,8 @@ func (r *Relation) indexSignaturesRelated(sourceObj, targetObj *ObjectType, sour
 			}
 			return false
 		}
-		for name, pt := range sourceProps {
+		for _, name := range orderedPropertyNames(sourceObj, sourceProps) {
+			pt := sourceProps[name]
 			if tIdx.KeyType == Number && !isNumericName(name) {
 				continue
 			}

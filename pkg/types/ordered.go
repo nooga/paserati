@@ -131,3 +131,28 @@ func (ot *ObjectType) CopyDisplay(clone *ObjectType, sub func(Type) Type) {
 		clone.GenericArgs[i] = sub(a)
 	}
 }
+
+// orderedPropertyNames is the keys of props, o's effective properties, in
+// declaration order; any key not declared through o's own or base members
+// follows, sorted.
+func orderedPropertyNames(o *ObjectType, props map[string]Type) []string {
+	names := make([]string, 0, len(props))
+	seen := make(map[string]bool, len(props))
+	for _, n := range o.EffectivePropertyNames() {
+		if _, ok := props[n]; ok && !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	if len(names) == len(props) {
+		return names
+	}
+	var rest []string
+	for n := range props {
+		if !seen[n] {
+			rest = append(rest, n)
+		}
+	}
+	sort.Strings(rest)
+	return append(names, rest...)
+}
