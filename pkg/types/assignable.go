@@ -258,6 +258,13 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 	if target == Any || source == Any {
 		return true
 	}
+	// A deferred conditional type relates through its branches'
+	// constraints (`undefined extends O['f'] ? false : true` to boolean).
+	if sc, ok := source.(*ConditionalType); ok && r.ConditionalConstraint != nil {
+		if constraint := r.ConditionalConstraint(sc); constraint != nil && constraint != source && r.isAssignable(constraint, target) {
+			return true
+		}
+	}
 
 	if target == Unknown {
 		return true

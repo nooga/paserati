@@ -37,6 +37,11 @@ type Relation struct {
 	// checker supplies it.
 	ApparentMapped func(*MappedType) Type
 
+	// ConditionalConstraint is what a deferred conditional type is known to
+	// be (tsc's default constraint of a conditional type: its branches'
+	// constraints), or nil when nothing is known. The checker supplies it.
+	ConditionalConstraint func(*ConditionalType) Type
+
 	// ResolveClassRef resolves a reference a generic class makes to itself
 	// or another class in its own body (List<List<T>>) to the instance type
 	// it names. The checker supplies it.

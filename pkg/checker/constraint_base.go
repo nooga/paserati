@@ -57,6 +57,9 @@ func (c *Checker) baseConstraint(t types.Type, depth int) types.Type {
 	}
 	switch tt := t.(type) {
 	case *types.InferType:
+		if tt.Constraint != nil {
+			return c.baseConstraint(tt.Constraint, depth+1)
+		}
 		return nil
 	case *types.TypeParameterType:
 		if tt.Parameter == nil {
@@ -94,10 +97,46 @@ func (c *Checker) baseConstraint(t types.Type, depth int) types.Type {
 		}
 		return &types.IndexedAccessType{ObjectType: obj, IndexType: idx}
 	case *types.ConditionalType:
-		tb := c.baseConstraint(tt.TrueType, depth+1)
+		// tsc's default constraint of a conditional type: the true branch
+		// with its `infer` placeholders inferred from the check type's
+		// constraint, and a branch that is any leaves the other alone
+		// (`TOptions['errorFormatter'] extends ErrorFormatter<any, infer S>
+		// ? S : DefaultErrorShape` against an ErrorFormatter<C, any>).
+		trueType := tt.TrueType
+		if !mentionsInfer(trueType) {
+			// Nothing to infer (and inferring is costly).
+		} else if inferred, done := c.conditionalTrueConstraints[tt]; done {
+			trueType = inferred
+		} else if check := c.baseConstraint(tt.CheckType, depth+1); check != nil && check != tt.CheckType {
+			members := []types.Type{check}
+			if u, ok := check.(*types.UnionType); ok {
+				members = u.Types
+			}
+			inferences := map[string]types.Type{}
+			for _, m := range members {
+				c.inferFromConditional(m, tt.ExtendsType, inferences)
+			}
+			if len(inferences) > 0 {
+				trueType = c.substituteInferredTypes(trueType, inferences)
+				// Kept once something is inferred: a check type whose
+				// constraint is not known yet (an import cycle still
+				// declaring it) is asked again later.
+				if c.conditionalTrueConstraints == nil {
+					c.conditionalTrueConstraints = map[*types.ConditionalType]types.Type{}
+				}
+				c.conditionalTrueConstraints[tt] = trueType
+			}
+		}
+		tb := c.baseConstraint(trueType, depth+1)
 		fb := c.baseConstraint(tt.FalseType, depth+1)
 		if tb == nil || fb == nil {
 			return nil
+		}
+		if tb == types.Any {
+			return fb
+		}
+		if fb == types.Any {
+			return tb
 		}
 		return types.NewUnionType(tb, fb)
 	case *types.UnionType:

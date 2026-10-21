@@ -284,6 +284,10 @@ func (tt *TypeofType) typeNode() {}
 // This is used to capture and infer types during conditional type resolution
 type InferType struct {
 	TypeParameter string // The type parameter being inferred (e.g., 'R' in 'infer R')
+	// Constraint is the constraint implied by where it is written: `infer X`
+	// as the argument for a constrained type parameter (EF<infer X> of
+	// `EF<T extends S>` makes X extend S), or nil.
+	Constraint Type
 }
 
 func (it *InferType) String() string {

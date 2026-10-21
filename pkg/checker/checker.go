@@ -315,6 +315,10 @@ type Checker struct {
 	// the conditional true branches being resolved whose check type it is
 	// (see withTrueBranchConstraint).
 	trueBranchConstraints map[*types.TypeParameter][]types.Type
+	// conditionalTrueConstraints memoizes the true branch of a conditional
+	// type with its infer placeholders inferred from the check type's
+	// constraint (see baseConstraint).
+	conditionalTrueConstraints map[*types.ConditionalType]types.Type
 	// augmentations are the file's module augmentations, merged into their
 	// targets once the file is checked (see augment.go).
 	augmentations []moduleAugmentation
@@ -765,6 +769,7 @@ func newCheckerInEnv(globalEnv *Environment) *Checker {
 		resolvingTypeAliases:       make(map[string]bool),
 	}
 	c.rel.ExpandMapped = c.expandIfMappedType
+	c.rel.ConditionalConstraint = func(ct *types.ConditionalType) types.Type { return c.baseConstraint(ct, 0) }
 	c.rel.ApparentMapped = c.apparentMappedType
 	c.rel.ResolveClassRef = c.resolveParameterizedForwardReference
 	return c

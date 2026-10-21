@@ -1785,6 +1785,12 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			genericType.Name, strings.Join(typeStrs, ", "))
 	}
 
+	for i, typeParam := range genericType.TypeParameters {
+		if it, ok := finalTypeArgs[i].(*types.InferType); ok && typeParam.Constraint != nil && !c.typeContainsTypeParameter(typeParam.Constraint) {
+			c.noteImpliedInferConstraint(it, typeParam.Constraint)
+		}
+	}
+
 	// Create substitution map from type parameters to concrete types. Use it for
 	// constraint validation too, since constraints may reference sibling type
 	// parameters, e.g. <T extends U, U extends Array<number>>.
@@ -2482,6 +2488,14 @@ func (c *Checker) resolveInferTypeExpression(node *parser.InferTypeExpression) t
 		return nil
 	}
 
+	// The placeholder the conditional's infer scope binds (withInferScope),
+	// so what is learnt about it here (an implied constraint) holds where
+	// the true branch names it.
+	if t, ok := c.env.ResolveType(node.TypeParameter); ok {
+		if scoped, ok := t.(*types.InferType); ok {
+			return scoped
+		}
+	}
 	// Create an InferType that represents the inferred type placeholder
 	// The actual inference happens during conditional type resolution
 	return &types.InferType{
@@ -2812,18 +2826,22 @@ func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeE
 		return nil
 	}
 
-	extendsType := c.resolveTypeAnnotation(node.ExtendsType)
-	if extendsType == nil {
-		// Error already reported by resolveTypeAnnotation
-		return nil
-	}
-
-	var trueType types.Type
+	// The extends clause is resolved in the infer scope too, so `infer X`
+	// there is the placeholder the true branch names X by.
+	var extendsType, trueType types.Type
 	c.withInferScope(node.ExtendsType, func() {
+		extendsType = c.resolveTypeAnnotation(node.ExtendsType)
+		if extendsType == nil {
+			return
+		}
 		c.withTrueBranchConstraint(checkType, extendsType, func() {
 			trueType = c.resolveTypeAnnotation(node.TrueType)
 		})
 	})
+	if extendsType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
 	if trueType == nil {
 		// Error already reported by resolveTypeAnnotation
 		return nil

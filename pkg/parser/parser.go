@@ -12876,6 +12876,15 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 		p.speculatively(func() { tagArgs, tagErr = p.parseTypeArguments() })
 		// Type arguments with no call - a tagged template or an instantiation
 		// expression (`f<number>`): erased, only the callee remains.
+		if tagErr == nil && len(tagArgs) > 0 && p.peekTokenIs(lexer.LPAREN) && p.inHeritage == 0 {
+			// A generic call the lookahead above did not take for one
+			// (`createCallerFactory<$Root>()`): type arguments then '(' are
+			// a call, as tsc parses them.
+			p.nextToken() // consume '('
+			callExpr := &CallExpression{Token: p.curToken, Function: left, TypeArguments: tagArgs}
+			callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)
+			return callExpr
+		}
 		if tagErr == nil && len(tagArgs) > 0 && (p.peekTokenIs(lexer.TEMPLATE_START) || p.canFollowTypeArgumentsInExpression()) {
 			if p.inHeritage > 0 {
 				// `extends React.Component<P>`: the checker needs them.

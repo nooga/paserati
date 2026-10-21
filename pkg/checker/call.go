@@ -2201,6 +2201,15 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			constraints = append(constraints, con)
 			break
 		}
+		// Over a key set fixed already (Pick<Router<TRoot, TRecord>, '_def'>)
+		// the mapped type is an object type, inferred member by member.
+		if pType.ConstraintType != nil && !c.typeContainsTypeParameter(pType.ConstraintType) {
+			if _, isObject := argType.(*types.ObjectType); isObject {
+				if expanded, ok := c.expandMappedType(pType).(*types.ObjectType); ok {
+					return append(constraints, c.collectConstraintsFromTypeSeen(expanded, argType, seen)...)
+				}
+			}
+		}
 		// Handle mapped types like { [P in K]: V } (e.g., Record<K, V>)
 		// When matching against an object literal, infer K from keys and V from values
 		if aType, isObject := argType.(*types.ObjectType); isObject {

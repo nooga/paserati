@@ -29,7 +29,8 @@ type deferredHeritage struct {
 // interface, class or namespace member not declared yet. It reports whether
 // it did.
 func (c *Checker) deferUndeclaredBase(node *parser.InterfaceDeclaration, index int, target *types.ObjectType, generic *types.GenericType) bool {
-	if c.resolvingDeferredHeritage || !c.baseNotDeclaredYet(node.Extends[index]) && !c.baseAwaitsDeferred(node.Extends[index]) {
+	if c.resolvingDeferredHeritage || !c.baseNotDeclaredYet(node.Extends[index]) && !c.baseAwaitsDeferred(node.Extends[index]) &&
+		!c.baseArgsAwaitCycle(node.Extends[index], 0) {
 		return false
 	}
 	c.deferredHeritages = append(c.deferredHeritages, deferredHeritage{node: node, index: index, target: target, env: c.env, generic: generic})
@@ -95,6 +96,41 @@ func (c *Checker) awaitsCycleImport(name string, t types.Type) bool {
 		return resolved == types.Any
 	case *types.ObjectType:
 		return tt.Pending
+	}
+	return false
+}
+
+// baseArgsAwaitCycle reports whether the type arguments of the base expr
+// name, at any depth, an import still awaited from a module in an import
+// cycle: `extends Partial<Omit<RootConfig<...>, '$types'>>` before
+// RootConfig is declared has no members yet.
+func (c *Checker) baseArgsAwaitCycle(expr parser.Expression, depth int) bool {
+	ref, ok := expr.(*parser.GenericTypeRef)
+	if !ok || depth > 8 {
+		return false
+	}
+	for _, arg := range ref.TypeArguments {
+		var name string
+		switch a := arg.(type) {
+		case *parser.Identifier:
+			name = a.Value
+		case *parser.GenericTypeRef:
+			if a.Qualifier == nil {
+				name = a.Name.Value
+			}
+			if c.baseArgsAwaitCycle(a, depth+1) {
+				return true
+			}
+		}
+		if name == "" {
+			continue
+		}
+		if _, isParam := c.env.ResolveTypeParameter(name); isParam {
+			continue
+		}
+		if t, found := c.env.ResolveType(name); found && c.awaitsCycleImport(name, t) {
+			return true
+		}
 	}
 	return false
 }
@@ -177,7 +213,7 @@ func (c *Checker) resolveDeferredHeritages() {
 				continue
 			}
 			done[i], progress = true, true
-			if c.baseNotDeclaredYet(expr) && c.basesAwaitCycle(expr) || c.heritageHeld(expr, held) {
+			if c.baseNotDeclaredYet(expr) && c.basesAwaitCycle(expr) || c.heritageHeld(expr, held) || c.baseArgsAwaitCycle(expr, 0) {
 				// Declared by a module in an import cycle that has not got
 				// to it yet: resolved once this module's imports are (see
 				// refreshEarlyImports).

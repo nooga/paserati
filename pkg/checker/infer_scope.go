@@ -85,3 +85,18 @@ func (c *Checker) withInferScope(extendsType parser.Expression, fn func()) {
 	defer func() { c.env = saved }()
 	fn()
 }
+
+// noteImpliedInferConstraint gives `infer X`, written as the argument for a
+// type parameter constrained to constraint, that constraint: on the
+// placeholder written and on the one the conditional's true branch names X
+// by.
+func (c *Checker) noteImpliedInferConstraint(it *types.InferType, constraint types.Type) {
+	if it.Constraint == nil {
+		it.Constraint = constraint
+	}
+	if t, ok := c.env.ResolveType(it.TypeParameter); ok {
+		if scoped, ok := t.(*types.InferType); ok && scoped.Constraint == nil {
+			scoped.Constraint = constraint
+		}
+	}
+}
