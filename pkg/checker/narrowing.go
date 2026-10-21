@@ -150,6 +150,11 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				return guard
 			}
 		}
+		if member, ok := prefixExpr.Right.(*parser.MemberExpression); ok {
+			if guard := c.falsyDiscriminantGuard(member); guard != nil {
+				return guard
+			}
+		}
 	}
 
 	// Pattern 0: Type predicate function calls like isString(x) or Array.isArray(x)
@@ -2339,6 +2344,9 @@ func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName stri
 	if !exists {
 		return false
 	}
+	if expectedValue == falsyDiscriminant {
+		return types.ExtractFalsyTypes(propType) != types.Never
+	}
 	if expectedValue == types.Undefined && objType.IsPropertyOptional(propName) {
 		return true
 	}
@@ -3261,4 +3269,37 @@ func (c *Checker) narrowedThisType() types.Type {
 		}
 	}
 	return c.currentThisType
+}
+
+// falsyDiscriminant is the DiscriminantValue of `!x.p`: it matches the
+// members whose p can be falsy.
+var falsyDiscriminant = types.NewObjectType()
+
+// falsyDiscriminantGuard narrows x by `!x.p` when p is a discriminant of
+// x's union whose every member has a literal p (`!result.ok` picks
+// { ok: false }): the members whose p can be falsy, and in the false branch
+// the others.
+func (c *Checker) falsyDiscriminantGuard(member *parser.MemberExpression) *TypeGuard {
+	prop, ok := member.Property.(*parser.Identifier)
+	if !ok {
+		return nil
+	}
+	baseKey := expressionToNarrowingKey(member.Object)
+	if baseKey == "" {
+		return nil
+	}
+	union, ok := c.memberRefType(baseKey).(*types.UnionType)
+	if !ok {
+		return nil
+	}
+	for _, m := range union.Types {
+		obj, ok := c.resolveObjectTypeForNarrowing(m)
+		if !ok {
+			return nil
+		}
+		if p, has := obj.Props()[prop.Value]; !has || !isUnitType(p) || obj.IsPropertyOptional(prop.Value) {
+			return nil
+		}
+	}
+	return &TypeGuard{VariableName: baseKey, DiscriminantProp: prop.Value, DiscriminantValue: falsyDiscriminant}
 }
