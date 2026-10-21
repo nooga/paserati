@@ -3,7 +3,6 @@ package builtins
 import (
 	"sync"
 
-	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -37,35 +36,11 @@ func (r *ReadableStreamInitializer) Name() string  { return "ReadableStream" }
 func (r *ReadableStreamInitializer) Priority() int { return PriorityReadableStream }
 
 func (r *ReadableStreamInitializer) InitTypes(ctx *TypeContext) error {
-	readerType := types.NewObjectType().
-		WithProperty("read", types.NewSimpleFunction([]types.Type{}, types.Any)). // Promise<{value, done}>
-		WithProperty("releaseLock", types.NewSimpleFunction([]types.Type{}, types.Undefined)).
-		WithProperty("cancel", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
-
-	streamType := types.NewObjectType().
-		WithProperty("locked", types.Boolean).
-		WithProperty("getReader", types.NewSimpleFunction([]types.Type{}, readerType)).
-		WithProperty("cancel", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
-	streamType.WithProperty("tee", types.NewSimpleFunction([]types.Type{}, &types.TupleType{
-		ElementTypes: []types.Type{streamType, streamType},
-	}))
-	// pipeTo/pipeThrough: kept Any-typed (both the destination/pair argument
-	// and pipeThrough's return) so any WritableStream-shaped or
-	// {readable,writable}-shaped object works without cross-file structural
-	// friction between ReadableStream/WritableStream/TransformStream's
-	// separately-declared types - see pipeReadableTo below for the runtime
-	// behavior (#413).
-	streamType.WithProperty("pipeTo", types.NewSimpleFunction([]types.Type{types.Any}, types.Any))      // Promise<void>
-	streamType.WithProperty("pipeThrough", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)) // returns the pair's `readable`
-
-	streamCtorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{}, streamType).               // new ReadableStream()
-		WithSimpleCallSignature([]types.Type{types.Any}, streamType).      // new ReadableStream(underlyingSource)
-		WithSimpleConstructSignature([]types.Type{}, streamType).          // super() from a subclass, no args
-		WithSimpleConstructSignature([]types.Type{types.Any}, streamType). // super(underlyingSource) from a subclass
-		WithProperty("prototype", streamType)
-
-	return ctx.DefineGlobal("ReadableStream", streamCtorType)
+	streams := streamTypes(ctx)
+	if err := defineStreamAliases(ctx, streams); err != nil {
+		return err
+	}
+	return ctx.DefineGlobal("ReadableStream", streams.readableCtor)
 }
 
 func (r *ReadableStreamInitializer) InitRuntime(ctx *RuntimeContext) error {

@@ -4014,6 +4014,9 @@ func (c *Checker) visit(node parser.Node) {
 		if elseEnv == nil && node.Alternative == nil && joinPossible {
 			elseEnv = c.applyInvertedTruthinessNarrowing(condition)
 		}
+		if elseEnv == nil && node.Alternative != nil {
+			elseEnv = c.memberDiscriminantElse(condition)
+		}
 		elseEnv = c.completeMemberGuardElse(elseEnv, typeGuard)
 		if node.Alternative != nil {
 			if len(refKeys) > 0 {
@@ -5068,6 +5071,17 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 			switch ro.InnerType.(type) {
 			case *types.ArrayType, *types.TupleType:
 				context = &ContextualType{ExpectedType: ro.InnerType, IsContextual: context.IsContextual}
+			}
+		}
+	}
+
+	// A built-in generic interface (`UnderlyingDefaultSource<number>`) types
+	// a literal through its instantiated body.
+	if inst, ok := context.ExpectedType.(*types.InstantiatedType); ok {
+		switch node.(type) {
+		case *parser.ObjectLiteral, *parser.ArrayLiteral, *parser.ArrowFunctionLiteral, *parser.FunctionLiteral:
+			if body := inst.Substitute(); body != nil {
+				context = &ContextualType{ExpectedType: body, IsContextual: context.IsContextual}
 			}
 		}
 	}

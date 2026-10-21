@@ -1925,6 +1925,15 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 		return c.narrowNonNullish(chain)
 	}
 
+	// `!x.done` keeps the union members of x whose `done` may be falsy.
+	if prefix, ok := condition.(*parser.PrefixExpression); ok && prefix.Operator == "!" {
+		if memberExpr, ok := prefix.Right.(*parser.MemberExpression); ok {
+			if env := c.applyMemberFalsinessNarrowing(memberExpr); env != nil {
+				return env
+			}
+		}
+	}
+
 	// Handle single type guard expressions
 	guard := c.detectTypeGuard(condition)
 	return c.applyTypeNarrowing(guard)
@@ -2052,8 +2061,27 @@ func (c *Checker) applyInvertedTruthinessNarrowing(condition parser.Expression) 
 			return c.narrowNonNullish(chain)
 		}
 	}
+	// if (res.done) { return } => res is a union member whose done may be
+	// falsy after.
+	if memberExpr, ok := condition.(*parser.MemberExpression); ok {
+		return c.applyMemberFalsinessNarrowing(memberExpr)
+	}
 	// Handle bare x pattern: if (x) { return } => x is falsy after (null/undefined)
 	// This is less common and less useful, skip for now
+	return nil
+}
+
+// memberDiscriminantElse narrows the else branch of `if (x.done)` and
+// `if (!x.done)` by the discriminant's falsiness or truthiness.
+func (c *Checker) memberDiscriminantElse(condition parser.Expression) *Environment {
+	if memberExpr, ok := condition.(*parser.MemberExpression); ok {
+		return c.applyMemberFalsinessNarrowing(memberExpr)
+	}
+	if prefix, ok := condition.(*parser.PrefixExpression); ok && prefix.Operator == "!" {
+		if memberExpr, ok := prefix.Right.(*parser.MemberExpression); ok {
+			return c.applyMemberTruthinessNarrowing(memberExpr)
+		}
+	}
 	return nil
 }
 
@@ -2278,6 +2306,45 @@ func (c *Checker) applyMemberTruthinessNarrowing(memberExpr *parser.MemberExpres
 	return newEnv
 }
 
+// applyMemberFalsinessNarrowing narrows the union-typed base of `x.prop` to
+// the members whose prop is not a truthy literal, for `if (!x.done)`. It
+// returns nil when that removes no member.
+func (c *Checker) applyMemberFalsinessNarrowing(memberExpr *parser.MemberExpression) *Environment {
+	propIdent, ok := memberExpr.Property.(*parser.Identifier)
+	if !ok {
+		return nil
+	}
+	baseKey := expressionToNarrowingKey(memberExpr.Object)
+	if baseKey == "" {
+		return nil
+	}
+	originalType, isConst, found := c.env.Resolve(baseKey)
+	if !found {
+		return nil
+	}
+	unionType, ok := originalType.(*types.UnionType)
+	if !ok {
+		return nil
+	}
+	var kept []types.Type
+	for _, memberType := range unionType.Types {
+		if objType, ok := c.resolveObjectTypeForNarrowing(memberType); ok {
+			if lit, ok := objType.Props()[propIdent.Value].(*types.LiteralType); ok && lit.Value.IsTruthy() {
+				continue
+			}
+		}
+		kept = append(kept, memberType)
+	}
+	if len(kept) == 0 || len(kept) == len(unionType.Types) {
+		return nil
+	}
+	newEnv := NewEnclosedEnvironment(c.env)
+	if !newEnv.Define(baseKey, types.NewUnionType(kept...), isConst) {
+		return nil
+	}
+	return newEnv
+}
+
 // isObjectLikeType checks if a type represents an object-like value (objects, arrays, functions)
 // This is used for "typeof x === 'object'" narrowing
 func (c *Checker) isObjectLikeType(t types.Type) bool {
@@ -2403,6 +2470,10 @@ func (c *Checker) resolveObjectTypeForNarrowing(t types.Type) (*types.ObjectType
 	switch typ := t.(type) {
 	case *types.ObjectType:
 		return typ, true
+	case *types.InstantiatedType:
+		if obj, ok := typ.Substitute().(*types.ObjectType); ok {
+			return obj, true
+		}
 	case *types.TypeAliasForwardReference:
 		if resolved, found := c.env.ResolveType(typ.AliasName); found {
 			if obj, ok := resolved.(*types.ObjectType); ok {

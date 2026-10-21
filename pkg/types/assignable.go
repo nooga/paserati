@@ -106,6 +106,20 @@ const maxRelatedNesting = 3
 // assignPair keys Relation.visited.
 type assignPair struct{ source, target Type }
 
+// enterInstantiation records that isAssignable expands a reference to g. It
+// reports false, recording nothing, once maxRelatedNesting references to g
+// are being expanded; otherwise done undoes the record.
+func (r *Relation) enterInstantiation(g *GenericType) (done func(), ok bool) {
+	if r.expandingInstances[g] >= maxRelatedNesting {
+		return nil, false
+	}
+	if r.expandingInstances == nil {
+		r.expandingInstances = make(map[*GenericType]int)
+	}
+	r.expandingInstances[g]++
+	return func() { r.expandingInstances[g]-- }, true
+}
+
 func (r *Relation) isAssignable(source, target Type) bool {
 	if source == nil || target == nil {
 		return false
@@ -348,15 +362,24 @@ func (r *Relation) isAssignable(source, target Type) bool {
 	}
 
 	// Handle InstantiatedType - substitute to get concrete type and check assignability
+	// Each substitution makes fresh copies of the instantiations a body
+	// mentions, so a recursive generic (ReadableStream<R>'s tee() returns
+	// ReadableStream<R>) never meets a visited pair again: as for
+	// relatingInstances, once one generic is being expanded several levels
+	// deep, assume the rest relates.
 	if sourceInst, ok := source.(*InstantiatedType); ok {
-		// Substitute the generic type with concrete type arguments
-		concreteSource := sourceInst.Substitute()
-		return r.isAssignable(concreteSource, target)
+		if done, ok := r.enterInstantiation(sourceInst.Generic); ok {
+			defer done()
+			return r.isAssignable(sourceInst.Substitute(), target)
+		}
+		return true
 	}
 	if targetInst, ok := target.(*InstantiatedType); ok {
-		// Substitute the generic type with concrete type arguments
-		concreteTarget := targetInst.Substitute()
-		return r.isAssignable(source, concreteTarget)
+		if done, ok := r.enterInstantiation(targetInst.Generic); ok {
+			defer done()
+			return r.isAssignable(source, targetInst.Substitute())
+		}
+		return true
 	}
 
 	// GenericType handling - for generic methods in interfaces

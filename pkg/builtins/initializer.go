@@ -33,6 +33,10 @@ type TypeContext struct {
 
 	// Store prototype types for primitives (for checker's getBuiltinType)
 	SetPrimitivePrototype func(primitiveName string, prototypeType *types.ObjectType)
+
+	// streams holds the Web Streams typings the stream initializers share.
+	streams              *streamTypeSet
+	streamAliasesDefined bool
 }
 
 // RuntimeContext provides everything needed for runtime initialization

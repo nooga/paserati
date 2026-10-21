@@ -541,6 +541,13 @@ func substituteMemberSignature(sig *Signature, substitutions map[*TypeParameter]
 			return substituteSignatureMemo(sig, inner, make(map[*ObjectType]*ObjectType))
 		}
 	}
+	// FIXME: the member's own type parameters are dropped here, so the
+	// method `pipeThrough<T>` of an instantiated `ReadableStream<number>`
+	// loses T. Keeping them (out.TypeParameters = sig.TypeParameters) makes
+	// relating types with overloaded generic methods (tRPC's Observable.pipe)
+	// blow up exponentially: each erasure copies the instantiations afresh,
+	// so no related pair repeats. Needs canonical signatures (tsc relates
+	// generic signatures without erasing) or interned instantiations first.
 	return substituteSignatureMemo(sig, substitutions, memo)
 }
 

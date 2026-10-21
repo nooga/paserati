@@ -1898,7 +1898,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					if exists {
 						resultType = fieldType
 					} else {
-						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", obj.String(), subst.String()))
+						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 						// resultType remains types.Never
 					}
 				default:
@@ -1957,6 +1957,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				// Create a temporary member expression to check this member type
 				memberHasProperty := false
 				var memberResultType types.Type
+
+				// A generic interface member (`ReadableStreamReadDoneResult<T>`)
+				// is read through its instantiated body.
+				if instMember, ok := memberType.(*types.InstantiatedType); ok {
+					if body := instMember.Substitute(); body != nil {
+						memberType = body
+					}
+				}
 
 				// Check what type this member would produce for the property
 				switch member := memberType.(type) {
@@ -3265,6 +3273,8 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			}
 		}
 	}
+
+	c.skipArgContexts = nil
 
 	// Determine the result type based on the constructor type (unified ObjectType system)
 	var resultType types.Type

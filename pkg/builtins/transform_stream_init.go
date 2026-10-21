@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -45,21 +44,11 @@ func (t *TransformStreamInitializer) Name() string  { return "TransformStream" }
 func (t *TransformStreamInitializer) Priority() int { return PriorityTransformStream }
 
 func (t *TransformStreamInitializer) InitTypes(ctx *TypeContext) error {
-	// readable/writable are kept Any-typed: ReadableStream/WritableStream's
-	// own declared types live in separate initializers, and Any avoids
-	// coupling this constructor's type to their exact structural shape.
-	streamType := types.NewObjectType().
-		WithProperty("readable", types.Any).
-		WithProperty("writable", types.Any)
-
-	streamCtorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{}, streamType).
-		WithSimpleCallSignature([]types.Type{types.Any}, streamType).
-		WithSimpleConstructSignature([]types.Type{}, streamType).
-		WithSimpleConstructSignature([]types.Type{types.Any}, streamType).
-		WithProperty("prototype", streamType)
-
-	return ctx.DefineGlobal("TransformStream", streamCtorType)
+	streams := streamTypes(ctx)
+	if err := defineStreamAliases(ctx, streams); err != nil {
+		return err
+	}
+	return ctx.DefineGlobal("TransformStream", streams.transformCtor)
 }
 
 func (t *TransformStreamInitializer) InitRuntime(ctx *RuntimeContext) error {

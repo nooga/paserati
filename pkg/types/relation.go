@@ -49,4 +49,8 @@ type Relation struct {
 	// relatingInstances counts, per generic, the instantiations of it that
 	// objectAssignable is relating (source and target sides together).
 	relatingInstances map[*GenericType]int
+
+	// expandingInstances counts, per generic, the lazily instantiated
+	// references to it (InstantiatedType) isAssignable is expanding.
+	expandingInstances map[*GenericType]int
 }

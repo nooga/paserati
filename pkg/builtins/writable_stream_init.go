@@ -3,7 +3,6 @@ package builtins
 import (
 	"sync"
 
-	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -48,28 +47,11 @@ func (w *WritableStreamInitializer) Name() string  { return "WritableStream" }
 func (w *WritableStreamInitializer) Priority() int { return PriorityWritableStream }
 
 func (w *WritableStreamInitializer) InitTypes(ctx *TypeContext) error {
-	writerType := types.NewObjectType().
-		WithProperty("write", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true})).
-		WithProperty("close", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("abort", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true})).
-		WithProperty("releaseLock", types.NewSimpleFunction([]types.Type{}, types.Undefined)).
-		WithProperty("ready", types.Any).
-		WithProperty("closed", types.Any).
-		WithProperty("desiredSize", types.Any)
-
-	streamType := types.NewObjectType().
-		WithProperty("locked", types.Boolean).
-		WithProperty("getWriter", types.NewSimpleFunction([]types.Type{}, writerType)).
-		WithProperty("abort", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
-
-	streamCtorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{}, streamType).
-		WithSimpleCallSignature([]types.Type{types.Any}, streamType).
-		WithSimpleConstructSignature([]types.Type{}, streamType).
-		WithSimpleConstructSignature([]types.Type{types.Any}, streamType).
-		WithProperty("prototype", streamType)
-
-	return ctx.DefineGlobal("WritableStream", streamCtorType)
+	streams := streamTypes(ctx)
+	if err := defineStreamAliases(ctx, streams); err != nil {
+		return err
+	}
+	return ctx.DefineGlobal("WritableStream", streams.writableCtor)
 }
 
 func (w *WritableStreamInitializer) InitRuntime(ctx *RuntimeContext) error {

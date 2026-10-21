@@ -1034,10 +1034,18 @@ func (c *Checker) callTargetAcceptsTypeArguments(funcNodeType types.Type) bool {
 
 // checkOverloadedCallUnified handles function calls to overloaded functions using unified ObjectType
 func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objType *types.ObjectType) {
-	// Visit all arguments first
+	// Visit all arguments first. A context-sensitive one (a callback with
+	// untyped parameters) is typed by the overload chosen for it, as tsc
+	// does: visited here only to choose, without its diagnostics.
 	var argTypes []types.Type
-	for _, argNode := range node.Arguments {
-		c.visit(argNode)
+	sensitive := make(map[int]bool)
+	for i, argNode := range node.Arguments {
+		if isContextSensitiveArg(argNode) {
+			sensitive[i] = true
+			c.speculate(func() { c.visit(argNode) })
+		} else {
+			c.visit(argNode)
+		}
 		argType := argNode.GetComputedType()
 		if argType == nil {
 			argType = types.Any
@@ -1083,6 +1091,8 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 			objType.CallSignatures = candidates
 		}
 	}
+
+	candidates := objType.CallSigs()
 
 	// Generic overloads called without explicit type arguments are matched
 	// through the signature their type parameters infer from the arguments.
@@ -1196,6 +1206,9 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 	if signatureIndex == -1 {
 		// No matching signature found
 		c.reportOverloadFailure(node, argTypes, objType.CallSigs())
+		for i := range sensitive {
+			c.visit(node.Arguments[i])
+		}
 
 		// With one overload taking this many arguments, the call has its
 		// return type (tsc's candidateForArgumentError).
@@ -1215,6 +1228,35 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 
 	// Found a matching signature
 	matchedSignature := objType.CallSigs()[signatureIndex]
+	if original := candidates[signatureIndex]; len(node.TypeArguments) == 0 && c.isGenericSignature(original) {
+		// Its type parameters are inferred again with the callbacks
+		// contextually typed, as for a single generic signature (and an
+		// uninferred one takes its default).
+		inferred := c.inferGenericFunctionCall(node, original)
+		c.lastArgContexts = nil
+		if inferred != nil {
+			matchedSignature = inferred
+			resultType = inferred.ReturnType
+		}
+		for i := range sensitive {
+			if paramType := parameterTypeAt(matchedSignature, i); paramType != nil {
+				c.markContextuallyTypedFunction(node.Arguments[i], paramType)
+			}
+		}
+	} else if len(sensitive) > 0 {
+		for i := range sensitive {
+			if paramType := parameterTypeAt(matchedSignature, i); paramType != nil {
+				c.visitWithContext(node.Arguments[i], &ContextualType{ExpectedType: paramType})
+			} else {
+				c.visit(node.Arguments[i])
+			}
+		}
+		for i := range sensitive {
+			if paramType := parameterTypeAt(matchedSignature, i); paramType != nil {
+				c.markContextuallyTypedFunction(node.Arguments[i], paramType)
+			}
+		}
+	}
 	if checkerDebug {
 		debugPrintf("// [Checker OverloadCall] Found matching signature %d: %s for call with args (%v)\n",
 			signatureIndex, matchedSignature.String(), argTypes)
@@ -1512,6 +1554,9 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		}
 
 		c.checkExplicitTypeArgConstraints(typeParams, callNode.TypeArguments, solution)
+		// Type parameters left out take their defaults (`f<number>()` of
+		// `f<A, B = string>`).
+		c.applyTypeParameterDefaults(genericSig, solution)
 
 		// Substitute type parameters to create concrete signature
 		inferredSig := c.substituteTypeParameters(genericSig, solution)
@@ -1875,6 +1920,32 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			c.inferNesting[pg]--
 			c.inferNesting[ag]--
 		}()
+	}
+
+	// Built-in generic interfaces stay lazily instantiated: two references
+	// to one generic infer argument by argument (Promise<T> from
+	// Promise<number>), others through their instantiated bodies
+	// (ReadableWritablePair<T, R> from a TransformStream<I, O>).
+	pInst, pIsInst := paramType.(*types.InstantiatedType)
+	aInst, aIsInst := argType.(*types.InstantiatedType)
+	if pIsInst && aIsInst && pInst.Generic == aInst.Generic && len(pInst.TypeArguments) == len(aInst.TypeArguments) {
+		for i, pArg := range pInst.TypeArguments {
+			constraints = append(constraints, c.collectConstraintsFromTypeSeen(pArg, aInst.TypeArguments[i], seen)...)
+		}
+		return constraints
+	}
+	if pIsInst || aIsInst {
+		if pIsInst {
+			if body := pInst.Substitute(); body != nil {
+				paramType = body
+			}
+		}
+		if aIsInst {
+			if body := aInst.Substitute(); body != nil {
+				argType = body
+			}
+		}
+		return append(constraints, c.collectConstraintsFromTypeSeen(paramType, argType, seen)...)
 	}
 
 	// Readonly arrays and tuples infer through their element structure:
@@ -3234,4 +3305,59 @@ func (c *Checker) isUntypedCallTarget(t types.Type) bool {
 	}
 	fn, ok := c.env.ResolveType("Function")
 	return ok && fn != nil && c.rel.IsAssignable(obj, fn)
+}
+
+// isContextSensitiveArg reports whether arg takes types from its contextual
+// type: a function with an untyped parameter, alone or in an object or
+// array literal.
+func isContextSensitiveArg(arg parser.Expression) bool {
+	untyped := func(params []*parser.Parameter) bool {
+		for _, p := range params {
+			if p != nil && p.TypeAnnotation == nil {
+				return true
+			}
+		}
+		return false
+	}
+	switch a := arg.(type) {
+	case *parser.ArrowFunctionLiteral:
+		return untyped(a.Parameters)
+	case *parser.FunctionLiteral:
+		return untyped(a.Parameters)
+	case *parser.ShorthandMethod:
+		return untyped(a.Parameters)
+	case *parser.MethodDefinition:
+		return a.Value != nil && untyped(a.Value.Parameters)
+	case *parser.ObjectLiteral:
+		for _, prop := range a.Properties {
+			if prop != nil && prop.Value != nil && isContextSensitiveArg(prop.Value) {
+				return true
+			}
+		}
+	case *parser.ArrayLiteral:
+		for _, el := range a.Elements {
+			if el != nil && isContextSensitiveArg(el) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// parameterTypeAt is the type sig gives its i-th argument: a parameter's,
+// or the rest parameter's element type.
+func parameterTypeAt(sig *types.Signature, i int) types.Type {
+	if sig == nil {
+		return nil
+	}
+	if i < len(sig.ParameterTypes) && !(sig.IsVariadic && i == len(sig.ParameterTypes)-1 && sig.RestParameterType != nil && len(sig.ParameterTypes) > 0 && sig.ParameterTypes[i] == sig.RestParameterType) {
+		return sig.ParameterTypes[i]
+	}
+	if sig.IsVariadic && sig.RestParameterType != nil {
+		if arr, ok := sig.RestParameterType.(*types.ArrayType); ok {
+			return arr.ElementType
+		}
+		return sig.RestParameterType
+	}
+	return nil
 }
