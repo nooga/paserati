@@ -9,6 +9,22 @@ namespace N {
     x: number;
   }
 }
+// Or an interface declared further down, generic or not.
+interface D1 extends Later {}
+interface D2<T> extends LaterG<T, string> {
+  extra?: number;
+}
+function useD(d1: D1, d2: D2<number>): number {
+  const s: string = d2.r;
+  return d1.x + d2.t + s.length;
+}
+interface Later {
+  x: number;
+}
+interface LaterG<T, R> {
+  t: T;
+  r: R;
+}
 // `this` in an inherited generic method is the inheriting type.
 interface P {
   on<K>(n: K): this;

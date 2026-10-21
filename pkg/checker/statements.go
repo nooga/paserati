@@ -324,13 +324,13 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	defer func() { c.currentThisType = outerThisType }()
 
 	// First, inherit properties from extended interfaces
-	for _, extendedInterfaceExpr := range node.Extends {
+	for baseIndex, extendedInterfaceExpr := range node.Extends {
 		// Resolve the extended interface type expression (supports both simple names and generic applications)
 		if id, ok := extendedInterfaceExpr.(*parser.Identifier); ok && primitiveBaseTypeNames[id.Value] {
 			c.reportInvalidInterfaceBase(extendedInterfaceExpr, nil)
 			continue
 		}
-		if c.deferQualifiedBase(interfaceType, nil, extendedInterfaceExpr) {
+		if c.deferUndeclaredBase(node, baseIndex, interfaceType, nil) {
 			continue
 		}
 		errorsBefore := len(c.errors)
@@ -722,9 +722,9 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	inheritedNames := make(map[string]bool)
 
 	// Handle extends clause with generic environment
-	for _, extendedInterfaceExpr := range node.Extends {
+	for baseIndex, extendedInterfaceExpr := range node.Extends {
 		generic, _ := c.lookupTypeNoPending(node.Name.Value).(*types.GenericType)
-		if c.deferQualifiedBase(bodyType, generic, extendedInterfaceExpr) {
+		if c.deferUndeclaredBase(node, baseIndex, bodyType, generic) {
 			continue
 		}
 		// Resolve the extended interface type expression in the generic environment first

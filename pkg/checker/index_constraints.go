@@ -101,16 +101,7 @@ func (c *Checker) checkInterfaceExtends(node *parser.InterfaceDeclaration, own *
 	if own == nil || node.Name == nil || c.skipValidation() {
 		return
 	}
-	name := node.Name.Value
-	if len(node.TypeParameters) > 0 {
-		params := make([]string, 0, len(node.TypeParameters))
-		for _, tp := range node.TypeParameters {
-			if tp != nil && tp.Name != nil {
-				params = append(params, tp.Name.Value)
-			}
-		}
-		name += "<" + strings.Join(params, ", ") + ">"
-	}
+	name := interfaceDisplayName(node)
 	for i, ext := range extended {
 		if ext == nil || (!redeclaresNonPublicMember(node, ext) && c.isAssignableWithExpansion(membersView(own), membersView(ext))) {
 			continue
@@ -526,4 +517,20 @@ func classIndexSignatures(t *types.ObjectType, depth int) []*types.IndexSignatur
 		}
 	}
 	return sigs
+}
+
+// interfaceDisplayName is the interface's name with its type parameters, as
+// TS2430 names it (I<T, U>).
+func interfaceDisplayName(node *parser.InterfaceDeclaration) string {
+	name := node.Name.Value
+	if len(node.TypeParameters) > 0 {
+		params := make([]string, 0, len(node.TypeParameters))
+		for _, tp := range node.TypeParameters {
+			if tp != nil && tp.Name != nil {
+				params = append(params, tp.Name.Value)
+			}
+		}
+		name += "<" + strings.Join(params, ", ") + ">"
+	}
+	return name
 }
