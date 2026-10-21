@@ -607,6 +607,16 @@ func (c *Checker) assignmentReducedType(declared, assigned types.Type) types.Typ
 	var kept []types.Type
 	for _, m := range union.Types {
 		for _, a := range assignedMembers {
+			// A lib interface Paserati does not model (IteratorResult<T>)
+			// is an object type: it narrows to the declared object members,
+			// never to null, undefined or a primitive.
+			if ref, ok := a.(*types.GenericTypeAliasForwardReference); ok && c.instantiateAliasReference(ref) == nil {
+				if !isPrimitiveLike(m) {
+					kept = append(kept, m)
+					break
+				}
+				continue
+			}
 			if c.rel.IsAssignable(a, m) {
 				kept = append(kept, m)
 				break
