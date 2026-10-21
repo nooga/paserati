@@ -1744,12 +1744,24 @@ func (c *Checker) inferGenericFunctionCallIn(callNode *parser.CallExpression, ge
 		paramsOnly.ReturnType = nil
 		ctxParams = c.substituteTypeParameters(&paramsOnly, fixedToConstraints).ParameterTypes
 	}
+	// An object literal's callbacks fix the type parameters with defaults
+	// to them (tsc fixes a type parameter with nothing inferred to its
+	// default): `new WritableStream({ write(chunk) {} })` types chunk any.
+	objCtxParams := genericSig.ParameterTypes
+	if fixedToDefaults := defaultedTypeParams(genericSig.TypeParameters); len(fixedToDefaults) > 0 {
+		paramsOnly := *genericSig
+		paramsOnly.ReturnType = nil
+		objCtxParams = c.substituteTypeParameters(&paramsOnly, fixedToDefaults).ParameterTypes
+	}
 	for i, argNode := range callNode.Arguments {
 		if argTypes[i] == nil {
 			if i < len(genericSig.ParameterTypes) {
 				paramType := genericSig.ParameterTypes[i]
 				if _, isFn := argNode.(*parser.ArrowFunctionLiteral); isFn && i < len(ctxParams) {
 					paramType = ctxParams[i]
+				}
+				if _, isObj := argNode.(*parser.ObjectLiteral); isObj && i < len(objCtxParams) {
+					paramType = objCtxParams[i]
 				}
 				argContexts[argNode] = paramType
 				c.visitWithContext(argNode, &ContextualType{
@@ -1810,6 +1822,17 @@ func (c *Checker) inferGenericFunctionCallIn(callNode *parser.CallExpression, ge
 // applyTypeParameterDefaults gives the type parameters of sig that nothing
 // inferred their defaults (`konn<C = NoContext>()`), as tsc does.
 func (c *Checker) applyTypeParameterDefaults(sig *types.Signature, solution map[*types.TypeParameter]types.Type) {
+	// A type parameter with a default inferred as itself (from a callback
+	// contextually typed while it was still unsolved: `transform(chunk,
+	// controller)` of `new TransformStream({...})`) was not inferred.
+	// FIXME: without a default this stays, because an arrow returning into
+	// a contextual T reports T as its return type (so `fn: () => T` infers T
+	// as T) and code relies on that; tsc infers T from the body instead.
+	for _, tp := range sig.TypeParameters {
+		if self, ok := solution[tp].(*types.TypeParameterType); ok && self.Parameter == tp && tp.Default != nil {
+			delete(solution, tp)
+		}
+	}
 	// Only the declared parameters: walking the signature for others would
 	// expand self-growing generics (Grow<T>'s next(): Grow<Wrap<T>>) forever.
 	for _, tp := range sig.TypeParameters {
@@ -3407,6 +3430,17 @@ func (c *Checker) indexedAccessUnion(u *types.UnionType) (*types.IndexedAccessTy
 
 // constrainedTypeParams maps each type parameter with a literal-like
 // constraint to that constraint.
+// defaultedTypeParams maps the type parameters with defaults to them.
+func defaultedTypeParams(tps []*types.TypeParameter) map[*types.TypeParameter]types.Type {
+	m := map[*types.TypeParameter]types.Type{}
+	for _, tp := range tps {
+		if tp != nil && tp.Default != nil {
+			m[tp] = tp.Default
+		}
+	}
+	return m
+}
+
 func constrainedTypeParams(tps []*types.TypeParameter) map[*types.TypeParameter]types.Type {
 	m := map[*types.TypeParameter]types.Type{}
 	for _, tp := range tps {

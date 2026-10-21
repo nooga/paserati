@@ -736,8 +736,7 @@ func (c *Checker) inferFinalReturnType(expectedReturnType types.Type, functionNa
 		return types.Void // Functions with no return statements have void return type
 	}
 
-	// Use NewUnionType to combine inferred return types
-	finalType := types.NewUnionType(c.currentInferredReturnTypes...)
+	finalType := returnTypeOfReturns(c.currentInferredReturnTypes)
 	if checkerDebug {
 		debugPrintf("// [Checker Function Common] Inferred return type for '%s': %s\n", functionName, finalType.String())
 	}
@@ -932,4 +931,28 @@ func (c *Checker) hasContextualThis(body parser.Node) bool {
 		})
 	}
 	return c.contextualThisBodies[body]
+}
+
+// returnTypeOfReturns is the type the returns of a function body make: bare
+// `return;` statements (recorded as void) make it void, or contribute
+// undefined beside returns with values, as in tsc.
+func returnTypeOfReturns(returned []types.Type) types.Type {
+	allVoid := true
+	for _, t := range returned {
+		if t != types.Void {
+			allVoid = false
+			break
+		}
+	}
+	if allVoid {
+		return types.Void
+	}
+	normalized := make([]types.Type, len(returned))
+	for i, t := range returned {
+		if t == types.Void {
+			t = types.Undefined
+		}
+		normalized[i] = t
+	}
+	return types.NewUnionType(normalized...)
 }

@@ -111,9 +111,19 @@ func (c *Checker) publishGlobals(env *Environment, before globalsSnapshot) {
 		if _, isImport := imported[name]; isImport {
 			continue
 		}
-		if prev, seen := before.values[name]; sym.Type != nil && (!seen || prev != sym.Type) {
-			g.values[name] = sym.Type
+		prev, seen := before.values[name]
+		if sym.Type == nil || seen && prev == sym.Type {
+			continue
 		}
+		// A redeclaration that came out any (@types/node's `var
+		// ReadableStream: typeof globalThis extends { onmessage: any;
+		// ReadableStream: infer T } ? T : ...`, which tsc resolves to the
+		// first declaration, the DOM's) does not replace a typed global.
+		// FIXME: tsc keeps the first declaration's type for every `var`.
+		if seen && prev != nil && prev != types.Any && sym.Type == types.Any {
+			continue
+		}
+		g.values[name] = sym.Type
 	}
 	for name, t := range env.typeAliases {
 		if _, isImport := imported[name]; isImport {

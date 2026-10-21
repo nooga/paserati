@@ -2290,7 +2290,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					actualReturnType = types.Never
 				}
 			} else {
-				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
+				actualReturnType = returnTypeOfReturns(c.currentInferredReturnTypes)
 			}
 			if checkerDebug {
 				debugPrintf("// [Checker Pass 3] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
@@ -3370,6 +3370,11 @@ func (c *Checker) visit(node parser.Node) {
 			// A returned object literal's members widen too, so the
 			// inferred return type is `{ a: number }`, not `{ a: 1 }`.
 			widenedReturnType = c.rel.DeeplyWidenType(widenedReturnType)
+		}
+		if node.ReturnValue == nil {
+			// A bare `return;` is void unless another return has a value
+			// (inferFinalReturnType).
+			widenedReturnType = types.Void
 		}
 		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, widenedReturnType)
 
@@ -4512,7 +4517,7 @@ func (c *Checker) visit(node parser.Node) {
 			if len(c.currentInferredReturnTypes) == 0 {
 				actualReturnType = types.Void // Functions with no return statements have void return type
 			} else {
-				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
+				actualReturnType = returnTypeOfReturns(c.currentInferredReturnTypes)
 			}
 			if checkerDebug {
 				debugPrintf("// [Checker ShorthandMethod] Inferred return type for '%s': %s\n", methodNameForLog, actualReturnType.String())

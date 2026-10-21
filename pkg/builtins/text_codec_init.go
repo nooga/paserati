@@ -92,18 +92,26 @@ func (t *TextDecoderInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("encoding", types.String).
 		WithProperty("fatal", types.Boolean).
 		WithProperty("ignoreBOM", types.Boolean).
+		// decode(input?: AllowSharedBufferSource, options?: TextDecodeOptions)
+		// FIXME: the runtime ignores options.stream (a multi-byte sequence
+		// split across chunks is not carried over).
 		WithProperty("decode", types.NewFunctionType(&types.Signature{
-			ParameterTypes: []types.Type{types.Any},
+			ParameterNames: []string{"input", "options"},
+			ParameterTypes: []types.Type{types.Any, types.NewObjectType().WithOptionalProperty("stream", types.Boolean)},
 			ReturnType:     types.String,
-			OptionalParams: []bool{true},
+			OptionalParams: []bool{true, true},
 		}))
 
-	// TextDecoder constructor type - takes optional encoding string
+	// new TextDecoder(label?: string, options?: TextDecoderOptions)
+	decoderOptions := types.NewObjectType().
+		WithOptionalProperty("fatal", types.Boolean).
+		WithOptionalProperty("ignoreBOM", types.Boolean)
 	ctorType := types.NewObjectType().
 		WithSimpleCallSignature([]types.Type{}, protoType).
 		WithSimpleCallSignature([]types.Type{types.String}, protoType).
 		WithSimpleConstructSignature([]types.Type{}, protoType).
 		WithSimpleConstructSignature([]types.Type{types.String}, protoType).
+		WithSimpleConstructSignature([]types.Type{types.String, decoderOptions}, protoType).
 		WithProperty("prototype", protoType)
 
 	return ctx.DefineGlobal("TextDecoder", ctorType)
