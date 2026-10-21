@@ -119,6 +119,33 @@ func TestContextModulesNative(t *testing.T) {
 	}
 }
 
+// A native module's default export object is built per Context; its keys
+// must come in one order every time. Objects share a process-wide tree of
+// shape transitions keyed by property order, so a random order (Go map
+// iteration) grows a new branch of that tree for every Context, and the tree
+// is never freed.
+func TestContextModulesNativeDefaultKeyOrder(t *testing.T) {
+	p := NewPaserati()
+	defer p.Cleanup()
+	p.DeclareModule("wide", func(m *ModuleBuilder) {
+		for i := 0; i < 16; i++ {
+			n := i
+			m.Function(fmt.Sprintf("f%02d", i), func() int { return n })
+		}
+		m.Default(nil)
+	})
+	want := "f00"
+	for i := 1; i < 16; i++ {
+		want += fmt.Sprintf(",f%02d", i)
+	}
+	for i := 0; i < 20; i++ {
+		c, _ := p.NewContext()
+		if got := runIn(t, c, i, `import wide from "wide"; Object.keys(wide).join(",")`); got != want {
+			t.Fatalf("context %d: keys %s, want %s", i, got, want)
+		}
+	}
+}
+
 func TestContextModulesDefaultRealmUnchanged(t *testing.T) {
 	p := newModuleSession(t, map[string]string{
 		"lib": `let calls = 0; export function bump(): number { calls++; return calls; }`,
