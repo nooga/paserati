@@ -3131,6 +3131,11 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 				}
 			}
 		}
+		// Nothing to infer from (`new TRPCBuilder()`): the type parameters
+		// take their defaults or constraints.
+		if constructorType == types.Type(genericType) && len(genericType.TypeParameters) > 0 {
+			constructorType = c.instantiateGenericType(genericType, c.fillTypeArguments(genericType.TypeParameters, nil), nil)
+		}
 	} else {
 		// Check arguments with proper validation
 		// First, try to get the constructor signature to validate arguments

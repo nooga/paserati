@@ -5801,6 +5801,29 @@ func (c *Checker) GetProgram() *parser.Program {
 
 // extractInferredTypeArguments extracts the inferred type arguments from a solved type inference
 // It returns an ordered list of types that matches the order of type parameters in the generic type
+// fillTypeArguments gives the type parameters solution leaves out what tsc
+// gives a class's type parameters `new` leaves uninferred: the default, else
+// the constraint, with the arguments before it substituted in, else unknown.
+func (c *Checker) fillTypeArguments(params []*types.TypeParameter, solution map[*types.TypeParameter]types.Type) []types.Type {
+	args := make([]types.Type, len(params))
+	byName := make(map[string]types.Type, len(params))
+	for i, tp := range params {
+		t, ok := solution[tp]
+		switch {
+		case ok:
+		case tp.Default != nil:
+			t = c.substituteTypes(tp.Default, byName)
+		case tp.Constraint != nil:
+			t = c.substituteTypes(tp.Constraint, byName)
+		default:
+			t = types.Unknown
+		}
+		args[i] = t
+		byName[tp.Name] = t
+	}
+	return args
+}
+
 func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, originalSig, inferredSig *types.Signature) []types.Type {
 	// Create a map from type parameter to inferred type by comparing original and inferred signatures
 	solution := make(map[*types.TypeParameter]types.Type)
@@ -5833,20 +5856,7 @@ func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, o
 		}
 	}
 
-	// Build ordered type arguments based on generic type's type parameters
-	var typeArgs []types.Type
-	for _, typeParam := range genericType.TypeParameters {
-		if inferredType, found := solution[typeParam]; found {
-			typeArgs = append(typeArgs, inferredType)
-			if checkerDebug {
-				debugPrintf("// [Checker ExtractInferred] %s = %s\n", typeParam.Name, inferredType.String())
-			}
-		} else {
-			// Type parameter not inferred - use Any as fallback
-			typeArgs = append(typeArgs, types.Any)
-			debugPrintf("// [Checker ExtractInferred] %s = any (not inferred)\n", typeParam.Name)
-		}
-	}
+	typeArgs := c.fillTypeArguments(genericType.TypeParameters, solution)
 
 	return typeArgs
 }
