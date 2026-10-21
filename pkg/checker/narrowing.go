@@ -2334,20 +2334,14 @@ func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Typ
 // with a value that matches the expected literal type.
 // Used for discriminated union narrowing like: if (expr.kind === "num")
 func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName string, expectedValue types.Type) bool {
-	objType, ok := c.resolveObjectTypeForNarrowing(memberType)
-	if !ok {
-		return false
-	}
-
-	// Check if the object has the discriminant property
-	propType, exists := objType.Props()[propName]
+	propType, optional, exists := c.discriminantProperty(memberType, propName)
 	if !exists {
 		return false
 	}
 	if expectedValue == falsyDiscriminant {
 		return types.ExtractFalsyTypes(propType) != types.Never
 	}
-	if expectedValue == types.Undefined && objType.IsPropertyOptional(propName) {
+	if expectedValue == types.Undefined && optional {
 		return true
 	}
 
@@ -2362,6 +2356,40 @@ func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName stri
 
 	// For general type comparison
 	return c.rel.IsAssignable(expectedValue, propType)
+}
+
+// discriminantProperty reads propName off a union member, which may be an
+// intersection. An intersection's property is optional only when every part
+// declaring it marks it optional.
+func (c *Checker) discriminantProperty(memberType types.Type, propName string) (types.Type, bool, bool) {
+	if inter, ok := memberType.(*types.IntersectionType); ok {
+		apparent, ok := c.apparentType(inter).(*types.IntersectionType)
+		if !ok {
+			return nil, false, false
+		}
+		propType := c.getPropertyTypeFromIntersection(apparent, propName)
+		if propType == nil || propType == types.Never {
+			return nil, false, false
+		}
+		optional := true
+		for _, part := range apparent.Types {
+			if obj, ok := c.resolveObjectTypeForNarrowing(part); ok {
+				if _, has := obj.Props()[propName]; has && !obj.IsPropertyOptional(propName) {
+					optional = false
+				}
+			}
+		}
+		return propType, optional, true
+	}
+	objType, ok := c.resolveObjectTypeForNarrowing(memberType)
+	if !ok {
+		return nil, false, false
+	}
+	propType, exists := objType.Props()[propName]
+	if !exists {
+		return nil, false, false
+	}
+	return propType, objType.IsPropertyOptional(propName), true
 }
 
 func (c *Checker) resolveObjectTypeForNarrowing(t types.Type) (*types.ObjectType, bool) {

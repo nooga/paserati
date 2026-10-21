@@ -1982,6 +1982,18 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						memberHasProperty = true
 						memberResultType = c.instantiateGenericMethod(methodType, member.ElementType)
 					}
+				case *types.IntersectionType:
+					// As a lone intersection is read (see the case above).
+					var propType types.Type
+					if apparent, ok := c.apparentType(member).(*types.IntersectionType); ok {
+						propType = c.getPropertyTypeFromIntersection(apparent, propertyName)
+					} else {
+						propType = c.getPropertyTypeFromType(c.apparentType(member), propertyName, false)
+					}
+					if propType != nil && propType != types.Never {
+						memberHasProperty = true
+						memberResultType = propType
+					}
 				default:
 					// Check primitive prototypes for string, number, boolean, symbol, RegExp
 					var prototypeName string
