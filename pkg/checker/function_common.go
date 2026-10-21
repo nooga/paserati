@@ -113,6 +113,9 @@ type FunctionCheckContext struct {
 	// type is inferred from them (tsc does not elaborate a block-bodied or
 	// conditional-arm arrow into its returns).
 	InferUnderContext bool
+	// MayReturnNever: a body that cannot complete and has no return
+	// statement returns never (see inferBodyReturnType).
+	MayReturnNever bool
 }
 
 // resolveFunctionParameters resolves parameter types and creates the parameter environment setup
@@ -629,7 +632,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 		if exprBody, ok := ctx.Body.(parser.Expression); ok {
 			inferred = exprBody.GetComputedType()
 		} else {
-			inferred = c.inferFinalReturnType(nil, ctx.FunctionName)
+			inferred = c.inferBodyReturnType(ctx, nil)
 		}
 		if inferred == nil {
 			inferred = types.Any
@@ -680,11 +683,11 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 			}
 		} else {
 			// Block body for arrow function - use normal inference
-			finalReturnType = c.inferFinalReturnType(expectedReturnType, ctx.FunctionName)
+			finalReturnType = c.inferBodyReturnType(ctx, expectedReturnType)
 		}
 	} else {
 		// Regular function - use normal inference
-		finalReturnType = c.inferFinalReturnType(expectedReturnType, ctx.FunctionName)
+		finalReturnType = c.inferBodyReturnType(ctx, expectedReturnType)
 	}
 
 	// Restore return context, this context, and async/generator context
@@ -710,6 +713,19 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 }
 
 // inferFinalReturnType handles return type inference logic
+// inferBodyReturnType is inferFinalReturnType for ctx's block body: a body
+// with no return statement whose end is unreachable returns never when the
+// function may (tsc's mayReturnNever: function expressions, arrows and
+// object literal methods, not declarations or class methods).
+func (c *Checker) inferBodyReturnType(ctx *FunctionCheckContext, expectedReturnType types.Type) types.Type {
+	if expectedReturnType == nil && ctx.MayReturnNever && !ctx.IsGenerator && len(c.currentInferredReturnTypes) == 0 {
+		if block, ok := ctx.Body.(*parser.BlockStatement); ok && !c.endReachable(block) {
+			return types.Never
+		}
+	}
+	return c.inferFinalReturnType(expectedReturnType, ctx.FunctionName)
+}
+
 func (c *Checker) inferFinalReturnType(expectedReturnType types.Type, functionName string) types.Type {
 	if expectedReturnType != nil {
 		return expectedReturnType

@@ -167,10 +167,11 @@ const checks: boolean[] = [];
   const p9: any = new Proxy(
     {},
     {
+      // A number key is a type error too; the runtime check is tested here.
       ownKeys() {
         return ["a", 42];
       },
-    }
+    } as any
   );
   let threw = false;
   let isTypeError = false;

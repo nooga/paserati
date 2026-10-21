@@ -1020,7 +1020,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 		if method.IsStatic {
 			deferStaticKey(method.Key)
 			// TS2378, as for instance getters below.
-			if method.Kind == "getter" && method.Value != nil && method.Value.Body != nil && !bodyContainsReturn(method.Value.Body) {
+			if method.Kind == "getter" && method.Value != nil && method.Value.Body != nil && !bodyContainsReturn(method.Value.Body) && c.endReachable(method.Value.Body) {
 				c.addErrorWithCode(method.Key, errors.TS2378, "A 'get' accessor must return a value.")
 			}
 		}
@@ -1076,7 +1076,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			c.validateOverrideMethod(getter, superClass, className)
 
 			// TS2378: A 'get' accessor must return a value.
-			if getter.Value != nil && getter.Value.Body != nil && !bodyContainsReturn(getter.Value.Body) {
+			if getter.Value != nil && getter.Value.Body != nil && !bodyContainsReturn(getter.Value.Body) && c.endReachable(getter.Value.Body) {
 				c.addErrorWithCode(getter.Key, errors.TS2378, "A 'get' accessor must return a value.")
 			}
 
@@ -1563,6 +1563,7 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 	}()
 
 	// Check the function literal
+	c.markVoidOnly(fn)
 	c.checkFunctionLiteral(fn)
 }
 
@@ -1896,6 +1897,7 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 
 	// For generic methods, we need to check them properly to make type parameters available
 	if len(method.Value.TypeParameters) > 0 {
+		c.markVoidOnly(method.Value)
 		// Check the method's function literal which will handle type parameters
 		if c.deferMethodBodies {
 			// Outer declarations are not hoisted yet, so this pass only

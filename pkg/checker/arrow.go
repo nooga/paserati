@@ -15,6 +15,7 @@ func (c *Checker) checkArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) {
 		ReturnTypeAnnotation:    node.ReturnTypeAnnotation,
 		Body:                    node.Body,
 		IsArrow:                 true,
+		MayReturnNever:          true,
 		IsGenerator:             false,        // Arrow functions cannot be generators
 		IsAsync:                 node.IsAsync, // Support async arrow functions
 		AllowSelfReference:      false,        // Arrow functions don't have self-reference

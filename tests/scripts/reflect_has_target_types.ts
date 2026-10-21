@@ -52,7 +52,7 @@ try {
 checks.push(trapThrew);
 
 // --- Proxy: a non-callable trap throws a TypeError ---
-const nonCallableTrapProxy: any = new Proxy({}, { has: 42 });
+const nonCallableTrapProxy: any = new Proxy({}, { has: 42 } as any);
 let nonCallableThrew = false;
 try {
   Reflect.has(nonCallableTrapProxy, "a");

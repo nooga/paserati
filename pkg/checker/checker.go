@@ -645,6 +645,10 @@ type Checker struct {
 	callReceiver types.Type
 	// Generic methods whose first check only produced a signature.
 	speculatedGenericMethods map[*parser.FunctionLiteral]bool
+	// voidOnlyFunctions are the function declarations and class methods:
+	// unlike function expressions, a body of theirs that cannot complete
+	// still returns void (tsc's mayReturnNever).
+	voidOnlyFunctions map[*parser.FunctionLiteral]bool
 	// True while Pass 2.5 checks the bodies of top-level classes: all top-level
 	// bindings are hoisted by then, so unresolved names are real errors.
 	strictDeferredMethodBodies bool
@@ -1853,6 +1857,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		for _, hoisted := range hoistedInSourceOrder(program.HoistedDeclarations) {
 			name, hoistedNode := hoisted.name, hoisted.node
 			funcLit, _ := hoistedNode.(*parser.FunctionLiteral) // Parser guarantees type
+			c.markVoidOnly(funcLit)
 
 			debugPrintf("// [Checker Pass 2] Processing Hoisted Function Signature: %s\n", name)
 
@@ -2256,6 +2261,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		} else { // No annotation, infer
 			if len(c.currentInferredReturnTypes) == 0 {
 				actualReturnType = types.Void // Functions with no return statements have void return type
+				// A function expression whose body cannot complete returns
+				// never; a declaration still returns void (see inferBodyReturnType).
+				if !c.voidOnlyFunctions[funcLit] && !funcLit.IsGenerator && !c.endReachable(funcLit.Body) {
+					actualReturnType = types.Never
+				}
 			} else {
 				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
 			}
@@ -3358,6 +3368,7 @@ func (c *Checker) visit(node parser.Node) {
 					debugPrintf("// [Checker Block Hoisting] ERROR: Hoisted node for '%s' is not a FunctionLiteral (%T)\n", name, hoistedNode)
 					continue
 				}
+				c.markVoidOnly(funcLit)
 
 				// Resolve the function type signature using the *current* (block) environment
 				funcSig := c.resolveFunctionLiteralSignature(funcLit, c.env)
@@ -5370,6 +5381,8 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				Body:                     node.Body,
 				IsArrow:                  true,
 				IsGenerator:              false, // Arrow functions cannot be generators
+				IsAsync:                  node.IsAsync,
+				MayReturnNever:           true,
 				AllowSelfReference:       false,
 				AllowOverloadCompletion:  false,
 				ContextualParameterTypes: ctxParamTypes,        // Pass contextual parameter types

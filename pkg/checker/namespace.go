@@ -340,6 +340,7 @@ func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Envi
 		if funcLit == nil || funcLit.Name == nil {
 			return
 		}
+		c.markVoidOnly(funcLit)
 		fname := funcLit.Name.Value
 		funcSig := c.resolveFunctionLiteralSignature(funcLit, env)
 		if funcSig == nil {

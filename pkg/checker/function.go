@@ -29,6 +29,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		ReturnTypeAnnotation:    node.ReturnTypeAnnotation,
 		Body:                    node.Body,
 		IsArrow:                 false,
+		MayReturnNever:          !c.voidOnlyFunctions[node],
 		IsGenerator:             node.IsGenerator, // Detect generator functions
 		IsAsync:                 node.IsAsync,     // Detect async functions
 		AllowSelfReference:      node.Name != nil, // Allow recursion for named functions
@@ -415,4 +416,16 @@ func contextualParameterTypes(expected types.Type, params []*parser.Parameter, r
 		}
 	}
 	return out
+}
+
+// markVoidOnly records fn as a function declaration or class method (see
+// voidOnlyFunctions).
+func (c *Checker) markVoidOnly(fn *parser.FunctionLiteral) {
+	if fn == nil {
+		return
+	}
+	if c.voidOnlyFunctions == nil {
+		c.voidOnlyFunctions = make(map[*parser.FunctionLiteral]bool)
+	}
+	c.voidOnlyFunctions[fn] = true
 }
