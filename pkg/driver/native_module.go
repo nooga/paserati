@@ -426,10 +426,18 @@ func (m *ModuleBuilder) applyDefaultExport() {
 		}
 		nsType := types.NewObjectType()
 		nsObj := vm.NewObject(proto).AsPlainObject()
-		for name, typ := range m.exports {
-			if name == "default" {
-				continue
+		// Exports in sorted order, as the converter does for maps: Go's
+		// random map order would give each realm's namespace object its own
+		// chain of shapes in the process-wide transition tree, never freed.
+		names := make([]string, 0, len(m.exports))
+		for name := range m.exports {
+			if name != "default" {
+				names = append(names, name)
 			}
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			typ := m.exports[name]
 			nsType = nsType.WithProperty(name, typ)
 			if val, ok := m.values[name]; ok {
 				nsObj.SetOwn(name, val)
