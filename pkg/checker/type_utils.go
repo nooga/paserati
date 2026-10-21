@@ -286,6 +286,10 @@ func (c *Checker) apparentType(t types.Type) types.Type {
 		if e := c.expandIfMappedType(t); e != nil {
 			return e
 		}
+	case *types.GenericTypeAliasForwardReference:
+		if resolved := c.instantiateAliasReference(tt); resolved != nil {
+			return c.apparentType(resolved)
+		}
 	case *types.IntersectionType:
 		changed := false
 		members := make([]types.Type, len(tt.Types))

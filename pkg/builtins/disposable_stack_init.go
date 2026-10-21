@@ -248,8 +248,15 @@ func (d *DisposableStackInitializer) Name() string  { return "DisposableStack" }
 func (d *DisposableStackInitializer) Priority() int { return 24 }
 
 func (d *DisposableStackInitializer) InitTypes(ctx *TypeContext) error {
+	disposeFn := types.NewSimpleFunction([]types.Type{}, types.Void)
 	instanceType := disposableInstanceType("DisposableStack")
-	instanceType.WithProperty("dispose", types.NewSimpleFunction([]types.Type{}, types.Void))
+	instanceType.WithProperty("dispose", disposeFn)
+	instanceType.WithProperty("@@symbol:dispose", disposeFn)
+
+	// lib.esnext.disposable's `interface Disposable { [Symbol.dispose](): void }`.
+	if err := ctx.DefineTypeAlias("Disposable", types.NewObjectType().WithProperty("@@symbol:dispose", disposeFn)); err != nil {
+		return err
+	}
 
 	ctorType := types.NewObjectType().
 		WithSimpleConstructSignature([]types.Type{}, instanceType).
@@ -356,7 +363,15 @@ func (a *AsyncDisposableStackInitializer) Priority() int { return 25 }
 func (a *AsyncDisposableStackInitializer) InitTypes(ctx *TypeContext) error {
 	instanceType := disposableInstanceType("AsyncDisposableStack")
 	promiseVoid := types.NewInstantiatedType(types.PromiseGeneric, []types.Type{types.Void})
-	instanceType.WithProperty("disposeAsync", types.NewSimpleFunction([]types.Type{}, promiseVoid))
+	disposeAsyncFn := types.NewSimpleFunction([]types.Type{}, promiseVoid)
+	instanceType.WithProperty("disposeAsync", disposeAsyncFn)
+	instanceType.WithProperty("@@symbol:asyncDispose", disposeAsyncFn)
+
+	// lib.esnext.disposable's `interface AsyncDisposable { [Symbol.asyncDispose](): PromiseLike<void> }`.
+	// FIXME: returns Promise<void>; the lib says PromiseLike<void>.
+	if err := ctx.DefineTypeAlias("AsyncDisposable", types.NewObjectType().WithProperty("@@symbol:asyncDispose", disposeAsyncFn)); err != nil {
+		return err
+	}
 
 	ctorType := types.NewObjectType().
 		WithSimpleConstructSignature([]types.Type{}, instanceType).

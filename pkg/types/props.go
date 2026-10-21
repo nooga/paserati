@@ -135,6 +135,10 @@ func (r *Relation) GetPropertyType(objectType Type, propertyName string, isOptio
 			// Substitute the type parameters and recursively get the property
 			substituted := obj.Substitute()
 			return r.GetPropertyType(substituted, propertyName, isOptionalChaining)
+		case *GenericTypeAliasForwardReference:
+			// A generic nothing declared (a lib interface Paserati does not
+			// model, such as AsyncIterator): member access reads it as any.
+			return Any
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			return Never

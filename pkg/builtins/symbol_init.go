@@ -48,21 +48,21 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("for", types.NewSimpleFunction([]types.Type{types.String}, types.Symbol)).
 		WithProperty("keyFor", types.NewSimpleFunction([]types.Type{types.Any}, types.NewUnionType(types.String, types.Undefined))).
 		// Well-known symbols
-		WithProperty("iterator", types.Symbol).
-		WithProperty("toStringTag", types.Symbol).
-		WithProperty("hasInstance", types.Symbol).
-		WithProperty("toPrimitive", types.Symbol).
-		WithProperty("isConcatSpreadable", types.Symbol).
-		WithProperty("species", types.Symbol).
-		WithProperty("match", types.Symbol).
-		WithProperty("matchAll", types.Symbol).
-		WithProperty("replace", types.Symbol).
-		WithProperty("search", types.Symbol).
-		WithProperty("split", types.Symbol).
-		WithProperty("unscopables", types.Symbol).
-		WithProperty("asyncIterator", types.Symbol).
-		WithProperty("dispose", types.Symbol).
-		WithProperty("asyncDispose", types.Symbol).
+		WithReadOnlyProperty("iterator", types.Symbol).
+		WithReadOnlyProperty("toStringTag", types.Symbol).
+		WithReadOnlyProperty("hasInstance", types.Symbol).
+		WithReadOnlyProperty("toPrimitive", types.Symbol).
+		WithReadOnlyProperty("isConcatSpreadable", types.Symbol).
+		WithReadOnlyProperty("species", types.Symbol).
+		WithReadOnlyProperty("match", types.Symbol).
+		WithReadOnlyProperty("matchAll", types.Symbol).
+		WithReadOnlyProperty("replace", types.Symbol).
+		WithReadOnlyProperty("search", types.Symbol).
+		WithReadOnlyProperty("split", types.Symbol).
+		WithReadOnlyProperty("unscopables", types.Symbol).
+		WithReadOnlyProperty("asyncIterator", types.Symbol).
+		WithReadOnlyProperty("dispose", types.Symbol).
+		WithReadOnlyProperty("asyncDispose", types.Symbol).
 		// Symbol constructor signature - returns symbol
 		WithSimpleCallSignature([]types.Type{}, types.Symbol). // Symbol()
 		WithSimpleCallSignature(
