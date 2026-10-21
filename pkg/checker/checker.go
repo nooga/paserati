@@ -4720,6 +4720,46 @@ func (c *Checker) visit(node parser.Node) {
 }
 
 // checkArrayDestructuringDeclaration handles type checking for array destructuring declarations
+// patternTupleOfLiteral is the type an array literal initializer has for an
+// array binding pattern: tsc types it by the pattern, as a tuple of its
+// widened element types (`let [a, [b, c]] = [1, [2, 3]]` binds three
+// numbers), following nested array patterns. nil when the literal spreads.
+func (c *Checker) patternTupleOfLiteral(lit *parser.ArrayLiteral, targets []parser.Expression) types.Type {
+	elems := make([]types.Type, len(lit.Elements))
+	for i, el := range lit.Elements {
+		if _, spread := el.(*parser.SpreadElement); spread || el == nil {
+			return nil
+		}
+		if i < len(targets) {
+			nestedLit, litOK := el.(*parser.ArrayLiteral)
+			nestedPattern, patOK := targets[i].(*parser.ArrayLiteral)
+			if litOK && patOK && !arrayPatternHasRest(nestedPattern) {
+				if nested := c.patternTupleOfLiteral(nestedLit, nestedPattern.Elements); nested != nil {
+					elems[i] = nested
+					continue
+				}
+			}
+		}
+		t := el.GetComputedType()
+		if t == nil {
+			t = types.Any
+		}
+		elems[i] = c.rel.GetWidenedType(t)
+	}
+	return &types.TupleType{ElementTypes: elems}
+}
+
+// arrayPatternHasRest reports whether a nested array pattern ends in a rest
+// element.
+func arrayPatternHasRest(pattern *parser.ArrayLiteral) bool {
+	for _, el := range pattern.Elements {
+		if _, ok := el.(*parser.SpreadElement); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructuringDeclaration) {
 	// Check if we have an initializer (required for const, optional for let/var)
 	if node.Value == nil {
@@ -4774,6 +4814,20 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 	destructureType := valueType
 	if expectedType != nil {
 		destructureType = expectedType
+	} else if lit, ok := node.Value.(*parser.ArrayLiteral); ok {
+		targets := make([]parser.Expression, len(node.Elements))
+		hasRest := false
+		for i, el := range node.Elements {
+			if el != nil {
+				targets[i] = el.Target
+				hasRest = hasRest || el.IsRest
+			}
+		}
+		if !hasRest {
+			if tuple := c.patternTupleOfLiteral(lit, targets); tuple != nil {
+				destructureType = tuple
+			}
+		}
 	}
 
 	// Extract element types based on the destructure type

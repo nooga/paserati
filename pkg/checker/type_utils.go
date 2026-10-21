@@ -137,18 +137,32 @@ func objectLikeUnionMembers(union *types.UnionType) (members []*types.ObjectType
 }
 
 // destructurableObject is the object an object pattern reads properties from
-// when t is an intersection or a mapped type (`MergeC<A, B> = A & B`), and t
-// otherwise.
+// when t is an intersection or a mapped type (`MergeC<A, B> = A & B`), a
+// union of such members each so flattened, and t otherwise.
 func (c *Checker) destructurableObject(t types.Type) types.Type {
 	if eff := c.resolveStructural(types.GetEffectiveType(t)); eff != nil {
 		if _, ok := eff.(*types.IntersectionType); ok {
 			t = eff
 		}
 	}
-	switch t.(type) {
+	switch tt := t.(type) {
 	case *types.IntersectionType, *types.MappedType:
 		if obj, ok := c.structuralObject(t); ok {
 			return obj
+		}
+	case *types.UnionType:
+		changed := false
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = m
+			switch m.(type) {
+			case *types.IntersectionType, *types.MappedType:
+				members[i] = c.destructurableObject(m)
+				changed = changed || members[i] != m
+			}
+		}
+		if changed {
+			return types.NewUnionType(members...)
 		}
 	}
 	return t

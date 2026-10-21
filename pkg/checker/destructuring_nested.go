@@ -234,6 +234,9 @@ func (c *Checker) checkIdentifierTarget(target *parser.Identifier, expectedType 
 	if unionType, ok := expectedType.(*types.UnionType); ok {
 		// For destructuring, prefer non-array types for simple identifiers
 		// This handles cases like [a, [b, c]] where b and c should be numbers, not number | number[]
+		// FIXME: wrong for a real union (string | boolean binds string); type
+		// an array literal source by the pattern as the declaration path does
+		// (patternTupleOfLiteral) and drop this.
 		for _, memberType := range unionType.Types {
 			// Prefer primitive types over array types for simple variable assignment
 			if memberType == types.Number || memberType == types.String || memberType == types.Boolean {
@@ -431,19 +434,7 @@ func (c *Checker) declarationEnv(isVar bool) *Environment {
 func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expression, expectedType types.Type, isConst bool, isVar bool) {
 	switch targetNode := target.(type) {
 	case *parser.Identifier:
-		// Simple identifier target - define in environment with refined type
 		finalType := expectedType
-		if unionType, ok := expectedType.(*types.UnionType); ok {
-			// For destructuring declarations, prefer non-array types for simple identifiers
-			// This handles cases like let [a, [b, c]] where b and c should be numbers, not number | number[]
-			for _, memberType := range unionType.Types {
-				// Prefer primitive types over array types for simple variable assignment
-				if memberType == types.Number || memberType == types.String || memberType == types.Boolean {
-					finalType = memberType
-					break
-				}
-			}
-		}
 
 		env := c.declarationEnv(isVar)
 		if !env.Define(targetNode.Value, finalType, isConst) {

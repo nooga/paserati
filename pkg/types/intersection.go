@@ -92,6 +92,10 @@ func NewIntersectionType(ts ...Type) Type {
 		collectTypes(t)
 	}
 
+	if d := distributePrimitiveUnions(potentialMembers); d != nil {
+		return d
+	}
+
 	// Filter for unique types using the Equals method
 	uniqueMembers := make([]Type, 0, len(potentialMembers))
 	for _, pm := range potentialMembers {
@@ -227,4 +231,56 @@ func disjointPrimitives(a, b Type) bool {
 	la, aLit := a.(*LiteralType)
 	lb, bLit := b.(*LiteralType)
 	return aLit && bLit && !la.Equals(lb)
+}
+
+// distributePrimitiveUnions is the union an intersection of primitive unions
+// reduces to, distributed as tsc does: (number | string | undefined) &
+// (number | string) is number | string. nil when some member is not a
+// primitive, a literal or a union of them, when no member is a union, or
+// when the cross product would be large.
+func distributePrimitiveUnions(members []Type) Type {
+	const maxCombinations = 64
+	hasUnion := false
+	combinations := 1
+	for _, m := range members {
+		if u, ok := m.(*UnionType); ok {
+			for _, um := range u.Types {
+				if primitiveKind(um) == "" {
+					return nil
+				}
+			}
+			hasUnion = true
+			combinations *= len(u.Types)
+			if combinations > maxCombinations {
+				return nil
+			}
+		} else if primitiveKind(m) == "" {
+			return nil
+		}
+	}
+	if !hasUnion || len(members) < 2 {
+		return nil
+	}
+	var results []Type
+	var walk func(i int, picked []Type)
+	walk = func(i int, picked []Type) {
+		if i == len(members) {
+			if r := NewIntersectionType(picked...); r != Never {
+				results = append(results, r)
+			}
+			return
+		}
+		if u, ok := members[i].(*UnionType); ok {
+			for _, um := range u.Types {
+				walk(i+1, append(picked, um))
+			}
+			return
+		}
+		walk(i+1, append(picked, members[i]))
+	}
+	walk(0, make([]Type, 0, len(members)))
+	if len(results) == 0 {
+		return Never
+	}
+	return NewUnionType(results...)
 }
