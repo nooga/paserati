@@ -31,7 +31,8 @@ func (f *FunctionInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("apply", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
 		WithProperty("bind", types.NewVariadicFunction([]types.Type{types.Any}, types.Any, &types.ArrayType{ElementType: types.Any})).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
-		WithProperty("arguments", types.Any)
+		WithProperty("arguments", types.Any).
+		WithReadOnlyProperty("name", types.String) // lib.es2015.core
 	// caller: Function
 	functionProtoType.WithProperty("caller", functionProtoType)
 

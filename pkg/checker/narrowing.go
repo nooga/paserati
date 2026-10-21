@@ -837,6 +837,10 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 			debugPrintf("// [TypeNarrowing] Property-existence guard on non-union '%s' (%s) - marker has nothing to filter, leaving type unchanged\n",
 				guard.VariableName, originalType.String())
 		}
+		if withKey := c.inKeyRecordNarrowing(originalType, guard.NarrowedType.(*types.PropertyExistenceMarker).PropertyName); withKey != nil {
+			canNarrow = true
+			narrowedType = withKey
+		}
 	} else if _, isObjMarker := guard.NarrowedType.(*types.ObjectTypeMarker); isObjMarker && originalType == types.Any {
 		// `typeof x === "object"` does not refine `any`.
 	} else if _, isObjMarker := guard.NarrowedType.(*types.ObjectTypeMarker); isObjMarker && originalType == types.Unknown {
@@ -904,6 +908,9 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					if checkerDebug {
 						debugPrintf("// [TypeNarrowing] Narrowed to types with property '%s': %s\n", propMarker.PropertyName, narrowedType.String())
 					}
+				} else if withKey := c.inKeyRecordNarrowing(originalType, propMarker.PropertyName); withKey != nil {
+					canNarrow = true
+					narrowedType = withKey
 				} else {
 					debugPrintf("// [TypeNarrowing] No types with property '%s' found in union\n", propMarker.PropertyName)
 					return nil
@@ -3330,4 +3337,31 @@ func (c *Checker) falsyDiscriminantGuard(member *parser.MemberExpression) *TypeG
 		}
 	}
 	return &TypeGuard{VariableName: baseKey, DiscriminantProp: prop.Value, DiscriminantValue: falsyDiscriminant}
+}
+
+// inKeyRecordNarrowing is tsc's narrowTypeByInKeyword when no constituent of
+// t declares key: `key in x` narrows x to `T & Record<key, unknown>`. It is
+// nil when the narrowing does not apply (any, unknown, a symbol key, or a
+// constituent that may have the key).
+func (c *Checker) inKeyRecordNarrowing(t types.Type, key string) types.Type {
+	if t == types.Any || t == types.Unknown || key == "" || key == "[[Symbol]]" {
+		return nil
+	}
+	members := []types.Type{t}
+	if u, ok := t.(*types.UnionType); ok {
+		members = u.Types
+	}
+	for _, m := range members {
+		if m == types.Any || m == types.Unknown || c.typeHasProperty(m, key) {
+			return nil
+		}
+		if obj, ok := c.resolveStructural(m).(*types.ObjectType); ok && stringIndexValueType(obj) != nil {
+			return nil
+		}
+	}
+	record, ok := c.lookupTypeNoPending("Record").(*types.GenericType)
+	if !ok {
+		return nil
+	}
+	return types.NewIntersectionType(t, c.instantiateGenericType(record, []types.Type{&types.LiteralType{Value: vm.String(key)}, types.Unknown}, nil))
 }
