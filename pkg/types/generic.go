@@ -574,8 +574,6 @@ func substituteSignatureMemo(sig *Signature, substitutions map[*TypeParameter]Ty
 	}
 }
 
-// mentionsTypeParameter reports whether t refers to any of the given type
-// parameters (visited guards against self-referential types).
 // mentionsSubstituted is mentionsTypeParameter for one substitution. An
 // object type the substitution leaves as it is maps to itself in memo: when a
 // walk finds no parameter, no object it visited mentions one either, so each
@@ -600,6 +598,8 @@ func mentionsSubstituted(t Type, substitutions map[*TypeParameter]Type, memo map
 	return false
 }
 
+// mentionsTypeParameter reports whether t refers to any of the given type
+// parameters (visited guards against self-referential types).
 func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited, known map[Type]bool, target Type) bool {
 	if t == nil {
 		return false
