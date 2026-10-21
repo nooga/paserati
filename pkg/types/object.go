@@ -75,6 +75,10 @@ type Signature struct {
 	// `abstract new (...) => T` type: it cannot be called with `new`, nor
 	// stand in for a construct signature that is not abstract.
 	IsAbstract bool
+
+	// erased caches eraseSignatureTypeParams(erasedOf); it is valid only
+	// while erasedOf is this signature.
+	erased, erasedOf *Signature
 }
 
 func (sig *Signature) String() string {

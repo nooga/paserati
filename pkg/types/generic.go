@@ -169,7 +169,7 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 
 	// Types that mention none of the substituted parameters are returned as
 	// they are, so identity (and class metadata) survives.
-	if !mentionsTypeParameter(t, substitutions, make(map[Type]bool), nil, nil) {
+	if !mentionsSubstituted(t, substitutions, memo) {
 		return t
 	}
 
@@ -191,8 +191,8 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		if done, ok := memo[t]; ok {
 			return done
 		}
-		if t.Pending || !mentionsTypeParameter(t, substitutions, map[Type]bool{}, nil, nil) {
-			// Nothing to substitute (or filled in later, in place): no copy.
+		if t.Pending {
+			// Filled in later, in place: no copy.
 			return t
 		}
 		newObj := NewObjectType()
@@ -576,6 +576,30 @@ func substituteSignatureMemo(sig *Signature, substitutions map[*TypeParameter]Ty
 
 // mentionsTypeParameter reports whether t refers to any of the given type
 // parameters (visited guards against self-referential types).
+// mentionsSubstituted is mentionsTypeParameter for one substitution. An
+// object type the substitution leaves as it is maps to itself in memo: when a
+// walk finds no parameter, no object it visited mentions one either, so each
+// is recorded and not walked again.
+func mentionsSubstituted(t Type, substitutions map[*TypeParameter]Type, memo map[*ObjectType]*ObjectType) bool {
+	if o, ok := t.(*ObjectType); ok {
+		if done, ok := memo[o]; ok {
+			return done != o
+		}
+	}
+	visited := make(map[Type]bool)
+	if mentionsTypeParameter(t, substitutions, visited, nil, nil) {
+		return true
+	}
+	for v := range visited {
+		if o, ok := v.(*ObjectType); ok && !o.Pending {
+			if _, ok := memo[o]; !ok {
+				memo[o] = o
+			}
+		}
+	}
+	return false
+}
+
 func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited, known map[Type]bool, target Type) bool {
 	if t == nil {
 		return false

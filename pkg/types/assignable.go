@@ -998,12 +998,18 @@ func eraseSignatureTypeParams(sig *Signature) *Signature {
 	if sig == nil || len(sig.TypeParameters) == 0 {
 		return sig
 	}
+	// Cached like tsc's erasedSignatureCache. A struct copy of sig keeps
+	// erasedOf pointing at sig, so it computes its own.
+	if sig.erasedOf == sig {
+		return sig.erased
+	}
 	subs := make(map[*TypeParameter]Type, len(sig.TypeParameters))
 	for _, tp := range sig.TypeParameters {
 		subs[tp] = Any
 	}
 	out := substituteSignature(sig, subs)
 	out.ParameterNames = sig.ParameterNames
+	sig.erased, sig.erasedOf = out, sig
 	return out
 }
 
