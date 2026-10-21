@@ -1698,6 +1698,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 
 		c.applyTypeParameterDefaults(genericSig, finalSolution)
 		if len(finalSolution) > 0 {
+			c.applyTypeParameterConstraints(genericSig, finalSolution)
 			c.fallBackToConstraints(finalSolution)
 			inferredSig := c.substituteTypeParameters(genericSig, finalSolution)
 			if checkerDebug {
@@ -1764,6 +1765,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		solution = map[*types.TypeParameter]types.Type{}
 	}
 	c.applyTypeParameterDefaults(genericSig, solution)
+	c.applyTypeParameterConstraints(genericSig, solution)
 	if len(solution) == 0 {
 		debugPrintf("// [Checker Inference] No type parameters could be inferred\n")
 		return nil // Inference failed
@@ -1787,6 +1789,23 @@ func (c *Checker) applyTypeParameterDefaults(sig *types.Signature, solution map[
 		if _, inferred := solution[tp]; !inferred && tp.Default != nil && !c.typeContainsTypeParameter(tp.Default) {
 			solution[tp] = tp.Default
 		}
+	}
+}
+
+// applyTypeParameterConstraints gives the type parameters of sig that
+// nothing inferred and that have no default their constraints: tsc infers
+// unknown for them, which a constraint it does not satisfy replaces
+// (`g<R extends { ctx: any }>(c: R['ctx'])` called as g(1) takes any).
+// FIXME: an unconstrained one should become unknown.
+func (c *Checker) applyTypeParameterConstraints(sig *types.Signature, solution map[*types.TypeParameter]types.Type) {
+	for _, tp := range sig.TypeParameters {
+		if _, inferred := solution[tp]; inferred || tp.Default != nil || tp.Constraint == nil {
+			continue
+		}
+		if c.typeContainsTypeParameter(tp.Constraint) || c.isAssignableWithExpansion(types.Unknown, tp.Constraint) {
+			continue
+		}
+		solution[tp] = tp.Constraint
 	}
 }
 
