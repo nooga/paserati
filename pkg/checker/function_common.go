@@ -195,7 +195,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 						// some valid instantiation that would satisfy the constraint.
 						// For now, we're permissive and allow all type parameter defaults.
 						// TODO: Implement proper constraint satisfaction checking
-					} else if !c.rel.IsAssignable(defaultType, constraintType) {
+					} else if !c.satisfiesTypeArgConstraint(defaultType, constraintType)() {
 						c.addError(typeParamNode.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), constraintType.String()))
 					}
 				}
@@ -337,7 +337,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 				c.env = originalEnv
 
 				// Validate that default type satisfies constraint if both are present
-				if defaultType != nil && constraintType != types.Any && !c.rel.IsAssignable(defaultType, constraintType) {
+				if defaultType != nil && constraintType != types.Any && !c.satisfiesTypeArgConstraint(defaultType, constraintType)() {
 					c.addError(typeParamNode.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), constraintType.String()))
 				}
 			}

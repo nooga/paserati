@@ -61,6 +61,9 @@ func (c *Checker) EarlyExport(name string) (types.Type, bool) {
 			return v, true
 		}
 	}
+	if entry.typeSide {
+		c.declarePendingAlias(entry.local)
+	}
 	if t, found := scope.ResolveType(entry.local); found {
 		if o, ok := t.(*types.ObjectType); ok && o.Pending && !entry.typeSide {
 			// A class's instance type before the class is defined: an
@@ -149,8 +152,55 @@ func (c *Checker) earlyExportIndex() map[string]earlyExport {
 			}
 		}
 	}
+	for _, decl := range c.implicitExports() {
+		for _, d := range earlyDeclarationExports(decl) {
+			if _, has := index[d.local]; !has {
+				index[d.local] = d
+			}
+		}
+	}
 	c.earlyExports = index
 	return index
+}
+
+// implicitExports are the top-level declarations a declaration file exports
+// without `export`: tsc treats a .d.ts module with no export list, `export *`
+// or export assignment as ambient, and exports every declaration in it
+// (fastify's hooks.d.ts declares HookHandlerDoneFunction bare, and
+// fastify.d.ts imports it).
+func (c *Checker) implicitExports() []parser.Statement {
+	if c.program == nil || !c.IsModuleMode() || !c.inDeclarationFile() {
+		return nil
+	}
+	var decls []parser.Statement
+	for _, stmt := range c.program.Statements {
+		switch s := stmt.(type) {
+		case *parser.ExportNamedDeclaration:
+			if s.Declaration == nil {
+				return nil
+			}
+		case *parser.ExportAllDeclaration, *parser.ExportAssignment:
+			return nil
+		case *parser.ExportDefaultDeclaration:
+			if !s.IsDeclaration {
+				return nil
+			}
+		case *parser.InterfaceDeclaration, *parser.TypeAliasStatement, *parser.ClassDeclaration,
+			*parser.FunctionSignature, *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement,
+			*parser.DeclarationGroup:
+			decls = append(decls, stmt)
+		case *parser.NamespaceDeclaration:
+			if !s.AmbientModule {
+				decls = append(decls, stmt)
+			}
+		case *parser.ExpressionStatement:
+			switch s.Expression.(type) {
+			case *parser.FunctionLiteral, *parser.ClassExpression, *parser.EnumDeclaration:
+				decls = append(decls, stmt)
+			}
+		}
+	}
+	return decls
 }
 
 // earlyStarSources are the modules `export * from` re-exports.
@@ -345,6 +395,10 @@ func (c *Checker) refreshEarlyImports() {
 		binding := c.moduleEnv.ImportedNames[local]
 		binding.Early = false
 		binding.ResolvedType = types.Any
+		// What it was bound to (any, while unresolved) gives way.
+		if c.fileScope != nil {
+			delete(c.fileScope.typeAliases, local)
+		}
 		c.bindImport(local, binding.ImportType, binding.IsTypeOnly)
 	}
 	// Interfaces extending what those modules had not declared yet.
@@ -371,6 +425,86 @@ func (c *Checker) declaresClass(name string) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// declarePendingAlias declares the type alias name, not reached yet in Pass
+// 1, for a module importing it: a reference to it left unresolved would be
+// instantiated, and its conditional and indexed members evaluated, before
+// it means anything (RootConfig<AnyRootTypes> in tRPC). An alias naming what
+// this module has not bound yet (a later import) reports errors; it is then
+// left pending, and the importer gets a reference after all.
+func (c *Checker) declarePendingAlias(name string) {
+	node, ok := c.pendingAliases[name]
+	env := c.pendingAliasEnv
+	if !ok || env == nil || c.resolvingTypeAliases[name] {
+		return
+	}
+	saved, had := env.typeAliases[name]
+	if c.speculate(func() { c.resolvePendingAlias(name) }) {
+		// Declared ahead of what it names (a generic interface further up
+		// that Pass 1 has not reached), it would keep a reference to it
+		// that source order would have resolved.
+		if t, ok := env.typeAliases[name]; !ok || !holdsForwardReference(t, 0) {
+			return
+		}
+	}
+	if had {
+		env.typeAliases[name] = saved
+	} else {
+		delete(env.typeAliases, name)
+	}
+	c.pendingAliases[name] = node
+}
+
+// holdsForwardReference reports whether t, an alias's type, still refers to
+// a type not declared yet (looking a few levels into the type).
+func holdsForwardReference(t types.Type, depth int) bool {
+	if depth > 4 || t == nil {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.GenericTypeAliasForwardReference, *types.TypeAliasForwardReference, *types.ForwardReferenceType, *types.ParameterizedForwardReferenceType,
+		*types.TypeofType:
+		// A typeof of a value declared later is resolved in Pass 2.
+		return true
+	case *types.GenericType:
+		return holdsForwardReference(tt.Body, depth+1)
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if holdsForwardReference(m, depth+1) {
+				return true
+			}
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if holdsForwardReference(m, depth+1) {
+				return true
+			}
+		}
+	case *types.ArrayType:
+		return holdsForwardReference(tt.ElementType, depth+1)
+	case *types.InstantiatedType:
+		for _, a := range tt.TypeArguments {
+			if holdsForwardReference(a, depth+1) {
+				return true
+			}
+		}
+	case *types.ObjectType:
+		if tt.Pending {
+			return true
+		}
+		for _, a := range tt.GenericArgs {
+			if holdsForwardReference(a, depth+1) {
+				return true
+			}
+		}
+	case *types.ConditionalType:
+		return holdsForwardReference(tt.CheckType, depth+1) || holdsForwardReference(tt.ExtendsType, depth+1) ||
+			holdsForwardReference(tt.TrueType, depth+1) || holdsForwardReference(tt.FalseType, depth+1)
+	case *types.IndexedAccessType:
+		return holdsForwardReference(tt.ObjectType, depth+1) || holdsForwardReference(tt.IndexType, depth+1)
 	}
 	return false
 }

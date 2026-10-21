@@ -1884,6 +1884,17 @@ const (
 	maxInferWalkDepth = 100
 )
 
+// aliasReferenceNames reports whether ref names generic.
+func (c *Checker) aliasReferenceNames(ref *types.GenericTypeAliasForwardReference, generic *types.GenericType) bool {
+	if ref.Scope != nil {
+		if t, ok := ref.Scope(ref.AliasName); ok {
+			return t == types.Type(generic)
+		}
+	}
+	t, ok := c.env.ResolveType(ref.AliasName)
+	return ok && t == types.Type(generic)
+}
+
 func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, seen map[constraintTypePair]bool) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
 	if paramType == nil || argType == nil {
@@ -1907,6 +1918,19 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 	}
 	c.inferWalkDepth++
 	defer func() { c.inferWalkDepth-- }()
+	// A generic named before it was declared (or imported from a module in
+	// an import cycle that had not declared it yet) infers from an
+	// instantiation of that generic argument by argument: getErrorShape's
+	// `config: RootConfig<TRoot>` against a RootConfig<any>.
+	if ref, ok := paramType.(*types.GenericTypeAliasForwardReference); ok {
+		if aObj, ok := argType.(*types.ObjectType); ok && aObj.Instantiates != nil && len(aObj.GenericArgs) == len(ref.TypeArguments) &&
+			c.aliasReferenceNames(ref, aObj.Instantiates) {
+			for i, pa := range ref.TypeArguments {
+				constraints = append(constraints, c.collectConstraintsFromTypeSeen(pa, aObj.GenericArgs[i], seen)...)
+			}
+			return constraints
+		}
+	}
 	pObj, _ := paramType.(*types.ObjectType)
 	aObj, _ := argType.(*types.ObjectType)
 	if pObj != nil && aObj != nil && pObj.Instantiates != nil && aObj.Instantiates != nil {

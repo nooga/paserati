@@ -2409,6 +2409,12 @@ func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 		}
 		c.inferPendingInit(typeofType.Identifier)
 		varType, _, found := env.Resolve(typeofType.Identifier)
+		if found && varType == types.Any {
+			if owner := env.definingScope(typeofType.Identifier); owner != nil && owner.inferPending != nil {
+				owner.inferPending(typeofType.Identifier)
+				varType, _, found = env.Resolve(typeofType.Identifier)
+			}
+		}
 		if found {
 			if c.isBuiltinGlobalThis(typeofType.Identifier, varType) {
 				varType = c.globalThisType()
@@ -3009,6 +3015,23 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 			return nil
 		}
 	}
+	// A reference to a generic declared after it was written (or in a module
+	// of an import cycle not done declaring then): index what it names now.
+	if ref, ok := objectType.(*types.GenericTypeAliasForwardReference); ok {
+		r := c.instantiateAliasReference(ref)
+		if r != nil && r != objectType {
+			if _, still := r.(*types.GenericTypeAliasForwardReference); !still {
+				objectType = r
+			}
+		}
+	}
+	// any[K] is any once K is known (TRoot['ctx'] with TRoot inferred as
+	// any).
+	if objectType == types.Any {
+		if _, generic := indexType.(*types.TypeParameterType); !generic {
+			return types.Any
+		}
+	}
 	// (A & B)[K] is A[K] & B[K] over the members that have K; (A | B)[K] is
 	// A[K] | B[K] and needs K in every member.
 	switch ot := objectType.(type) {
@@ -3069,7 +3092,7 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 					return elem
 				}
 				if ot.RestElementType != nil && i >= len(ot.ElementTypes) {
-					return ot.RestElementType
+					return tupleRestElement(ot)
 				}
 				return nil
 			}
@@ -3164,6 +3187,13 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	if constraintType == nil {
 		return nil
 	}
+	// An alias imported from a module in an import cycle before it was
+	// declared ([P in ProcedureType]), and `(typeof xs)[number]` written
+	// before xs had a type.
+	if _, ok := constraintType.(*types.GenericTypeAliasForwardReference); ok {
+		constraintType = c.resolveTypeAlias(constraintType)
+	}
+	constraintType = c.resolveTypeofTypeIfNeeded(constraintType)
 
 	// Handle keyof constraint: [P in keyof SomeType]
 	var iterationKeys []types.Type

@@ -474,6 +474,13 @@ func earlyExitRefKeys(c *Checker, arms ...parser.Statement) []string {
 			continue
 		}
 		for _, st := range block.Statements {
+			// An assertion call narrows the rest of the arm as an early
+			// exit would (`if (x !== undefined) { assertIsString(x); }`
+			// leaves x string | undefined).
+			if key := c.assertedRefKey(st); key != "" {
+				keys = appendUnique(keys, key)
+				continue
+			}
 			ifs, ok := st.(*parser.IfStatement)
 			if !ok || ifs == nil || !isNilNode(ifs.Alternative) || !blockAlwaysTerminates(ifs.Consequence) {
 				continue
@@ -663,4 +670,33 @@ func (c *Checker) noteLoopEntryTypes(stmt parser.Statement) {
 			c.loopEntryTypes[key] = t
 		}
 	}
+}
+
+// assertedRefKey is the plain variable an assertion-function call statement
+// st narrows (`assertIsString(x);`), or "".
+func (c *Checker) assertedRefKey(st parser.Statement) string {
+	es, ok := st.(*parser.ExpressionStatement)
+	if !ok || es == nil {
+		return ""
+	}
+	call, ok := es.Expression.(*parser.CallExpression)
+	if !ok {
+		return ""
+	}
+	ident, ok := call.Function.(*parser.Identifier)
+	if !ok {
+		return ""
+	}
+	fnType, _, found := c.env.Resolve(ident.Value)
+	if !found {
+		return ""
+	}
+	if pred := extractTypePredicateFromType(fnType); pred == nil || pred.predicate == nil || !pred.predicate.Asserts {
+		return ""
+	}
+	guard := c.detectTypeGuard(call)
+	if guard == nil || strings.Contains(guard.VariableName, ".") {
+		return ""
+	}
+	return guard.VariableName
 }

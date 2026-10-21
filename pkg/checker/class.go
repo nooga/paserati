@@ -760,7 +760,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 			if defaultType := c.resolveTypeAnnotation(param.DefaultType); defaultType != nil {
 				typeParam.Default = defaultType
 
-				if typeParam.Constraint != nil && !c.rel.IsAssignable(defaultType, typeParam.Constraint) {
+				if typeParam.Constraint != nil && !c.satisfiesTypeArgConstraint(defaultType, typeParam.Constraint)() {
 					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
 				}
 			}

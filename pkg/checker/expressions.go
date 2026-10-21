@@ -2322,7 +2322,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 						}
 					} else if base.RestElementType != nil && idx >= len(base.ElementTypes) {
 						// Index into rest element
-						resultType = base.RestElementType
+						resultType = tupleRestElement(base)
 						if checkerDebug {
 							debugPrintf("// [Checker IndexExpr] Tuple rest index %d -> %s\n", idx, resultType.String())
 						}
@@ -4177,6 +4177,19 @@ func callableReturnType(t types.Type) types.Type {
 	return objType.CallSigs()[0].ReturnType
 }
 
+// tupleRestElement is the type of one element of tuple's rest part: its rest
+// is recorded as the array type it spreads ([A, ...B[]]).
+func tupleRestElement(tuple *types.TupleType) types.Type {
+	rest := tuple.RestElementType
+	if ro, ok := rest.(*types.ReadonlyType); ok {
+		rest = ro.InnerType
+	}
+	if at, ok := rest.(*types.ArrayType); ok {
+		return at.ElementType
+	}
+	return tuple.RestElementType
+}
+
 // getTupleElementUnion creates a union type from all element types in a tuple
 // Used when indexing with a general number (not a literal)
 func getTupleElementUnion(tuple *types.TupleType) types.Type {
@@ -4193,7 +4206,7 @@ func getTupleElementUnion(tuple *types.TupleType) types.Type {
 
 	// Include rest element type if present
 	if tuple.RestElementType != nil {
-		allTypes = append(allTypes, tuple.RestElementType)
+		allTypes = append(allTypes, tupleRestElement(tuple))
 	}
 
 	if len(allTypes) == 0 {

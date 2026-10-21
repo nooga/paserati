@@ -60,6 +60,19 @@ func (c *Checker) inferPendingInit(name string) {
 	if c.definingEnv(name) != p.env {
 		return // shadowed by a local
 	}
+	c.inferPending(p, name)
+}
+
+// inferPendingFromPeer is inferPendingInit for a module in an import cycle
+// that reads name (in a `typeof`) while this one is paused at its
+// declarations.
+func (c *Checker) inferPendingFromPeer(name string) {
+	if p := c.pendingInits[name]; p != nil && !p.blocked && !p.inProgress {
+		c.inferPending(p, name)
+	}
+}
+
+func (c *Checker) inferPending(p *pendingInit, name string) {
 	if t, _, ok := p.env.Resolve(name); !ok || t != types.Any {
 		return // already refined
 	}

@@ -42,6 +42,11 @@ type Environment struct {
 	// `namespace Stream { class Readable ... }`).
 	mergedNamespaces map[string]*types.NamespaceType
 
+	// inferPending, set on a module's top-level scope while the module is
+	// paused for an import cycle (see Check's declaredHook), infers a
+	// binding's pending initializer for a module that reads it meanwhile.
+	inferPending func(name string)
+
 	// requireAliases maps the names bound by `import x = require("m")` to m.
 	requireAliases map[string]string
 
@@ -325,6 +330,16 @@ func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
 	// Allow coexistence with symbols (values) - this enables declaration merging for classes
 	e.typeAliases[name] = typ
 	return true
+}
+
+// definingScope is the nearest scope from e out that declares the value name.
+func (e *Environment) definingScope(name string) *Environment {
+	for ; e != nil; e = e.outer {
+		if _, ok := e.symbols[name]; ok {
+			return e
+		}
+	}
+	return nil
 }
 
 // Resolve looks up a *variable* name in the current environment and its outer scopes.

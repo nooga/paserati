@@ -1802,7 +1802,18 @@ func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
 		// Try to resolve forward references by looking up the alias name
 		debugPrintf("// [TypeNarrowing] Attempting to resolve GenericTypeAliasForwardReference: %s\n", typ.AliasName)
 		// First try type namespace (interfaces, type aliases), then value namespace
-		if resolvedType, found := c.env.ResolveType(typ.AliasName); found {
+		resolvedType, found := c.env.ResolveType(typ.AliasName)
+		if typ.Scope != nil {
+			// Where the reference was written wins (an import from a module
+			// in a cycle names its declaration there).
+			if t, ok := typ.Scope(typ.AliasName); ok {
+				resolvedType, found = t, true
+			}
+		}
+		if found && resolvedType == t {
+			return t
+		}
+		if found {
 			if checkerDebug {
 				debugPrintf("// [TypeNarrowing] Found type '%s' in type environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
 			}

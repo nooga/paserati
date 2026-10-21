@@ -1,6 +1,8 @@
 package checker
 
-import "github.com/nooga/paserati/pkg/types"
+import (
+	"github.com/nooga/paserati/pkg/types"
+)
 
 // withTrueBranchConstraint runs fn (resolving the true branch of a
 // conditional type) with the check type parameter known to also satisfy the
@@ -81,6 +83,9 @@ func (c *Checker) baseConstraint(t types.Type, depth int) types.Type {
 		if obj == tt.ObjectType && idx == tt.IndexType {
 			return t
 		}
+		if obj == types.Any {
+			return types.Any // any[K] is any
+		}
 		if r := c.computeIndexedAccessType(c.expandIfMappedType(obj), idx); r != nil {
 			if _, still := r.(*types.IndexedAccessType); still {
 				return c.baseConstraint(r, depth+1)
@@ -115,8 +120,10 @@ func (c *Checker) baseConstraint(t types.Type, depth int) types.Type {
 // satisfiesTypeArgConstraint reports whether a type argument satisfies its
 // parameter's constraint, directly or through its base constraint.
 func (c *Checker) satisfiesTypeArgConstraint(arg, constraint types.Type) func() bool {
-	base := c.baseConstraint(arg, 0)
 	return func() bool {
+		// Computed when asked: a deferred check runs once the types the
+		// base constraint goes through are declared.
+		base := c.baseConstraint(arg, 0)
 		if base == nil || c.isAssignableWithExpansion(arg, constraint) {
 			return true
 		}

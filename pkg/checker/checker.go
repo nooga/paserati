@@ -540,7 +540,7 @@ type Checker struct {
 	declaredHook                func()       // called once declarations are in place (see SetDeclaredHook)
 	earlyExports                map[string]earlyExport
 	earlyLookups                map[string]bool // early export lookups in progress (re-export cycles)
-	isModule                    bool         // Source is a module, so strict mode comes from the module (TS1214)
+	isModule                    bool            // Source is a module, so strict mode comes from the module (TS1214)
 	// topLevelAwaitDisallowed: see SetTopLevelAwaitDisallowed.
 	topLevelAwaitDisallowed bool
 	// Identifiers already reported as strict-mode reserved words, so narrowing
@@ -2004,7 +2004,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// loader reaches it (see modules.DeclareModule).
 	if hook := c.declaredHook; hook != nil {
 		c.declaredHook = nil
+		globalEnv.inferPending = c.inferPendingFromPeer
 		hook()
+		globalEnv.inferPending = nil
 		c.refreshEarlyImports()
 	}
 
@@ -2508,6 +2510,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 	}
 	debugPrintf("// --- Checker - Pass 5: Complete ---\n")
+
+	for _, decl := range c.implicitExports() {
+		c.processExportDeclaration(decl)
+	}
 
 	c.runDeferredHeritageChecks()
 
