@@ -196,6 +196,48 @@ func TestCheckFilesGlobalDeclaredLater(t *testing.T) {
 	}
 }
 
+// `(typeof xs)[number]` names xs where it was written: an alias of it (and
+// a member typed by the alias) means the same in a module importing it,
+// where xs is not in scope.
+func TestCheckFilesTypeofAliasAcrossModules(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"a.ts": "export const procedureTypes = ['query', 'mutation'] as const;\n" +
+			"export type ProcedureType = (typeof procedureTypes)[number];\n" +
+			"export interface X { t: ProcedureType }\n",
+		"main.ts": "import type { ProcedureType, X } from './a';\n" +
+			"const p: ProcedureType = 'query';\nconst x: X = { t: 'mutation' };\nconst bad: ProcedureType = 'nope';\nexport {};\n",
+	}
+	for p, content := range files {
+		if err := os.WriteFile(filepath.Join(root, p), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPaserati()
+	var got []string
+	for _, r := range p.CheckFilesWithOptions([]string{"main.ts"}, DefaultCheckOptions()) {
+		if r.LoadError != nil {
+			t.Fatalf("%s: load error: %v", r.Path, r.LoadError)
+		}
+		for _, d := range r.Diagnostics {
+			got = append(got, d.Code()+" "+d.Message())
+		}
+	}
+	want := "TS2322 Type '\"nope\"' is not assignable to type '\"query\" | \"mutation\"'."
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("diagnostics = %q, want only %q", got, want)
+	}
+}
+
 // A module augmentation merges into the module it names, as vitest adds its
 // snapshot matchers to Assertion: from a chunk the augmented module itself
 // imports (so the target is still being checked), through a re-export, and

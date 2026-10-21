@@ -257,6 +257,10 @@ func (kt *KeyofType) typeNode() {}
 type TypeofType struct {
 	Identifier string   // The identifier whose type we're extracting
 	Path       []string // Full dotted path (`typeof a.b.c`), when longer than the identifier
+	// Scope is the checker scope the query was written in, when it was left
+	// for later: it names the identifier there, also once the type reaches
+	// another module through an export.
+	Scope any
 }
 
 func (tt *TypeofType) String() string {

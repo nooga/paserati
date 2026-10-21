@@ -2334,12 +2334,12 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 		if len(path) == 1 {
 			c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
 			c.unresolvedTypeofTypeOnly = append(c.unresolvedTypeofTypeOnly, c.isTypeOnlyName(node.Identifier))
-			return &types.TypeofType{Identifier: node.Identifier}
+			return &types.TypeofType{Identifier: node.Identifier, Scope: c.env}
 		}
 		// Not declared yet (a hoisted annotation): resolve it later.
 		c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
 		c.unresolvedTypeofTypeOnly = append(c.unresolvedTypeofTypeOnly, false)
-		return &types.TypeofType{Identifier: path[0], Path: path}
+		return &types.TypeofType{Identifier: path[0], Path: path, Scope: c.env}
 	}
 
 	varType, ok := c.walkTypeofPath(node, path, varType)
@@ -2381,9 +2381,13 @@ func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 	if typeofType, ok := t.(*types.TypeofType); ok {
 		debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Resolving forward reference for typeof %s\n", typeofType.Identifier)
 
-		// Look up the identifier in the environment
+		// Look up the identifier where the query was written.
+		env := c.env
+		if scope, ok := typeofType.Scope.(*Environment); ok && scope != nil {
+			env = scope
+		}
 		c.inferPendingInit(typeofType.Identifier)
-		varType, _, found := c.env.Resolve(typeofType.Identifier)
+		varType, _, found := env.Resolve(typeofType.Identifier)
 		if found {
 			if c.isBuiltinGlobalThis(typeofType.Identifier, varType) {
 				varType = c.globalThisType()
@@ -2420,6 +2424,11 @@ func (c *Checker) resolveDeferredTypeofIndex(t types.Type, anyIsFinal bool) type
 		if _, ok := tt.ObjectType.(*types.TypeofType); ok {
 			if resolved := c.computeIndexedAccessType(tt.ObjectType, tt.IndexType); resolved != nil {
 				return resolved
+			}
+			if object := c.resolveTypeofTypeIfNeeded(tt.ObjectType); object != tt.ObjectType && object != types.Any {
+				if resolved := c.computeIndexedAccessType(object, tt.IndexType); resolved != nil {
+					return resolved
+				}
 			}
 			if anyIsFinal && c.resolveTypeofTypeIfNeeded(tt.ObjectType) == types.Any {
 				return types.Any
