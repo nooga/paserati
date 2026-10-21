@@ -4289,6 +4289,8 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 		if t, found := c.env.ResolveType(obj.Value); found {
 			if _, isNs := t.(*types.NamespaceType); isNs {
 				containerType = t
+			} else if ns := c.env.ResolveMergedNamespace(obj.Value); ns != nil {
+				containerType = ns
 			}
 		}
 		if containerType == nil {

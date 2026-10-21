@@ -270,11 +270,20 @@ func (c *Checker) checkAmbientModuleStatement(stmt parser.Statement, m *ambientM
 			return true
 		}
 		if id, ok := n.Expression.(*parser.Identifier); ok {
+			if c.exportEqualsRequireAlias(id.Value, m) {
+				return true
+			}
 			var entity types.Type
 			if t, found := c.env.ResolveType(id.Value); found {
 				entity = t
 			}
 			v, _, hasValue := c.env.Resolve(id.Value)
+			if merged := c.env.ResolveMergedNamespace(id.Value); merged != nil && hasValue {
+				// A class or function merged with a namespace: export= is
+				// the value, and the namespace's members are exported.
+				m.exportEquals, m.exportEqualsValue = merged, v
+				return true
+			}
 			if ns, isNs := entity.(*types.NamespaceType); !isNs {
 				if hasValue {
 					entity = v
@@ -307,4 +316,28 @@ func exportSpecifierName(e parser.Expression) string {
 		return n.Value
 	}
 	return ""
+}
+
+// exportEqualsRequireAlias handles `export = x` where x is
+// `import x = require("m")` (@types/node's node:stream re-exporting stream):
+// the alias was bound before m was complete, so m's exports are read again
+// now. It reports whether name was such an alias.
+func (c *Checker) exportEqualsRequireAlias(name string, m *ambientModule) bool {
+	spec := c.env.ResolveRequireAlias(name)
+	if spec == "" {
+		return false
+	}
+	exports := c.moduleExports(spec)
+	value, ok := exports[exportEqualsName]
+	if !ok {
+		return false
+	}
+	members := make(map[string]types.Type, len(exports))
+	for member, t := range exports {
+		if member != exportEqualsName && member != "default" {
+			members[member] = t
+		}
+	}
+	m.exportEquals, m.exportEqualsValue = moduleNamespace(name, members), value
+	return true
 }

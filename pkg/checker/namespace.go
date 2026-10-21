@@ -58,26 +58,27 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 			delete(c.env.seededNamespaces, name)
 		} else if ns, ok := existing.(*types.NamespaceType); ok {
 			nsType = ns
+		} else if ns := c.env.mergedNamespaces[name]; ns != nil {
+			nsType = ns
 		}
 	}
 	if nsType == nil {
 		nsType = types.NewNamespaceType(name)
 		nsType.Declare = node.Declare
 		// Bind in type env (for namespace-qualified type names like N.X).
-		c.env.DefineTypeAlias(name, nsType)
+		if !c.env.DefineTypeAlias(name, nsType) {
+			// A class (or other type) of the name has the type: the
+			// namespace merged with it is found through mergedNamespaces.
+			c.env.recordMergedNamespace(name, nsType)
+		}
 		// A function or class of the same name merges with the namespace
 		// (`declare function e(): e.App; declare namespace e { ... }`, as
 		// @types/express declares): the value is callable or constructible
-		// and has the namespace's members.
+		// and has the namespace's members, so the namespace's values are
+		// that value's own members.
 		if prev, ok := c.env.symbols[name]; ok && !node.AmbientModule {
 			if fn, ok := prev.Type.(*types.ObjectType); ok && (len(fn.CallSigs()) > 0 || len(fn.ConstructSigs()) > 0) {
-				nsType.ValueShape.Materialize()
-				nsType.ValueShape.CallSignatures = append(nsType.ValueShape.CallSigs(), fn.CallSigs()...)
-				nsType.ValueShape.Materialize()
-				nsType.ValueShape.ConstructSignatures = append(nsType.ValueShape.ConstructSigs(), fn.ConstructSigs()...)
-				for _, prop := range fn.PropertyNames() {
-					nsType.ValueShape.SetProperty(prop, fn.Props()[prop])
-				}
+				nsType.ValueShape = fn
 				nsType.Instantiated = true
 			}
 		}
@@ -89,6 +90,17 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 
 	if parser.IsInstantiatedNamespace(node.Body) {
 		nsType.Instantiated = true
+	}
+	if meta := nsType.ValueShape.ClassMeta; meta != nil {
+		// Merged with a class: its exported values are public static
+		// members of the class.
+		defer func() {
+			for _, member := range nsType.ValueShape.PropertyNames() {
+				if meta.MemberAccess[member] == nil {
+					meta.AddMember(member, types.AccessPublic, true, false)
+				}
+			}
+		}()
 	}
 
 	// 2. Create an enclosed environment for the body.

@@ -37,6 +37,14 @@ type Environment struct {
 	// declarations go into the global scope.
 	augmentsGlobal bool
 
+	// mergedNamespaces holds the namespaces merged with a class, function or
+	// other declaration that has the name's type (`class Stream {}` with
+	// `namespace Stream { class Readable ... }`).
+	mergedNamespaces map[string]*types.NamespaceType
+
+	// requireAliases maps the names bound by `import x = require("m")` to m.
+	requireAliases map[string]string
+
 	// --- Generic type parameter support ---
 	typeParameters map[string]*types.TypeParameter // Maps type parameter names to their definitions
 
@@ -759,4 +767,53 @@ func newGlobalAugmentationEnvironment(global, lexical *Environment) *Environment
 	env.overloadedFunctions = global.overloadedFunctions
 	env.augmentsGlobal = true
 	return env
+}
+
+// recordMergedNamespace records ns as the namespace merged with the
+// declaration that has name's type in this scope.
+func (e *Environment) recordMergedNamespace(name string, ns *types.NamespaceType) {
+	if e.mergedNamespaces == nil {
+		e.mergedNamespaces = map[string]*types.NamespaceType{}
+	}
+	e.mergedNamespaces[name] = ns
+}
+
+// ResolveMergedNamespace finds the namespace merged with the declaration
+// name resolves to, or nil: the nearest scope declaring name decides.
+func (e *Environment) ResolveMergedNamespace(name string) *types.NamespaceType {
+	for env := e; env != nil; env = env.outer {
+		if ns := env.mergedNamespaces[name]; ns != nil {
+			return ns
+		}
+		if _, ok := env.typeAliases[name]; ok {
+			return nil
+		}
+		if _, ok := env.symbols[name]; ok {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (e *Environment) recordRequireAlias(name, spec string) {
+	if e.requireAliases == nil {
+		e.requireAliases = map[string]string{}
+	}
+	e.requireAliases[name] = spec
+}
+
+// ResolveRequireAlias is the module name is a `require` alias of, or "".
+func (e *Environment) ResolveRequireAlias(name string) string {
+	for env := e; env != nil; env = env.outer {
+		if spec, ok := env.requireAliases[name]; ok {
+			return spec
+		}
+		if _, ok := env.typeAliases[name]; ok {
+			return ""
+		}
+		if _, ok := env.symbols[name]; ok {
+			return ""
+		}
+	}
+	return ""
 }

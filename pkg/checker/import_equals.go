@@ -66,6 +66,7 @@ func (c *Checker) checkImportEqualsDeclaration(node *parser.ImportEqualsDeclarat
 // entity when it has one, else its namespace.
 func (c *Checker) bindRequireImport(node *parser.ImportEqualsDeclaration, name string) (types.Type, types.Type) {
 	spec := node.Require.Value
+	c.env.recordRequireAlias(name, spec)
 	var rec *modules.ModuleRecord
 	if c.moduleLoader != nil {
 		from := ""
@@ -96,6 +97,19 @@ func (c *Checker) bindRequireImport(node *parser.ImportEqualsDeclaration, name s
 	}
 	if _, ok := rec.Exports[exportEqualsName]; ok {
 		c.processImportBinding(name, spec, exportEqualsName, ImportNamed, node.IsTypeOnly)
+		if t, _ := c.env.ResolveType(name); !isNamespaceType(t) {
+			// export= of a class or function merged with a namespace: the
+			// module's other exports are that namespace's members (x.T).
+			members := make(map[string]types.Type, len(rec.Exports))
+			for member, t := range rec.Exports {
+				if member != exportEqualsName && member != "default" {
+					members[member] = t
+				}
+			}
+			if len(members) > 0 {
+				c.env.recordMergedNamespace(name, moduleNamespace(name, members))
+			}
+		}
 	} else {
 		c.processImportBinding(name, spec, "*", ImportNamespace, node.IsTypeOnly)
 	}
@@ -115,6 +129,11 @@ func (c *Checker) resolveQualifiedTypeQuietly(e *parser.MemberExpression) types.
 	switch obj := e.Object.(type) {
 	case *parser.Identifier:
 		container, _ = c.env.ResolveType(obj.Value)
+		if _, isNs := container.(*types.NamespaceType); !isNs {
+			if ns := c.env.ResolveMergedNamespace(obj.Value); ns != nil {
+				container = ns
+			}
+		}
 	case *parser.MemberExpression:
 		container = c.resolveQualifiedTypeQuietly(obj)
 	}
@@ -175,6 +194,9 @@ func (c *Checker) checkExportAssignment(node *parser.ExportAssignment) {
 			if t, _, found := c.env.Resolve(id.Value); found {
 				entity = t
 			}
+			// A class or function merged with a namespace exports the
+			// namespace's members too.
+			ns = c.env.ResolveMergedNamespace(id.Value)
 		}
 		if entity == nil {
 			c.addCannotFindNameError(id, c.env, id.Value)
@@ -209,4 +231,9 @@ func (c *Checker) checkExportAssignment(node *parser.ExportAssignment) {
 			c.moduleEnv.DefineExport(name, name, v, nil)
 		}
 	}
+}
+
+func isNamespaceType(t types.Type) bool {
+	_, ok := t.(*types.NamespaceType)
+	return ok
 }
