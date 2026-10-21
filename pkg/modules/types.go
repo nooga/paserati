@@ -104,6 +104,17 @@ type ModuleRecord struct {
 	// Error handling
 	Error error // Loading/parsing/checking error
 
+	// EarlyExport looks an export up while the module is being checked, from
+	// the declarations its checker has made so far: a module it imports that
+	// imports it back is checked first and sees it through this. It is nil
+	// before checking starts and once Exports is set.
+	EarlyExport func(name string) (types.Type, bool)
+	// EarlyExportNames lists the names EarlyExport can be asked for.
+	EarlyExportNames func() []string
+	// declared is the check of a module started ahead of its turn, paused
+	// once its declarations are in place (see DeclareModule).
+	declared *declaredCheck
+
 	// Timing information
 	LoadTime     time.Time // When module loading started
 	ParseTime    time.Time // When parsing started

@@ -29,7 +29,7 @@ type deferredHeritage struct {
 // interface, class or namespace member not declared yet. It reports whether
 // it did.
 func (c *Checker) deferUndeclaredBase(node *parser.InterfaceDeclaration, index int, target *types.ObjectType, generic *types.GenericType) bool {
-	if c.resolvingDeferredHeritage || !c.baseNotDeclaredYet(node.Extends[index]) {
+	if c.resolvingDeferredHeritage || !c.baseNotDeclaredYet(node.Extends[index]) && !c.baseAwaitsDeferred(node.Extends[index]) {
 		return false
 	}
 	c.deferredHeritages = append(c.deferredHeritages, deferredHeritage{node: node, index: index, target: target, env: c.env, generic: generic})
@@ -67,11 +67,36 @@ func (c *Checker) baseNotDeclaredYet(expr parser.Expression) bool {
 		return false
 	}
 	if t, found := c.env.ResolveType(name); found {
+		if c.awaitsCycleImport(name, t) {
+			return true
+		}
 		obj, isObj := t.(*types.ObjectType)
 		return isObj && obj.Pending
 	}
 	_, _, found := c.env.Resolve(name)
 	return !found
+}
+
+// awaitsCycleImport reports whether the type name names, t, is an import
+// from a module in an import cycle that has not declared it yet.
+func (c *Checker) awaitsCycleImport(name string, t types.Type) bool {
+	if c.moduleEnv == nil {
+		return false
+	}
+	if b, ok := c.moduleEnv.ImportedNames[name]; !ok || !b.Early {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.GenericTypeAliasForwardReference:
+		if tt.Scope == nil {
+			return false
+		}
+		resolved, _ := tt.Scope(tt.AliasName)
+		return resolved == types.Any
+	case *types.ObjectType:
+		return tt.Pending
+	}
+	return false
 }
 
 // qualifierRoot is the leftmost name of a qualified type reference (N in
@@ -129,7 +154,47 @@ func (c *Checker) resolveDeferredHeritages() {
 		c.env, c.currentThisType = savedEnv, savedThis
 		c.resolvingDeferredHeritage = false
 	}()
+	// A base that is itself waiting for a base of its own goes first, so an
+	// interface copies its base's members once they are all there
+	// (ZString extends ZType<string> extends Base<string>, declared bottom
+	// up). A base waiting for an import cycle keeps what extends it waiting.
+	waiting := make(map[*types.ObjectType]bool, len(pending))
 	for _, d := range pending {
+		waiting[d.target] = true
+	}
+	order := make([]deferredHeritage, 0, len(pending))
+	held := map[*types.ObjectType]bool{}
+	done := make([]bool, len(pending))
+	for progress := true; progress; {
+		progress = false
+		for i, d := range pending {
+			if done[i] {
+				continue
+			}
+			c.env = d.env
+			expr := d.node.Extends[d.index]
+			if base := c.heritageBaseObject(expr); base != nil && base != d.target && waiting[base] && !held[base] {
+				continue
+			}
+			done[i], progress = true, true
+			if c.baseNotDeclaredYet(expr) && c.basesAwaitCycle(expr) || c.heritageHeld(expr, held) {
+				// Declared by a module in an import cycle that has not got
+				// to it yet: resolved once this module's imports are (see
+				// refreshEarlyImports).
+				held[d.target] = true
+				c.deferredHeritages = append(c.deferredHeritages, d)
+				continue
+			}
+			order = append(order, d)
+			waiting[d.target] = false
+		}
+	}
+	for i, d := range pending {
+		if !done[i] {
+			order = append(order, d) // bases extending each other: as written
+		}
+	}
+	for _, d := range order {
 		c.env, c.currentThisType = d.env, d.target
 		expr := d.node.Extends[d.index]
 		resolved := c.resolveTypeAnnotation(expr)
@@ -194,4 +259,76 @@ func (c *Checker) checkDeferredInterfaceExtends(d deferredHeritage, base *types.
 	}
 	c.addErrorAtStart(node.Name, errors.TS2430, fmt.Sprintf(
 		"Interface '%s' incorrectly extends interface '%s'.", interfaceDisplayName(node), node.Extends[d.index].String()))
+}
+
+// basesAwaitCycle reports whether the base expr names an import still
+// awaited from a module in an import cycle.
+func (c *Checker) basesAwaitCycle(expr parser.Expression) bool {
+	name := ""
+	if root := qualifierRoot(expr); root != nil {
+		name = root.Value
+	} else if id, ok := expr.(*parser.Identifier); ok {
+		name = id.Value
+	} else if ref, ok := expr.(*parser.GenericTypeRef); ok {
+		name = ref.Name.Value
+	}
+	if name == "" || c.moduleEnv == nil {
+		return false
+	}
+	b, ok := c.moduleEnv.ImportedNames[name]
+	return ok && b.Early
+}
+
+// heritageBaseObject is the interface (or generic interface's body) the
+// unqualified base expr names, or nil.
+func (c *Checker) heritageBaseObject(expr parser.Expression) *types.ObjectType {
+	var name string
+	switch e := expr.(type) {
+	case *parser.Identifier:
+		name = e.Value
+	case *parser.GenericTypeRef:
+		if e.Qualifier != nil {
+			return nil
+		}
+		name = e.Name.Value
+	default:
+		return nil
+	}
+	t, found := c.env.ResolveType(name)
+	if !found {
+		return nil
+	}
+	switch tt := t.(type) {
+	case *types.GenericType:
+		obj, _ := tt.Body.(*types.ObjectType)
+		return obj
+	case *types.ObjectType:
+		return tt
+	}
+	return nil
+}
+
+// heritageHeld reports whether the base expr names is held back for an
+// import cycle.
+func (c *Checker) heritageHeld(expr parser.Expression, held map[*types.ObjectType]bool) bool {
+	base := c.heritageBaseObject(expr)
+	return base != nil && held[base]
+}
+
+// baseAwaitsDeferred reports whether the base expr names is itself still
+// waiting for a base of its own: copying its members now would miss those.
+func (c *Checker) baseAwaitsDeferred(expr parser.Expression) bool {
+	if len(c.deferredHeritages) == 0 {
+		return false
+	}
+	base := c.heritageBaseObject(expr)
+	if base == nil {
+		return false
+	}
+	for _, d := range c.deferredHeritages {
+		if d.target == base {
+			return true
+		}
+	}
+	return false
 }

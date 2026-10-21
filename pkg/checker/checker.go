@@ -537,6 +537,9 @@ type Checker struct {
 	checkedParameterDefaults    map[*parser.Parameter]bool
 	namespaceBodyDepth          int          // > 0 while checking a namespace body
 	fileScope                   *Environment // the program's top-level scope (module scope in a module)
+	declaredHook                func()       // called once declarations are in place (see SetDeclaredHook)
+	earlyExports                map[string]earlyExport
+	earlyLookups                map[string]bool // early export lookups in progress (re-export cycles)
 	isModule                    bool         // Source is a module, so strict mode comes from the module (TS1214)
 	// topLevelAwaitDisallowed: see SetTopLevelAwaitDisallowed.
 	topLevelAwaitDisallowed bool
@@ -1995,6 +1998,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 	// Var bindings nested in top-level blocks/loops/try are script-scoped too.
 	c.hoistVarNames(globalEnv, program.Statements)
+
+	// A module checked ahead of its turn, for a module it imports that
+	// imports it back, stops here with its declarations in place until the
+	// loader reaches it (see modules.DeclareModule).
+	if hook := c.declaredHook; hook != nil {
+		c.declaredHook = nil
+		hook()
+		c.refreshEarlyImports()
+	}
 
 	// --- Pass 2.5: Process deferred class method bodies ---
 	// Now that function signatures are hoisted (Pass 2), check class method bodies
@@ -5966,7 +5978,25 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 	// If we're in module mode, use the module environment for proper tracking
 	if c.IsModuleMode() {
 		c.moduleEnv.DefineImport(localName, sourceModule, sourceName, importType)
+		c.moduleEnv.ImportedNames[localName].IsTypeOnly = isTypeOnly
+		c.bindImport(localName, importType, isTypeOnly)
+	} else {
+		// Fallback: bind to 'any' type in regular environment
+		// For type-only imports, don't create runtime bindings
+		if !isTypeOnly {
+			c.env.Define(localName, types.Any, false)
+			debugPrintf("// [Checker] Imported %s: %s = any (no module mode)\n", localName, sourceName)
+		} else {
+			debugPrintf("// [Checker] Skipped import binding for type-only import %s (no module mode)\n", localName)
+		}
+	}
+}
 
+// bindImport binds the import localName to the type its source module
+// exports, on the type side and (unless type-only) the value side.
+func (c *Checker) bindImport(localName string, importType ImportBindingType, isTypeOnly bool) {
+	sourceName := c.moduleEnv.ImportedNames[localName].SourceName
+	{
 		// Try to resolve the actual type from the source module
 		resolvedType := c.moduleEnv.ResolveImportedType(localName)
 		if resolvedType != nil && resolvedType != types.Any {
@@ -6004,12 +6034,12 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 			debugPrintf("// [Checker] Imported %s: %s = any (unresolved, type-only: %v)\n", localName, sourceName, isTypeOnly)
 			// Even if unresolved, we should still register the name as a type alias if it's type-only
 			// This allows type annotations to work even when the actual type can't be resolved at compile time
-			// A plain import names a type too: fastify's reply.d.ts imports
-			// RouteGenericInterface from route.d.ts, which imports reply.d.ts,
-			// so while the cycle loads it is unresolved, and a type
-			// parameter defaulting to it lost its default (a false TS2707 on
-			// every bare FastifyReply).
-			// FIXME: resolve it once the cycle completes instead of as any.
+			// A plain import names a type too, as any when its module cannot
+			// say what it is: an import cycle resolves through the module's
+			// declarations (cycle_exports.go), but a value declared later
+			// than a cycle needs it is still unresolved here, and a type
+			// parameter defaulting to it would lose its default (a false
+			// TS2707 on every bare FastifyReply).
 			c.env.DefineTypeAlias(localName, types.Any)
 			if isTypeOnly {
 				debugPrintf("// [Checker] Registered unresolved type-only import %s as type alias\n", localName)
@@ -6021,15 +6051,6 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 				c.env.Define(localName, types.Any, false)
 				debugPrintf("// [Checker] Registered unresolved import %s as any\n", localName)
 			}
-		}
-	} else {
-		// Fallback: bind to 'any' type in regular environment
-		// For type-only imports, don't create runtime bindings
-		if !isTypeOnly {
-			c.env.Define(localName, types.Any, false)
-			debugPrintf("// [Checker] Imported %s: %s = any (no module mode)\n", localName, sourceName)
-		} else {
-			debugPrintf("// [Checker] Skipped import binding for type-only import %s (no module mode)\n", localName)
 		}
 	}
 }

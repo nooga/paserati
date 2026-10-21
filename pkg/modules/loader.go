@@ -335,10 +335,20 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		record.State = ModuleChecking
 		record.CheckTime = time.Now()
 
-		moduleChecker := ml.checkerFactory()
-		moduleChecker.EnableModuleMode(record.ResolvedPath, ml)
-
-		checkErrors := moduleChecker.Check(record.AST)
+		var moduleChecker TypeChecker
+		var checkErrors []paseratiErrors.PaseratiError
+		if d := record.declared; d != nil {
+			// Declared ahead of its turn (an import cycle): finish it.
+			record.declared = nil
+			moduleChecker = d.checker
+			checkErrors = d.finish()
+		} else {
+			moduleChecker = ml.checkerFactory()
+			moduleChecker.EnableModuleMode(record.ResolvedPath, ml)
+			exposeEarlyExports(record, moduleChecker)
+			checkErrors = moduleChecker.Check(record.AST)
+		}
+		record.EarlyExport, record.EarlyExportNames = nil, nil
 		record.Diagnostics = checkErrors
 
 		// Always extract exported types, even if type checking had errors.

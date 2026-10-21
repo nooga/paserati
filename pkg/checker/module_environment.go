@@ -32,6 +32,11 @@ type ImportBinding struct {
 	SourceName   string            // Name in the source module ("default" for default imports)
 	ImportType   ImportBindingType // Type of import binding
 	ResolvedType types.Type        // Resolved type from source module
+	// Early records that the source module was still being checked (an
+	// import cycle) when the binding was resolved, from the declarations it
+	// had then; the binding is resolved again once they are all in place.
+	Early      bool
+	IsTypeOnly bool
 }
 
 // ExportBinding represents an exported name's binding information
@@ -140,7 +145,11 @@ func (me *ModuleEnvironment) ResolveImportedType(localName string) types.Type {
 				}
 			}
 		}
-		if sourceModule != nil {
+		if sourceModule != nil && sourceModule.Exports == nil && !sourceModule.IsJSON {
+			if t, ok := me.earlyImport(sourceModule, binding); ok {
+				binding.ResolvedType = t
+			}
+		} else if sourceModule != nil {
 			// Look up the exported type from the source module
 			if binding.ImportType == ImportNamespace {
 				// For namespace imports, create a namespace type with all exports

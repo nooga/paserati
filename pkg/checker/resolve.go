@@ -886,6 +886,27 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				}
 			}
 
+			// An import from a module still being checked (an import cycle)
+			// is a reference resolved in that module's scope: the generic
+			// itself once it is declared, else a reference keeping the
+			// arguments.
+			if ref, ok := baseType.(*types.GenericTypeAliasForwardReference); ok && len(ref.TypeArguments) == 0 && ref.Scope != nil {
+				if t, ok := ref.Scope(ref.AliasName); ok {
+					if _, generic := t.(*types.GenericType); generic {
+						baseType = t
+					}
+				}
+				if _, generic := baseType.(*types.GenericType); !generic {
+					args := make([]types.Type, len(node.TypeArguments))
+					for i, argExpr := range node.TypeArguments {
+						if args[i] = c.resolveTypeAnnotation(argExpr); args[i] == nil {
+							return nil
+						}
+					}
+					return &types.GenericTypeAliasForwardReference{AliasName: ref.AliasName, Scope: ref.Scope, TypeArguments: args}
+				}
+			}
+
 			// Check if it's a GenericType
 			if genericType, ok := baseType.(*types.GenericType); ok {
 				// Validate type argument count

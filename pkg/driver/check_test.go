@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -471,5 +472,66 @@ func TestCheckFilesAmbientModules(t *testing.T) {
 	want := []string{"main.ts 4:7 TS2322", "main.ts 5:7 TS2322", "main.ts 6:7 TS2322"}
 	if strings.Join(got, ", ") != strings.Join(want, ", ") {
 		t.Fatalf("diagnostics = %v, want %v", got, want)
+	}
+}
+
+// Modules in an import cycle see each other's declarations: the module
+// checked first (b) imports from one (a) whose check has not started yet, so
+// a is checked ahead of its turn up to its declarations. An interface
+// extending a generic a declares later (after its own import of b) waits for
+// it, and so does what extends that interface.
+func TestCheckFilesImportCycle(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"a.ts": "import { B, makeB, helper } from './b';\n" +
+			"export interface A { name: string; b?: B }\n" +
+			"export type AKind = 'x' | 'y';\n" +
+			"export interface $Type<O = unknown> { _zod: { output: O } }\n" +
+			"export class AClass { kind: AKind = 'x'; get(): B { return makeB(); } }\n" +
+			"export const a: A = { name: 'a' };\n" +
+			"export const h: number = helper();\n",
+		"b.ts": "import { A, AKind, AClass, a, $Type } from './a';\n" +
+			"export interface B { size: number; owner?: A }\n" +
+			"export interface ZType<O = unknown> extends $Type<O> { parse(x: unknown): O }\n" +
+			"export interface ZString extends ZType<string> { min(n: number): ZString }\n" +
+			"export function makeB(): B { return { size: 1 }; }\n" +
+			"export function helper(): number { return new AClass().get().size; }\n" +
+			"const bad: AKind = 'z';\n" +
+			"const wrong: number = a.name;\n",
+		"main.ts": "import './a';\nimport { ZString } from './b';\n" +
+			"declare const z: ZString;\nconst out: number = z._zod.output;\n",
+	}
+	for p, content := range files {
+		if err := os.WriteFile(filepath.Join(root, p), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPaserati()
+	var got []string
+	for _, r := range p.CheckFilesWithOptions([]string{"main.ts"}, DefaultCheckOptions()) {
+		if r.LoadError != nil {
+			t.Fatalf("%s: load error: %v", r.Path, r.LoadError)
+		}
+		for _, d := range r.Diagnostics {
+			got = append(got, filepath.Base(r.Path)+" "+d.Code()+" "+d.Message())
+		}
+	}
+	sort.Strings(got)
+	want := []string{
+		"b.ts TS2322 Type '\"z\"' is not assignable to type '\"x\" | \"y\"'.",
+		"b.ts TS2322 Type 'string' is not assignable to type 'number'.",
+		"main.ts TS2322 Type 'string' is not assignable to type 'number'.",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("diagnostics:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
