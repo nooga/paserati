@@ -7,12 +7,12 @@ interface Opts {
   effort?: string;
 }
 
-interface Request {
+interface Req {
   options?: Opts;
 }
 
 // 1. Basic: req.options?.effort guard narrows req.options
-function getEffort(req: Request): string {
+function getEffort(req: Req): string {
   if (req.options?.effort !== undefined) {
     return req.options.effort;
   }
@@ -23,7 +23,7 @@ if (getEffort({ options: { effort: "high" } }) !== "high") throw "FAIL 1a";
 if (getEffort({}) !== "default") throw "FAIL 1b";
 
 // 2. Multiple guards on same base
-function apply(req: Request): string {
+function apply(req: Req): string {
   if (req.options?.effort !== undefined) {
     return "effort:" + req.options.effort;
   }

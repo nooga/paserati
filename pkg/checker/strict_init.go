@@ -108,13 +108,13 @@ func strictInitPropertyName(key parser.Expression) (string, bool) {
 
 // strictInitTypePermits returns true when the property's declared type is one
 // that doesn't require an explicit initializer. Matches TS semantics: `any`
-// (and unions containing it) plus types that explicitly include `undefined`.
-// `unknown` and `null` still require initialization.
+// and `unknown` (and unions containing them) plus types that explicitly
+// include `undefined`. `null` still requires initialization.
 func strictInitTypePermits(t types.Type) bool {
 	if t == nil {
 		return true
 	}
-	if t == types.Any || t == types.Undefined || t == types.Void {
+	if t == types.Any || t == types.Unknown || t == types.Undefined || t == types.Void {
 		return true
 	}
 	if u, ok := t.(*types.UnionType); ok {

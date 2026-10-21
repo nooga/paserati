@@ -1626,6 +1626,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// Only pre-register non-generic interfaces
 			if len(interfaceStmt.TypeParameters) == 0 {
 				if _, exists := c.env.ResolveTypeLocal(interfaceStmt.Name.Value); !exists {
+					if builtin := c.builtinInterface(interfaceStmt.Name.Value); builtin != nil {
+						// Merges into the built-in's instance type.
+						c.env.DefineTypeAlias(interfaceStmt.Name.Value, builtin)
+						continue
+					}
 					placeholderType := &types.ObjectType{
 						Properties:         make(map[string]types.Type),
 						OptionalProperties: make(map[string]bool),

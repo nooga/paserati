@@ -195,3 +195,37 @@ func (g *GlobalDeclarations) inheritLate(base, derived *types.ObjectType, seen m
 		g.inheritLate(derived, next, seen)
 	}
 }
+
+// builtinInterface is the instance type of the built-in class name, which an
+// interface of that name declared in the global scope (a script's top level
+// or a `declare global` block) merges into, as it would with the lib's
+// `interface Date`. Built-in types are made per checker, so merging into them
+// changes no other program. nil when name is no built-in class there.
+func (c *Checker) builtinInterface(name string) *types.ObjectType {
+	g := c.globalScope
+	if g == nil || !g.builtinNames[name] || (c.env != g && !c.env.augmentsGlobal) {
+		return nil
+	}
+	sym, ok := g.symbols[name]
+	if !ok {
+		return nil
+	}
+	ctor, ok := sym.Type.(*types.ObjectType)
+	if !ok {
+		return nil
+	}
+	// The instance type a type annotation names (see resolveTypeAnnotation):
+	// some built-ins are modelled as callables returning it.
+	sigs := ctor.ConstructSigs()
+	if len(sigs) == 0 {
+		sigs = ctor.CallSigs()
+	}
+	if len(sigs) == 0 {
+		return nil
+	}
+	inst, ok := sigs[0].ReturnType.(*types.ObjectType)
+	if !ok || inst == ctor {
+		return nil
+	}
+	return inst
+}

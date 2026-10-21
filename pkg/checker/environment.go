@@ -33,6 +33,10 @@ type Environment struct {
 	// namespace (see checkNamespaceDeclaration).
 	seededNamespaces map[string]bool
 
+	// augmentsGlobal marks a `declare global { ... }` body, whose
+	// declarations go into the global scope.
+	augmentsGlobal bool
+
 	// --- Generic type parameter support ---
 	typeParameters map[string]*types.TypeParameter // Maps type parameter names to their definitions
 
@@ -753,5 +757,6 @@ func newGlobalAugmentationEnvironment(global, lexical *Environment) *Environment
 	env.typeAliases = global.typeAliases
 	env.pendingOverloads = global.pendingOverloads
 	env.overloadedFunctions = global.overloadedFunctions
+	env.augmentsGlobal = true
 	return env
 }

@@ -364,6 +364,11 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 	// --- Reads ---
 	case *parser.Identifier:
 		a.reportIfUnassigned(n, assigned)
+	case *parser.NonNullExpression:
+		// tsc assumes the operand of `x!` is initialized.
+		if _, isIdent := n.Expression.(*parser.Identifier); !isIdent {
+			a.walk(n.Expression, assigned)
+		}
 
 	// --- Branching: the one construct modelled precisely ---
 	case *parser.IfStatement:

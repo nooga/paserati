@@ -277,6 +277,12 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		// If it's not an ObjectType (e.g., a class type alias), fall through to create new.
 	}
 	if interfaceType == nil {
+		if builtin := c.builtinInterface(node.Name.Value); builtin != nil {
+			interfaceType = builtin
+			c.env.DefineTypeAlias(node.Name.Value, builtin)
+		}
+	}
+	if interfaceType == nil {
 		interfaceType = &types.ObjectType{
 			Properties:         make(map[string]types.Type),
 			OptionalProperties: make(map[string]bool),
