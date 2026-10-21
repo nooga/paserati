@@ -4053,16 +4053,18 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 		}
 	case p.curTokenIs(lexer.LBRACKET):
 		param.IsDestructuring = true
-		param.Pattern = p.parseArrayParameterPattern()
-		if param.Pattern == nil {
+		pattern := p.parseArrayParameterPattern()
+		if pattern == nil {
 			return nil, fmt.Errorf("failed to parse array parameter pattern")
 		}
+		param.Pattern = pattern
 	case p.curTokenIs(lexer.LBRACE):
 		param.IsDestructuring = true
-		param.Pattern = p.parseObjectParameterPattern()
-		if param.Pattern == nil {
+		pattern := p.parseObjectParameterPattern()
+		if pattern == nil {
 			return nil, fmt.Errorf("failed to parse object parameter pattern")
 		}
+		param.Pattern = pattern
 	default:
 		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
