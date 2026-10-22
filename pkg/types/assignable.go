@@ -167,6 +167,13 @@ func (r *Relation) isAssignable(source, target Type) bool {
 				related = r.isAssignable(base, target)
 			}
 		}
+		// A target `T['k']` with a literal key takes what its constraint's
+		// `['k']` takes (tsc relates to the write type of the base object).
+		if ia, ok := target.(*IndexedAccessType); ok && !related && literalKeys(ia.IndexType) {
+			if base := r.IndexedConstraint(ia); base != nil && base != target && base != Unknown {
+				related = r.isAssignable(source, base)
+			}
+		}
 	}
 	return related
 }
@@ -2195,6 +2202,22 @@ func mentionsThisShallow(t Type) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// literalKeys reports whether t is a literal key or a union of them.
+func literalKeys(t Type) bool {
+	switch tt := t.(type) {
+	case *LiteralType:
+		return true
+	case *UnionType:
+		for _, m := range tt.Types {
+			if _, ok := m.(*LiteralType); !ok {
+				return false
+			}
+		}
+		return len(tt.Types) > 0
 	}
 	return false
 }
