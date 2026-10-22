@@ -4333,6 +4333,21 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 			OptionalElements: optionalElements,
 			RestElementType:  restElementType,
 		}
+		// A tuple-typed rest parameter spreads into the list: the
+		// parameters of `(...args: [a: A]) => void` are [a: A], not [...[A]].
+		if restTuple, ok := restElementType.(*types.TupleType); ok {
+			if len(allParamTypes) == 0 {
+				tupleType = restTuple
+			} else {
+				tupleType.ElementTypes = append(slices.Clip(allParamTypes), restTuple.ElementTypes...)
+				restOptional := restTuple.OptionalElements
+				if len(restOptional) < len(restTuple.ElementTypes) {
+					restOptional = append(slices.Clone(restOptional), make([]bool, len(restTuple.ElementTypes)-len(restOptional))...)
+				}
+				tupleType.OptionalElements = append(slices.Clip(optionalElements), restOptional...)
+				tupleType.RestElementType = restTuple.RestElementType
+			}
+		}
 		if checkerDebug {
 			debugPrintf("// [TryInferFunc] Created tuple: %s\n", tupleType.String())
 		}

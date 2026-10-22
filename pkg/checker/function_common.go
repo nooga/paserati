@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -1002,12 +1003,26 @@ func returnTypeOfReturns(returned []types.Type) types.Type {
 	if allVoid {
 		return types.Void
 	}
-	normalized := make([]types.Type, len(returned))
-	for i, t := range returned {
+	// never[] (a returned `[]`) is a subtype of every other returned array:
+	// tsc's subtype reduction leaves `string[]` of string[] | never[].
+	hasArray := slices.ContainsFunc(returned, func(t types.Type) bool {
+		switch t := t.(type) {
+		case *types.ArrayType:
+			return t.ElementType != types.Never
+		case *types.TupleType:
+			return true
+		}
+		return false
+	})
+	normalized := make([]types.Type, 0, len(returned))
+	for _, t := range returned {
 		if t == types.Void {
 			t = types.Undefined
 		}
-		normalized[i] = t
+		if arr, ok := t.(*types.ArrayType); ok && hasArray && arr.ElementType == types.Never {
+			continue
+		}
+		normalized = append(normalized, t)
 	}
 	return types.NewUnionType(normalized...)
 }

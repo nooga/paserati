@@ -3453,6 +3453,13 @@ func (c *Checker) visit(node parser.Node) {
 			// (inferFinalReturnType).
 			widenedReturnType = types.Void
 		}
+		// A returned `[]` is never[] (tsc's implicit never under strict),
+		// which another returned array absorbs (returnTypeOfReturns).
+		if lit, ok := node.ReturnValue.(*parser.ArrayLiteral); ok && len(lit.Elements) == 0 {
+			if arr, ok := widenedReturnType.(*types.ArrayType); ok && arr.ElementType == types.Unknown {
+				widenedReturnType = &types.ArrayType{ElementType: types.Never}
+			}
+		}
 		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, widenedReturnType)
 
 	case *parser.BlockStatement:

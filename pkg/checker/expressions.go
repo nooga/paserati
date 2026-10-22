@@ -2132,6 +2132,25 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if len(unionMembers) == 0 {
 				break
 			}
+			// A generic method of a union of arrays is called on the array of
+			// their elements, as tsc does since 5.2:
+			// (string[] | number[]).map(x => ...) takes x: string | number.
+			if len(unionMembers) > 1 {
+				if _, generic := c.env.GetPrimitivePrototypeMethodType("array", propertyName).(*types.GenericType); generic {
+					var elems []types.Type
+					for _, m := range unionMembers {
+						arr, ok := m.(*types.ArrayType)
+						if !ok {
+							elems = nil
+							break
+						}
+						elems = append(elems, arr.ElementType)
+					}
+					if elems != nil {
+						unionMembers = []types.Type{&types.ArrayType{ElementType: types.NewUnionType(elems...)}}
+					}
+				}
+			}
 
 			for _, memberType := range unionMembers {
 				// Create a temporary member expression to check this member type
@@ -3937,9 +3956,19 @@ func (c *Checker) instantiateGenericMethod(methodType types.Type, elementType ty
 
 		// FIXME why is this hardcoded?
 		if genericType.Name == "map" && len(genericType.TypeParameters) == 2 {
-			// For map<T, U>, we only provide T (element type)
-			// U will be inferred from the callback return type later
-			typeArgs = []types.Type{elementType, types.Any} // T = elementType, U = Any for now
+			// map<U> keeps U for the call to infer from the callback:
+			// [1].map(x => x + 1) is number[].
+			u := genericType.TypeParameters[1]
+			instantiated := (&types.InstantiatedType{
+				Generic:       genericType,
+				TypeArguments: []types.Type{elementType, &types.TypeParameterType{Parameter: u}},
+			}).Substitute()
+			if fn, ok := instantiated.(*types.ObjectType); ok && len(fn.CallSignatures) == 1 {
+				sig := *fn.CallSignatures[0]
+				sig.TypeParameters = []*types.TypeParameter{u}
+				return types.NewFunctionType(&sig)
+			}
+			typeArgs = []types.Type{elementType, types.Any}
 		} else {
 			// For other methods with single type parameter T
 			typeArgs = []types.Type{elementType}
