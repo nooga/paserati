@@ -63,6 +63,17 @@ func (c *Checker) inferPendingInit(name string) {
 	c.inferPending(p, name)
 }
 
+// inferPendingForTypeof is inferPendingInit for a `typeof name` type query,
+// which reads the binding's type wherever it is written: a top-level
+// annotation (`InvertKeyValue<typeof BY_KEY>`) resolved in Pass 2 too.
+func (c *Checker) inferPendingForTypeof(name string) {
+	p := c.pendingInits[name]
+	if p == nil || p.blocked || p.inProgress || c.definingEnv(name) != p.env {
+		return
+	}
+	c.inferPending(p, name)
+}
+
 // inferPendingFromPeer is inferPendingInit for a module in an import cycle
 // that reads name (in a `typeof`) while this one is paused at its
 // declarations.

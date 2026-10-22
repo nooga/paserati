@@ -2259,6 +2259,11 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 	case *types.KeyofType:
 		// Substitute the operand type
 		newOperandType := c.substituteTypesWithVisited(typ.OperandType, substitution, visited)
+		if q, deferred := c.resolveTypeofTypeIfNeeded(newOperandType).(*types.TypeofType); deferred {
+			// `ValueOf<typeof X>` in an alias hoisted before X is typed:
+			// keyof X once it is, not keyof of nothing.
+			return &types.KeyofType{OperandType: q}
+		}
 		// Compute the keyof type after substitution
 		return c.computeKeyofType(newOperandType)
 
@@ -2270,7 +2275,8 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		// a mapped object or a union key (`{ [k in keyof T]: ... }[keyof T]`).
 		_, objIsParam := newObjectType.(*types.TypeParameterType)
 		_, idxIsParam := newIndexType.(*types.TypeParameterType)
-		if !objIsParam && !idxIsParam {
+		_, objIsQuery := c.resolveTypeofTypeIfNeeded(newObjectType).(*types.TypeofType)
+		if !objIsParam && !idxIsParam && !objIsQuery {
 			if resolved := c.computeIndexedAccessType(newObjectType, newIndexType); resolved != nil {
 				return resolved
 			}
@@ -2413,7 +2419,7 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 	}
 
 	// Resolve the first segment from the environment.
-	c.inferPendingInit(path[0])
+	c.inferPendingForTypeof(path[0])
 	varType, _, found := c.env.Resolve(path[0])
 	if found {
 		if c.isBuiltinGlobalThis(path[0], varType) {
@@ -2479,7 +2485,7 @@ func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 		if scope, ok := typeofType.Scope.(*Environment); ok && scope != nil {
 			env = scope
 		}
-		c.inferPendingInit(typeofType.Identifier)
+		c.inferPendingForTypeof(typeofType.Identifier)
 		varType, _, found := env.Resolve(typeofType.Identifier)
 		if found && varType == types.Any {
 			if owner := env.definingScope(typeofType.Identifier); owner != nil && owner.inferPending != nil {
@@ -2517,6 +2523,23 @@ func (c *Checker) settleAliasTypeofs(t types.Type) types.Type {
 	switch tt := t.(type) {
 	case *types.TypeofType:
 		return c.resolveTypeofTypeIfNeeded(t)
+	case *types.KeyofType:
+		// `keyof typeof X` kept deferred by an instantiation (ValueOf<typeof X>).
+		if q, ok := tt.OperandType.(*types.TypeofType); ok {
+			if r := c.resolveTypeofTypeIfNeeded(q); r != q && r != types.Any {
+				return c.computeKeyofType(r)
+			}
+		}
+	case *types.IndexedAccessType:
+		if _, ok := tt.ObjectType.(*types.TypeofType); ok {
+			obj := c.settleAliasTypeofs(tt.ObjectType)
+			idx := c.settleAliasTypeofs(tt.IndexType)
+			if _, still := obj.(*types.TypeofType); !still && obj != types.Any {
+				if r := c.computeIndexedAccessType(obj, idx); r != nil {
+					return r
+				}
+			}
+		}
 	case *types.UnionType:
 		var members []types.Type
 		for i, m := range tt.Types {
@@ -2554,7 +2577,8 @@ func (c *Checker) resolveDeferredTypeofIndex(t types.Type, anyIsFinal bool) type
 				return resolved
 			}
 			if object := c.resolveTypeofTypeIfNeeded(tt.ObjectType); object != tt.ObjectType && object != types.Any {
-				if resolved := c.computeIndexedAccessType(object, tt.IndexType); resolved != nil {
+				// The index may be a deferred `keyof typeof X` too.
+				if resolved := c.computeIndexedAccessType(object, c.settleAliasTypeofs(tt.IndexType)); resolved != nil {
 					return resolved
 				}
 			}
@@ -3260,6 +3284,22 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 			objectType = expanded
 		}
 	}
+	// T[string | number] is T[string] | T[number] (Record<string, V>
+	// indexed by keyof Record<string, V>).
+	if iu, ok := indexType.(*types.UnionType); ok && len(iu.Types) > 0 && slices.ContainsFunc(iu.Types, func(t types.Type) bool { return t == types.String || t == types.Number }) {
+		parts := make([]types.Type, 0, len(iu.Types))
+		for _, k := range iu.Types {
+			t := c.computeIndexedAccessType(objectType, k)
+			if t == nil {
+				parts = nil
+				break
+			}
+			parts = append(parts, t)
+		}
+		if parts != nil {
+			return types.NewUnionType(parts...)
+		}
+	}
 	// A primitive key reads the matching index signature.
 	if obj, ok := objectType.(*types.ObjectType); ok && (indexType == types.String || indexType == types.Number) {
 		for _, sig := range obj.IndexSigs() {
@@ -3520,7 +3560,14 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 
 	if len(iterationKeys) == 0 {
 		if _, ok := constraintType.(*types.KeyofType); ok && sourceObjectType != nil {
-			return types.NewObjectType() // keyof an object without members
+			// keyof an object without members, but perhaps with index
+			// signatures (`{ [K in keyof Record<string, V>]: ... }`).
+			result := types.NewObjectType()
+			if sigs := c.mappedIndexSignatures(mappedType, sourceObjectType); len(sigs) > 0 {
+				result.Materialize()
+				result.IndexSignatures = sigs
+			}
+			return result
 		}
 		return nil
 	}
@@ -3540,11 +3587,19 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	// For each key in the iteration, compute the resulting property
 	for _, keyType := range iterationKeys {
 		literalType, ok := keyType.(*types.LiteralType)
-		if !ok || literalType.Value.Type() != vm.TypeString {
-			continue // Skip non-string keys for now
+		if !ok {
+			continue
 		}
-
-		keyName := literalType.Value.AsString()
+		var keyName string
+		switch {
+		case literalType.Value.Type() == vm.TypeString:
+			keyName = literalType.Value.AsString()
+		case literalType.Value.IsNumber():
+			// `{ [V in 400 | -32700]: ... }` names members "400" and "-32700".
+			keyName = jsNumberKey(literalType.Value.ToFloat())
+		default:
+			continue // Skip symbol and other keys for now
+		}
 
 		// Compute the value type for this property
 		// We need to substitute P with the current key in the value type
@@ -3729,7 +3784,14 @@ func (c *Checker) substituteTypeParameterInTypeMemo(targetType types.Type, param
 		}
 		return types.NewUnionType(substitutedTypes...)
 
-	case *types.ConditionalType, *types.GenericTypeAliasForwardReference, *types.ReadonlyType, *types.IntersectionType:
+	case *types.MappedType:
+		if typ.TypeParameter == paramName {
+			// Shadowed by the mapped type's own key parameter.
+			return targetType
+		}
+		return c.substituteTypes(targetType, map[string]types.Type{paramName: replacement})
+
+	case *types.ConditionalType, *types.GenericTypeAliasForwardReference, *types.ReadonlyType, *types.IntersectionType, *types.KeyofType:
 		// Composite types the cases above don't walk: the general name-based
 		// substitution does, evaluating a conditional once its parts are
 		// concrete (`T[K] extends object ? DeepReadonly<T[K]> : T[K]`, #613).

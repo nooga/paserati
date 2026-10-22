@@ -421,6 +421,8 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 				keyName = jsNumberKey(literal.Value)
 			} else if symKey, ok := wellKnownSymbolKey(key.Expr); ok {
 				keyName = symKey
+			} else if name, ok := signedNumberKey(key.Expr); ok {
+				keyName = name
 			} else {
 				keyName = "__COMPUTED_PROPERTY__"
 			}
@@ -828,6 +830,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 					// Complex computed property expression - mark for index signature
 					keyName = "__COMPUTED_PROPERTY__"
 				}
+			} else if name, ok := signedNumberKey(key.Expr); ok {
+				keyName = name
 			} else {
 				// Complex computed property expression - mark for index signature
 				keyName = "__COMPUTED_PROPERTY__"
@@ -978,6 +982,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 					// Complex computed property expression - mark for index signature
 					keyName = "__COMPUTED_PROPERTY__"
 				}
+			} else if name, ok := signedNumberKey(key.Expr); ok {
+				keyName = name
 			} else {
 				// Complex computed property expression - mark for index signature
 				keyName = "__COMPUTED_PROPERTY__"
@@ -1129,6 +1135,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 					// Complex computed property expression - mark for index signature
 					keyName = "__COMPUTED_PROPERTY__"
 				}
+			} else if name, ok := signedNumberKey(key.Expr); ok {
+				keyName = name
 			} else {
 				// Complex computed property expression - mark for index signature
 				keyName = "__COMPUTED_PROPERTY__"
@@ -1338,6 +1346,10 @@ func isDynamicComputedObjectKey(key *parser.ComputedPropertyName) bool {
 	switch expr := key.Expr.(type) {
 	case *parser.StringLiteral, *parser.NumberLiteral, *parser.BigIntLiteral:
 		return false
+	case *parser.PrefixExpression:
+		if _, signed := signedNumberKey(expr); signed {
+			return false
+		}
 	case *parser.MemberExpression:
 		// A well-known symbol other than Symbol.iterator names a member
 		// (@@symbol:name); Symbol.iterator keeps the legacy marker key, which

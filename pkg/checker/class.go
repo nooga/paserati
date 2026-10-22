@@ -287,12 +287,31 @@ func (c *Checker) extractPropertyName(key parser.Expression) string {
 
 // tryExtractConstantComputedPropertyName attempts to extract a constant property name
 // from a computed property expression, returning the name and whether it's constant
+// signedNumberKey is the property name of a signed numeric literal key
+// (`[-32700]`), as JavaScript's ToPropertyKey spells it.
+func signedNumberKey(expr parser.Expression) (string, bool) {
+	pre, ok := expr.(*parser.PrefixExpression)
+	if !ok || (pre.Operator != "-" && pre.Operator != "+") {
+		return "", false
+	}
+	num, ok := pre.Right.(*parser.NumberLiteral)
+	if !ok {
+		return "", false
+	}
+	if pre.Operator == "-" {
+		return jsNumberKey(-num.Value), true
+	}
+	return jsNumberKey(num.Value), true
+}
+
 func (c *Checker) tryExtractConstantComputedPropertyName(expr parser.Expression) (string, bool) {
 	switch e := expr.(type) {
 	case *parser.StringLiteral:
 		return e.Value, true
 	case *parser.NumberLiteral:
 		return jsNumberKey(e.Value), true
+	case *parser.PrefixExpression:
+		return signedNumberKey(e)
 	case *parser.MemberExpression:
 		// A well-known symbol (Symbol.iterator, Symbol.hasInstance, ...).
 		if key, ok := wellKnownSymbolKey(e); ok {
