@@ -248,6 +248,14 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 		return true
 	}
 
+	// NoInfer<X> (a lib intrinsic Paserati keeps as a reference) relates as X.
+	if x := noInferArg(source); x != nil {
+		return r.isAssignable(x, target)
+	}
+	if x := noInferArg(target); x != nil {
+		return r.isAssignable(source, x)
+	}
+
 	// Handle generic forward references
 	if sourceGenRef, ok := source.(*GenericTypeAliasForwardReference); ok {
 		if targetGenRef, ok := target.(*GenericTypeAliasForwardReference); ok {
@@ -2220,4 +2228,12 @@ func literalKeys(t Type) bool {
 		return len(tt.Types) > 0
 	}
 	return false
+}
+
+// noInferArg is X for a NoInfer<X> reference, else nil.
+func noInferArg(t Type) Type {
+	if ref, ok := t.(*GenericTypeAliasForwardReference); ok && ref.AliasName == "NoInfer" && len(ref.TypeArguments) == 1 {
+		return ref.TypeArguments[0]
+	}
+	return nil
 }
