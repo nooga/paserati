@@ -446,25 +446,22 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 			}
 		}
 
-		// Pattern 5: identifier instanceof Constructor (e.g., date instanceof Date)
+		// Pattern 5: reference instanceof Constructor (date instanceof Date,
+		// o.headers instanceof Headers)
 		if infix.Operator == "instanceof" {
-			left := infix.Left
-			if this, isThis := left.(*parser.ThisExpression); isThis {
-				left = &parser.Identifier{Token: this.Token, Value: "this"}
-			}
-			if ident, ok := left.(*parser.Identifier); ok {
+			if key := expressionToNarrowingKey(infix.Left); key != "" {
 				if constructorIdent, ok := infix.Right.(*parser.Identifier); ok {
 					// Special cases for built-in types
 					switch constructorIdent.Value {
 					case "Array":
 						return &TypeGuard{
-							VariableName: ident.Value,
+							VariableName: key,
 							NarrowedType: &types.ArrayType{ElementType: types.Any},
 							IsNegated:    false,
 						}
 					case "Object":
 						return &TypeGuard{
-							VariableName: ident.Value,
+							VariableName: key,
 							NarrowedType: &types.ObjectTypeMarker{},
 							IsNegated:    false,
 						}
@@ -487,7 +484,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 									instanceType := objType.ConstructSigs()[0].ReturnType
 									if instanceType != nil {
 										return &TypeGuard{
-											VariableName: ident.Value,
+											VariableName: key,
 											NarrowedType: instanceType,
 											IsNegated:    false,
 											Instanceof:   true,
@@ -499,7 +496,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 									// Don't narrow to void (ES5 constructor functions return void)
 									if instanceType != nil && instanceType != types.Void {
 										return &TypeGuard{
-											VariableName: ident.Value,
+											VariableName: key,
 											NarrowedType: instanceType,
 											IsNegated:    false,
 										}
