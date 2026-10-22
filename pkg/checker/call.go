@@ -1961,6 +1961,11 @@ func (c *Checker) applyTypeParameterConstraints(sig *types.Signature, solution m
 		if _, inferred := solution[tp]; inferred || tp.Default != nil || tp.Constraint == nil {
 			continue
 		}
+		// FIXME: a method of an instantiated generic (Init<object>.create<T
+		// extends O<C>>) should read its constraint with C substituted
+		// (c.constraintOf): tRPC's initTRPC.create() keeps TOptions in its
+		// root types. Doing so sends tRPC's server package into runaway
+		// recursive instantiation in substituteTypeParameters.
 		constraint := tp.Constraint
 		if c.typeContainsTypeParameter(constraint) || c.isAssignableWithExpansion(types.Unknown, constraint) {
 			continue

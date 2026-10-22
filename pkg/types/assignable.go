@@ -209,6 +209,19 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 			return r.IsAssignable(apparent, target)
 		}
 	}
+	// A generic mapped type ({ [K in keyof T]: X }) has whatever keys T
+	// has: against an object of string index signatures only, its template
+	// must fit each (tsc's typeRelatedToIndexInfo of the template type).
+	if sm, ok := source.(*MappedType); ok && sm.ValueType != nil {
+		if to, ok := target.(*ObjectType); ok && len(to.Props()) == 0 && len(to.CallSigs()) == 0 && len(to.ConstructSigs()) == 0 && len(to.IndexSigs()) > 0 {
+			for _, sig := range to.IndexSigs() {
+				if sig.KeyType != String || !r.IsAssignable(sm.ValueType, sig.ValueType) {
+					return false
+				}
+			}
+			return true
+		}
+	}
 
 	// Handle forward references - they should be treated as equivalent to each other
 	// This is a simple approach for now - in a full implementation, we'd resolve them properly

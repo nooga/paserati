@@ -4506,14 +4506,74 @@ func (c *Checker) substituteInferredTypes(targetType types.Type, inferences map[
 // waits for Tl and H, since expanded now its own `infer H` would capture
 // the enclosing one.
 func awaitsInference(ref *types.GenericTypeAliasForwardReference) bool {
-	var names []string
 	for _, arg := range ref.TypeArguments {
-		collectInferTypeNames(arg, &names, map[types.Type]bool{})
-		if len(names) > 0 {
+		if len(inferNamesNear(arg, 0, nil, true)) > 0 {
 			return true
 		}
 	}
 	return false
+}
+
+// inferNamesNear lists the `infer` placeholders t holds near its surface
+// (through unions, intersections, tuples, indexed accesses, alias
+// arguments and small object patterns), without walking whole type graphs
+// as collectInferTypeNames does. first stops at the first one.
+func inferNamesNear(t types.Type, depth int, names []string, first bool) []string {
+	if t == nil || depth > 6 || first && len(names) > 0 {
+		return names
+	}
+	next := func(u types.Type) { names = inferNamesNear(u, depth+1, names, first) }
+	switch tt := t.(type) {
+	case *types.InferType:
+		names = append(names, tt.TypeParameter)
+	case *types.ArrayType:
+		next(tt.ElementType)
+	case *types.ReadonlyType:
+		next(tt.InnerType)
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			next(m)
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			next(m)
+		}
+	case *types.TupleType:
+		for _, m := range tt.ElementTypes {
+			next(m)
+		}
+		next(tt.RestElementType)
+	case *types.IndexedAccessType:
+		next(tt.ObjectType)
+		next(tt.IndexType)
+	case *types.KeyofType:
+		next(tt.OperandType)
+	case *types.GenericTypeAliasForwardReference:
+		for _, a := range tt.TypeArguments {
+			next(a)
+		}
+	case *types.InstantiatedType:
+		for _, a := range tt.TypeArguments {
+			next(a)
+		}
+	case *types.ObjectType:
+		if tt.ClosedInstance {
+			for _, a := range tt.GenericArgs {
+				next(a)
+			}
+			return names
+		}
+		if _, _, lazy := tt.LazySource(); lazy || len(tt.Props()) > 16 {
+			return names
+		}
+		for _, p := range tt.Props() {
+			next(p)
+		}
+		for _, a := range tt.GenericArgs {
+			next(a)
+		}
+	}
+	return names
 }
 
 // shadowOwnInfers is substitution without the inferred values of the infer
@@ -4529,8 +4589,7 @@ func shadowOwnInfers(extendsType types.Type, substitution map[string]types.Type)
 	if len(names) == 0 {
 		return nil
 	}
-	names = names[:0]
-	collectInferTypeNames(extendsType, &names, map[types.Type]bool{})
+	names = inferNamesNear(extendsType, 0, names[:0], false)
 	var shadowed map[string]types.Type
 	for _, name := range names {
 		if _, ok := substitution[inferKey(name)]; !ok {
@@ -4794,7 +4853,12 @@ func (c *Checker) substituteTypesPreservingInferVisited(typ types.Type, substitu
 
 	switch t := typ.(type) {
 	case *types.InferType:
-		// Don't substitute infer types - they should remain as inference placeholders
+		// Don't substitute infer types - they should remain as inference
+		// placeholders - unless an enclosing conditional inferred it
+		// (substituteInferredTypes; the nested one's own are shadowed).
+		if replacement, ok := substitution[inferKey(t.TypeParameter)]; ok {
+			return replacement
+		}
 		return typ
 
 	case *types.TypeParameterType:

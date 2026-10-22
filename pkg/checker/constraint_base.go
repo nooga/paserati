@@ -104,6 +104,17 @@ func (c *Checker) baseConstraint(t types.Type, depth int) types.Type {
 			}
 			return r
 		}
+		// Opts[keyof T] (T[K] of `[K in keyof T]` with T extends Opts) reads
+		// Opts's string index signature.
+		if _, isKeyof := idx.(*types.KeyofType); isKeyof {
+			if o, ok := obj.(*types.ObjectType); ok {
+				for _, sig := range o.IndexSigs() {
+					if sig.KeyType == types.String {
+						return sig.ValueType
+					}
+				}
+			}
+		}
 		return &types.IndexedAccessType{ObjectType: obj, IndexType: idx}
 	case *types.ConditionalType:
 		// tsc's default constraint of a conditional type: the true branch
@@ -136,7 +147,18 @@ func (c *Checker) baseConstraint(t types.Type, depth int) types.Type {
 				c.conditionalTrueConstraints[tt] = trueType
 			}
 		}
-		tb := c.baseConstraint(trueType, depth+1)
+		var tb types.Type
+		if (trueType == tt.CheckType || trueType.Equals(tt.CheckType)) && !mentionsInfer(tt.ExtendsType) {
+			// The check type in its own true branch is known to extend the
+			// extends type (tsc's substitution type): `V extends Proc ? V`
+			// is a Proc.
+			tb = c.baseConstraint(tt.ExtendsType, depth+1)
+			if check := c.baseConstraint(tt.CheckType, depth+1); check != nil && tb != nil && check != types.Unknown {
+				tb = types.NewIntersectionType(check, tb)
+			}
+		} else {
+			tb = c.baseConstraint(trueType, depth+1)
+		}
 		fb := c.baseConstraint(tt.FalseType, depth+1)
 		if tb == nil || fb == nil {
 			return nil
