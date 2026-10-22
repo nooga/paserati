@@ -77,6 +77,10 @@ func (p *PromiseInitializer) InitTypes(ctx *TypeContext) error {
 	)
 	promiseCtorType = promiseCtorType.WithSimpleCallSignature([]types.Type{executorType}, promiseProtoType)
 
+	// lib.es5's interface PromiseLike<T>.
+	if err := ctx.DefineTypeAlias("PromiseLike", types.PromiseLikeGeneric); err != nil {
+		return err
+	}
 	return ctx.DefineGlobal("Promise", promiseCtorType)
 }
 

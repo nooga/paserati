@@ -373,6 +373,9 @@ var (
 	// Promise<T> generic type
 	PromiseGeneric *GenericType
 
+	// PromiseLike<T>, lib.es5's thenable interface
+	PromiseLikeGeneric *GenericType
+
 	// Generator<T, TReturn, TNext> generic type
 	GeneratorGeneric *GenericType
 
@@ -451,6 +454,40 @@ func init() {
 	promiseBody.GenericArgs = []Type{promiseTType}
 	promiseGeneric.Body = promiseBody
 	PromiseGeneric = promiseGeneric
+
+	// interface PromiseLike<T> {
+	//   then<TResult1 = T, TResult2 = never>(
+	//     onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null,
+	//     onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null,
+	//   ): PromiseLike<TResult1 | TResult2>;
+	// }
+	likeT := NewTypeParameter("T", 0, nil)
+	likeTType := &TypeParameterType{Parameter: likeT}
+	likeGeneric := &GenericType{Name: "PromiseLike", TypeParameters: []*TypeParameter{likeT}}
+	likeOf := func(t Type) Type { return NewInstantiatedType(likeGeneric, []Type{t}) }
+	likeResult1 := &TypeParameter{Name: "TResult1", Default: likeTType, Index: 0}
+	likeResult2 := &TypeParameter{Name: "TResult2", Default: Never, Index: 1}
+	lr1, lr2 := &TypeParameterType{Parameter: likeResult1}, &TypeParameterType{Parameter: likeResult2}
+	likeFulfilled := NewFunctionType(&Signature{ParameterNames: []string{"value"}, ParameterTypes: []Type{likeTType}, ReturnType: NewUnionType(lr1, likeOf(lr1))})
+	likeRejected := NewFunctionType(&Signature{ParameterNames: []string{"reason"}, ParameterTypes: []Type{Any}, ReturnType: NewUnionType(lr2, likeOf(lr2))})
+	likeBody := NewObjectType()
+	likeBody.IsInterface = true
+	likeBody.WithProperty("then", &GenericType{
+		Name:           "then",
+		TypeParameters: []*TypeParameter{likeResult1, likeResult2},
+		Body: NewFunctionType(&Signature{
+			ParameterNames: []string{"onfulfilled", "onrejected"},
+			ParameterTypes: []Type{orNullish(likeFulfilled), orNullish(likeRejected)},
+			OptionalParams: []bool{true, true},
+			ReturnType:     likeOf(NewUnionType(lr1, lr2)),
+		}),
+	})
+	likeBody.GenericName = "PromiseLike"
+	likeBody.GenericArgs = []Type{likeTType}
+	likeGeneric.Body = likeBody
+	// FIXME: an object literal implementing then by hand (`{ then(ok) {...} }`)
+	// does not relate to the generic then, which tsc accepts.
+	PromiseLikeGeneric = likeGeneric
 
 	// Create Generator<T, TReturn, TNext> generic type
 	t := NewTypeParameter("T", 0, nil)
