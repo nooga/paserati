@@ -835,6 +835,15 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				if !exists && c.resolvePendingAlias(node.Name.Value) {
 					baseType, exists = c.env.ResolveType(node.Name.Value)
 				}
+				if exists && c.laterGenerics[node.Name.Value] {
+					// `Request<P>` in a module declaring `interface Request<P>`
+					// further down: not the non-generic global Request.
+					switch baseType.(type) {
+					case *types.GenericType, *types.TypeParameterType, *types.GenericTypeAliasForwardReference:
+					default:
+						exists = false
+					}
+				}
 			}
 
 			if !exists && node.Qualifier == nil {

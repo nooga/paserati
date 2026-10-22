@@ -409,6 +409,10 @@ type Checker struct {
 
 	// Type-level declaration names of the program being checked (any scope).
 	declaredTypeNames map[string]bool
+	// laterGenerics are the generic interfaces, classes and aliases this
+	// program declares at its top level: before its declaration is reached,
+	// such a name shadows a non-generic global of the same name.
+	laterGenerics map[string]bool
 
 	// Declaration names of each generic interface (TS2428).
 	genericInterfaceDecls map[*types.GenericType][]*parser.Identifier
@@ -1659,6 +1663,27 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	debugPrintf("\n// --- Checker - Pass 0: Pre-registering Interface and Type Alias Names ---\n")
 	// Only this scope counts: a module's own declarations shadow globals of
 	// the same name (@types/node's module-local `interface EventTarget`).
+	c.laterGenerics = map[string]bool{}
+	for _, stmt := range program.Statements {
+		decl := parser.Node(stmt)
+		if exp, ok := stmt.(*parser.ExportNamedDeclaration); ok && exp.Declaration != nil {
+			decl = exp.Declaration
+		}
+		switch d := decl.(type) {
+		case *parser.InterfaceDeclaration:
+			if len(d.TypeParameters) > 0 {
+				c.laterGenerics[d.Name.Value] = true
+			}
+		case *parser.ClassDeclaration:
+			if d.Name != nil && len(d.TypeParameters) > 0 {
+				c.laterGenerics[d.Name.Value] = true
+			}
+		case *parser.TypeAliasStatement:
+			if len(d.TypeParameters) > 0 {
+				c.laterGenerics[d.Name.Value] = true
+			}
+		}
+	}
 	for _, stmt := range program.Statements {
 		if interfaceStmt, ok := stmt.(*parser.InterfaceDeclaration); ok {
 			// Only pre-register non-generic interfaces
