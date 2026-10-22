@@ -4206,6 +4206,39 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		}
 		return true
 
+	case *types.InstantiatedType:
+		// Promise<X> against Promise<infer T> infers argument by argument;
+		// anything else matches the instantiation's members.
+		if ct, ok := checkType.(*types.InstantiatedType); ok && ct.Generic == et.Generic && len(ct.TypeArguments) == len(et.TypeArguments) {
+			scratch := maps.Clone(inferences)
+			matched := true
+			for i := range et.TypeArguments {
+				if !c.tryInferTypes(ct.TypeArguments[i], et.TypeArguments[i], scratch) {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				maps.Copy(inferences, scratch)
+				return true
+			}
+		}
+		if expanded := et.Substitute(); expanded != nil && expanded != extendsType {
+			if ct, ok := checkType.(*types.InstantiatedType); ok {
+				if ce := ct.Substitute(); ce != nil {
+					checkType = ce
+				}
+			}
+			return c.tryInferTypes(checkType, expanded, inferences)
+		}
+		return c.rel.IsAssignable(checkType, extendsType)
+
+	case *types.UnionType:
+		if matched, handled := c.tryInferUnionPattern(checkType, et, inferences); handled {
+			return matched
+		}
+		return c.rel.IsAssignable(checkType, extendsType)
+
 	case *types.GenericType:
 		// A generic method in the pattern (Obs<infer V>'s map<U>) matches a
 		// generic method of the same arity through its body.
@@ -4297,6 +4330,55 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		// For other types, check if they're structurally compatible
 		return c.rel.IsAssignable(checkType, extendsType)
 	}
+}
+
+// tryInferUnionPattern matches checkType against a union pattern holding
+// `infer` placeholders, as tsc's inferToMultipleTypes does: each member of
+// checkType is matched against the pattern's other members first, and what
+// none of them match goes to a naked `infer X` (`Promise<infer X> | infer X`
+// against { id: string } gives X = { id: string }). handled is false for a
+// union without placeholders, which relates by assignability.
+func (c *Checker) tryInferUnionPattern(checkType types.Type, pattern *types.UnionType, inferences map[string]types.Type) (matched, handled bool) {
+	var names []string
+	collectInferTypeNames(pattern, &names, map[types.Type]bool{})
+	if len(names) == 0 {
+		return false, false
+	}
+	var naked *types.InferType
+	var others []types.Type
+	for _, m := range pattern.Types {
+		if it, ok := m.(*types.InferType); ok && naked == nil {
+			naked = it
+			continue
+		}
+		others = append(others, m)
+	}
+	sources := []types.Type{checkType}
+	if u, ok := checkType.(*types.UnionType); ok {
+		sources = u.Types
+	}
+	var unmatched []types.Type
+	for _, src := range sources {
+		found := false
+		for _, m := range others {
+			scratch := maps.Clone(inferences)
+			if c.tryInferTypes(src, m, scratch) {
+				maps.Copy(inferences, scratch)
+				found = true
+				break
+			}
+		}
+		if !found {
+			unmatched = append(unmatched, src)
+		}
+	}
+	if len(unmatched) == 0 {
+		return true, true
+	}
+	if naked == nil {
+		return false, true
+	}
+	return c.tryInferTypes(types.NewUnionType(unmatched...), naked, inferences), true
 }
 
 // tryInferTuple matches checkType against a tuple pattern element by
@@ -5823,6 +5905,7 @@ func (c *Checker) substituteMembersLazily(typ, result *types.ObjectType, substit
 		c.env = saved
 	})
 }
+
 
 // substituteMembers fills in result's members: typ's, substituted.
 func (c *Checker) substituteMembers(typ, result *types.ObjectType, substitution map[string]types.Type, visited map[types.Type]types.Type) {
