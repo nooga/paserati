@@ -301,7 +301,14 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext) (*types.Signature, []types.Type, []*parser.Identifier, types.Type, *parser.Identifier, *Environment) {
 	// If no contextual parameter types, fall back to regular resolution
 	if len(ctx.ContextualParameterTypes) == 0 {
-		return c.resolveFunctionParameters(ctx)
+		sig, paramTypes, paramNames, restType, restName, env := c.resolveFunctionParameters(ctx)
+		// A parameterless callback still takes the contextual return type.
+		if sig != nil && ctx.ReturnTypeAnnotation == nil && ctx.ContextualReturnType != nil && sig.ReturnType == nil {
+			cp := *sig
+			cp.ReturnType = ctx.ContextualReturnType
+			sig = &cp
+		}
+		return sig, paramTypes, paramNames, restType, restName, env
 	}
 	c.checkOptionalBindingParameters(ctx.Parameters)
 
@@ -672,12 +679,22 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 					targetType = types.Boolean
 				}
 				bodyExpr := exprBody
-				if bodyExpr != nil && !c.assignableToFresh(bodyExpr, sourceType, targetType) {
-					c.reportNotAssignable(exprBody, bodyExpr, sourceType, targetType, headAssign)
-				} else if bodyExpr == nil && !c.isAssignableWithExpansion(sourceType, targetType) {
-					c.reportNotAssignable(exprBody, nil, sourceType, targetType, headAssign)
+				// A parameterless callback only contextually typed here keeps
+				// the type of a body that does not fit: relating it to the
+				// parameter then reports (and elaborates) the mismatch, as tsc
+				// does (`foo(() => g)` is "did you mean to call").
+				deferToCaller := ctx.ReturnTypeAnnotation == nil && ctx.ContextualReturnType != nil &&
+					len(ctx.ContextualParameterTypes) == 0 && len(ctx.Parameters) == 0 && ctx.RestParameter == nil
+				if deferToCaller && !c.assignableToFresh(bodyExpr, sourceType, targetType) {
+					finalReturnType = bodyType
+				} else {
+					if bodyExpr != nil && !c.assignableToFresh(bodyExpr, sourceType, targetType) {
+						c.reportNotAssignable(exprBody, bodyExpr, sourceType, targetType, headAssign)
+					} else if bodyExpr == nil && !c.isAssignableWithExpansion(sourceType, targetType) {
+						c.reportNotAssignable(exprBody, nil, sourceType, targetType, headAssign)
+					}
+					finalReturnType = expectedReturnType
 				}
-				finalReturnType = expectedReturnType
 			} else {
 				finalReturnType = bodyType
 			}

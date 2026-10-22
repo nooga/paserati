@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/builtins"
@@ -5374,6 +5375,12 @@ func (c *Checker) contextualTypeFromUnion(node parser.Node, union *types.UnionTy
 		if len(candidates) > 1 {
 			candidates = tupleCandidatesByArity(n, candidates)
 		}
+		// Tuples of one length (`[undefined, T] | [Error, undefined]`)
+		// type the literal position by position, through the union of
+		// their elements there, as tsc's union contextual type does.
+		if merged := mergedTupleContext(candidates); merged != nil {
+			return merged
+		}
 	case *parser.ObjectLiteral:
 		for _, t := range union.Types {
 			switch ot := t.(type) {
@@ -5465,7 +5472,9 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 		// The parameters take the contextual signature's types (fewer
 		// parameters than it has are fine, as in tsc).
 		ctxParamTypes := contextualParameterTypes(objType, node.Parameters, node.RestParameter)
-		canApplyContextualTyping := ctxParamTypes != nil
+		// A parameterless arrow still takes the contextual return type:
+		// `const f: () => [number, string] = () => [1, "x"]`.
+		canApplyContextualTyping := ctxParamTypes != nil || len(node.Parameters) == 0 && node.RestParameter == nil
 
 		if canApplyContextualTyping {
 			if checkerDebug {
@@ -6773,6 +6782,35 @@ func (c *Checker) reportUnresolvedModule(source *parser.StringLiteral) {
 	if _, err := c.moduleLoader.LoadModule(source.Value, c.currentFilePath()); err != nil {
 		c.addErrorWithCode(source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", source.Value))
 	}
+}
+
+// mergedTupleContext is the tuple whose element at each position is the
+// union of candidates' there, when candidates are two or more tuples of one
+// length without optional or rest elements; nil otherwise.
+func mergedTupleContext(candidates []types.Type) *types.TupleType {
+	if len(candidates) < 2 {
+		return nil
+	}
+	var tuples []*types.TupleType
+	for _, t := range candidates {
+		tuple, ok := t.(*types.TupleType)
+		if !ok || tuple.RestElementType != nil || slices.Contains(tuple.OptionalElements, true) {
+			return nil
+		}
+		if len(tuples) > 0 && len(tuple.ElementTypes) != len(tuples[0].ElementTypes) {
+			return nil
+		}
+		tuples = append(tuples, tuple)
+	}
+	elems := make([]types.Type, len(tuples[0].ElementTypes))
+	for i := range elems {
+		members := make([]types.Type, len(tuples))
+		for j, tuple := range tuples {
+			members[j] = tuple.ElementTypes[i]
+		}
+		elems[i] = types.NewUnionType(members...)
+	}
+	return &types.TupleType{ElementTypes: elems}
 }
 
 // tupleCandidatesByArity drops the tuple candidates an array literal without

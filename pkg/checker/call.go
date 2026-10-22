@@ -1690,6 +1690,9 @@ func (c *Checker) inferGenericFunctionCallIn(callNode *parser.CallExpression, ge
 			if argTypes[i] == nil { // This was a function argument skipped in phase 1
 				if i < len(partialSig.ParameterTypes) {
 					paramType := partialSig.ParameterTypes[i]
+					if _, isFn := argNode.(*parser.ArrowFunctionLiteral); isFn {
+						paramType = c.withReturnContextInferences(callNode, genericSig, partialSolution, paramType)
+					}
 					if checkerDebug {
 						debugPrintf("// [Checker Inference] Phase 2: Re-visiting function argument %d with context: %s\n", i, paramType.String())
 					}
@@ -1764,7 +1767,7 @@ func (c *Checker) inferGenericFunctionCallIn(callNode *parser.CallExpression, ge
 			if i < len(genericSig.ParameterTypes) {
 				paramType := genericSig.ParameterTypes[i]
 				if _, isFn := argNode.(*parser.ArrowFunctionLiteral); isFn && i < len(ctxParams) {
-					paramType = ctxParams[i]
+					paramType = c.withReturnContextInferences(callNode, genericSig, nil, ctxParams[i])
 				}
 				if _, isObj := argNode.(*parser.ObjectLiteral); isObj && i < len(objCtxParams) {
 					paramType = objCtxParams[i]
@@ -3588,4 +3591,42 @@ func parameterTypeAt(sig *types.Signature, i int) types.Type {
 func isArrayLiteralNode(n parser.Expression) bool {
 	_, ok := n.(*parser.ArrayLiteral)
 	return ok
+}
+
+// withReturnContextInferences gives a callback's contextual signature the
+// return type the call's expected type implies, as tsc's returnMapper does:
+// `const t: R<string> = run(() => [undefined, "x"])` types the returned
+// literal by R<string>. Only the return type is instantiated (the
+// callback's parameters are not typed by it), and only type parameters
+// solved does not already fix.
+func (c *Checker) withReturnContextInferences(callNode *parser.CallExpression, genericSig *types.Signature, solved map[*types.TypeParameter]types.Type, paramType types.Type) types.Type {
+	expected := c.returnContexts[callNode]
+	if expected == nil || expected == types.Any || genericSig.ReturnType == nil {
+		return paramType
+	}
+	fn, ok := paramType.(*types.ObjectType)
+	if !ok || len(fn.CallSigs()) != 1 || len(fn.Props()) > 0 {
+		return paramType
+	}
+	sig := fn.CallSigs()[0]
+	if sig.ReturnType == nil {
+		return paramType
+	}
+	retSig := &types.Signature{ParameterTypes: []types.Type{genericSig.ReturnType}}
+	subst := map[string]types.Type{}
+	for tp, t := range c.solveTypeParameterConstraints(c.collectTypeParameterConstraints(retSig, []types.Type{stripReadonlyArrays(expected)})) {
+		if _, fixed := solved[tp]; !fixed && t != nil && t != types.Any {
+			subst[tp.Name] = t
+		}
+	}
+	if len(subst) == 0 {
+		return paramType
+	}
+	ret := c.substituteTypes(sig.ReturnType, subst)
+	if ret == sig.ReturnType {
+		return paramType
+	}
+	cp := *sig
+	cp.ReturnType = ret
+	return types.NewObjectType().WithCallSignature(&cp)
 }
