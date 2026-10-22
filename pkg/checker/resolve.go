@@ -1367,8 +1367,14 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			} else {
 				// Dynamic computed property - treat as index signature for now
 				debugPrintf("// [Checker ObjectType] Dynamic computed property, treating as index signature\n")
+				keyType := types.String // Assume string keys for now
+				if c.computedKeyIsSymbol(prop.ComputedName) {
+					// FIXME: approximates the unique symbol member (see the
+					// interface case).
+					keyType = types.Symbol
+				}
 				indexSignature := &types.IndexSignature{
-					KeyType:   types.String, // Assume string keys for now
+					KeyType:   keyType,
 					Synthetic: true,
 					ValueType: propType,
 				}

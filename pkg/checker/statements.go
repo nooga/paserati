@@ -525,8 +525,15 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				// Dynamic computed property - treat as index signature for now
 				// TODO: Better handling of dynamic computed properties
 				debugPrintf("// [Checker Interface P1] Interface '%s' has dynamic computed property, treating as index signature\n", node.Name.Value)
+				keyType := types.String // Assume string keys for now
+				if c.computedKeyIsSymbol(prop.ComputedName) {
+					// FIXME: a unique symbol key names one member; it is
+					// approximated by a symbol index signature, which at
+					// least leaves the string-named members alone.
+					keyType = types.Symbol
+				}
 				indexSignature := &types.IndexSignature{
-					KeyType:   types.String, // Assume string keys for now
+					KeyType:   keyType,
 					Synthetic: true,
 					ValueType: propType,
 				}
@@ -878,8 +885,14 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 					optionalProperties[computedName] = true
 				}
 			} else {
+				keyType := types.String
+				if c.computedKeyIsSymbol(prop.ComputedName) {
+					// FIXME: approximates the unique symbol member (see
+					// checkInterfaceDeclaration).
+					keyType = types.Symbol
+				}
 				indexSignatures = append(indexSignatures, &types.IndexSignature{
-					KeyType:   types.String,
+					KeyType:   keyType,
 					Synthetic: true,
 					ValueType: propType,
 				})
@@ -2021,6 +2034,68 @@ func (c *Checker) extractConstantPropertyName(expr parser.Expression) string {
 		}
 		return ""
 	}
+}
+
+// computedKeyIsSymbol reports whether a computed member name that names no
+// constant property is a unique symbol (`[sym]` with `declare const sym:
+// unique symbol`, `[EventEmitter.captureRejectionSymbol]`). The member may be
+// declared before its key is typed; tsc requires such a key to have a literal
+// or unique symbol type, so an entity name not declared as a literal const or
+// an enum member is taken to be a symbol.
+func (c *Checker) computedKeyIsSymbol(expr parser.Expression) bool {
+	if expr == nil {
+		return false
+	}
+	if t := expr.GetComputedType(); t != nil {
+		return t == types.Symbol
+	}
+	var root *parser.Identifier
+	switch e := expr.(type) {
+	case *parser.Identifier:
+		if t, _, ok := c.env.Resolve(e.Value); ok && t != nil {
+			return t == types.Symbol
+		}
+		root = e
+	case *parser.MemberExpression:
+		for obj := e.Object; root == nil; {
+			switch o := obj.(type) {
+			case *parser.Identifier:
+				root = o
+			case *parser.MemberExpression:
+				obj = o.Object
+			default:
+				return false
+			}
+		}
+	default:
+		return false
+	}
+	if c.program == nil {
+		return true
+	}
+	_, isMember := expr.(*parser.MemberExpression)
+	for _, st := range c.program.Statements {
+		switch d := st.(type) {
+		case *parser.EnumDeclaration:
+			if isMember && d.Name != nil && d.Name.Value == root.Value {
+				return false
+			}
+		case *parser.ConstStatement:
+			if isMember {
+				continue
+			}
+			for _, decl := range d.Declarations {
+				if decl == nil || decl.Name == nil || decl.Name.Value != root.Value {
+					continue
+				}
+				switch decl.Value.(type) {
+				case *parser.StringLiteral, *parser.NumberLiteral, *parser.TemplateLiteral, *parser.PrefixExpression:
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // checkWithStatement performs type checking for 'with' statements
