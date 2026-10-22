@@ -63,6 +63,20 @@ func (c *Checker) getAwaitedType(t types.Type) types.Type {
 
 	t = types.GetEffectiveType(t)
 
+	// Awaited distributes over a union: `T | Promise<T>` awaits to T.
+	if u, ok := t.(*types.UnionType); ok {
+		members := make([]types.Type, len(u.Types))
+		changed := false
+		for i, m := range u.Types {
+			members[i] = c.getAwaitedType(m)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
+		return t
+	}
+
 	if instType, ok := t.(*types.InstantiatedType); ok {
 		if instType.Generic != nil && instType.Generic.Name == "Promise" && len(instType.TypeArguments) > 0 {
 			return c.getAwaitedType(instType.TypeArguments[0])
