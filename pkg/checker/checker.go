@@ -398,6 +398,8 @@ type Checker struct {
 	// Set by the namespace pre-pass: the nested namespace declaration about to
 	// be checked is exported.
 	nsDeclExported bool
+	// Interface members typed `typeof f` before Pass 2 hoisted f.
+	deferredTypeofMembers []deferredTypeofMember
 	// Top-level namespace declarations Pass 1 has not reached yet, by name,
 	// and those an earlier qualified type name already checked on demand.
 	pendingNamespaces map[string][]pendingNamespace
@@ -2027,6 +2029,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 	}
 	debugPrintf("// --- Checker - Pass 2: Complete ---\n")
+	c.resolveDeferredTypeofMembers(false)
 
 	// Var bindings nested in top-level blocks/loops/try are script-scoped too.
 	c.hoistVarNames(globalEnv, program.Statements)
@@ -2428,6 +2431,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.innermostFunctionIsArrow = outerInArrow
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
+	c.resolveDeferredTypeofMembers(true)
 
 	// --- Pass 3.5: Check deferred computed key expressions ---
 	// These are computed property keys from class/interface bodies that were deferred

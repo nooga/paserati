@@ -26,6 +26,38 @@ func (c *Checker) resolvePendingAlias(name string) bool {
 	return true
 }
 
+// deferredTypeofMember is an interface member typed `typeof f` that Pass 1
+// met before Pass 2 hoisted f's declaration.
+type deferredTypeofMember struct {
+	obj   *types.ObjectType
+	name  string
+	query *types.TypeofType
+	// settled is what the member was last set to.
+	settled types.Type
+}
+
+// resolveDeferredTypeofMembers settles, in place, the members whose `typeof`
+// names a declaration hoisted since (`waitFor: typeof waitFor` before
+// `declare function waitFor`). It runs after Pass 2, so bodies see them, and
+// again after Pass 3 (final), when f's inferred return type is known.
+func (c *Checker) resolveDeferredTypeofMembers(final bool) {
+	for i := range c.deferredTypeofMembers {
+		m := &c.deferredTypeofMembers[i]
+		if cur := m.obj.Props()[m.name]; cur != m.query && (m.settled == nil || cur != m.settled) {
+			continue
+		}
+		resolved := c.resolveTypeofTypeIfNeeded(m.query)
+		if _, still := resolved.(*types.TypeofType); still || resolved == nil || resolved == types.Any {
+			continue
+		}
+		m.obj.SetProperty(m.name, resolved)
+		m.settled = resolved
+	}
+	if final {
+		c.deferredTypeofMembers = nil
+	}
+}
+
 func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 	// Called ONLY during Pass 1 for hoisted aliases.
 	if c.pendingAliases != nil && node.Name != nil && c.pendingAliases[node.Name.Value] == node {
@@ -540,6 +572,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			}
 
 			interfaceType.SetProperty(prop.Name.Value, propType)
+			if tof, ok := propType.(*types.TypeofType); ok {
+				c.deferredTypeofMembers = append(c.deferredTypeofMembers, deferredTypeofMember{obj: interfaceType, name: prop.Name.Value, query: tof})
+			}
 			interfaceType.SetPropertyDoc(prop.Name.Value, prop.Doc)
 			setReadonlyProperty(interfaceType, prop.Name.Value, prop.Readonly)
 
