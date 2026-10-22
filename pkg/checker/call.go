@@ -1961,12 +1961,9 @@ func (c *Checker) applyTypeParameterConstraints(sig *types.Signature, solution m
 		if _, inferred := solution[tp]; inferred || tp.Default != nil || tp.Constraint == nil {
 			continue
 		}
-		// FIXME: a method of an instantiated generic (Init<object>.create<T
-		// extends O<C>>) should read its constraint with C substituted
-		// (c.constraintOf): tRPC's initTRPC.create() keeps TOptions in its
-		// root types. Doing so sends tRPC's server package into runaway
-		// recursive instantiation in substituteTypeParameters.
-		constraint := tp.Constraint
+		// A method of an instantiated generic (Init<object>.create<T extends
+		// O<C>>) reads its constraint with C substituted.
+		constraint := c.constraintOf(tp)
 		if c.typeContainsTypeParameter(constraint) || c.isAssignableWithExpansion(types.Unknown, constraint) {
 			continue
 		}
@@ -2893,65 +2890,26 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				return inst
 			}
 
-			// For ObjectType, we need to substitute in properties and signatures
+			// For ObjectType, we need to substitute in properties and
+			// signatures. They are filled in when first read: a call's result
+			// reaches whole library graphs (vitest's TestAPI, whose fixture
+			// members each map over the test context) that copied and
+			// expanded eagerly did not finish.
 			newObj := &types.ObjectType{
-				Properties:          make(map[string]types.Type),
-				PropertyDocs:        typ.PropertyDocs,
-				Doc:                 typ.Doc,
-				OptionalProperties:  typ.OptionalProps(), // Copy as-is
-				ReadOnlyProperties:  typ.ReadOnlyProps(), // Copy as-is
-				CallSignatures:      nil,
-				ConstructSignatures: nil,
-				BaseTypes:           typ.Bases(), // Copy as-is for now
-				IndexSignatures:     nil,
-				ClassMeta:           typ.ClassMeta,
-				IsReflectIntrinsic:  typ.IsReflectIntrinsic,
+				PropertyDocs:       typ.PropertyDocs,
+				Doc:                typ.Doc,
+				ClassMeta:          typ.ClassMeta,
+				IsReflectIntrinsic: typ.IsReflectIntrinsic,
 			}
 			memo[t] = newObj
 			typ.CopyDisplay(newObj, substitute)
-			if len(typ.Bases()) > 0 {
-				// Inherited members are read through the bases.
-				newObj.Materialize()
-				newObj.BaseTypes = make([]types.Type, len(typ.Bases()))
-				for i, base := range typ.Bases() {
-					newObj.Bases()[i] = substitute(base)
-				}
-			}
-
-			// Substitute in properties
-			for _, name := range typ.PropertyNames() {
-				propType := typ.Props()[name]
-				newObj.SetProperty(name, substitute(propType))
-			}
-
-			for _, indexSig := range typ.IndexSigs() {
-				if indexSig == nil {
-					continue
-				}
-				newObj.Materialize()
-				newObj.IndexSignatures = append(newObj.IndexSigs(), &types.IndexSignature{
-					KeyType:        substitute(indexSig.KeyType),
-					ValueType:      substitute(indexSig.ValueType),
-					IsMapped:       indexSig.IsMapped,
-					TypeParameter:  indexSig.TypeParameter,
-					ConstraintType: substitute(indexSig.ConstraintType),
-				})
-			}
-
-			// Substitute in call signatures
-			for _, sig := range typ.CallSigs() {
-				newSig := c.substituteMemberSignature(sig, solution, substitute)
-				newObj.Materialize()
-				newObj.CallSignatures = append(newObj.CallSigs(), newSig)
-			}
-
-			// Substitute in construct signatures
-			for _, sig := range typ.ConstructSigs() {
-				newSig := c.substituteMemberSignature(sig, solution, substitute)
-				newObj.Materialize()
-				newObj.ConstructSignatures = append(newObj.ConstructSigs(), newSig)
-			}
-
+			env := c.env
+			newObj.SetLazyMembers(typ, solutionByName(solution), func(newObj *types.ObjectType) {
+				saved := c.env
+				c.env = env
+				defer func() { c.env = saved }()
+				c.speculate(func() { c.fillSubstitutedMembers(typ, newObj, solution, substitute) })
+			})
 			return newObj
 		case *types.TupleType:
 			// Substitute type parameters in tuple element types
@@ -3112,6 +3070,52 @@ func outerSubstitutionOf(sig *types.Signature, solution map[*types.TypeParameter
 		later[tp.Name] = t
 	}
 	return mergeOuterSubstitution(sig.OuterSubstitution, later)
+}
+
+// solutionByName is solution keyed by parameter name, as a lazily filled
+// object reports what it will be substituted with (ObjectType.LazySource).
+func solutionByName(solution map[*types.TypeParameter]types.Type) map[string]types.Type {
+	names := make(map[string]types.Type, len(solution))
+	for tp, v := range solution {
+		names[tp.Name] = v
+	}
+	return names
+}
+
+// fillSubstitutedMembers fills in newObj's members: typ's, substituted.
+func (c *Checker) fillSubstitutedMembers(typ, newObj *types.ObjectType, solution map[*types.TypeParameter]types.Type, substitute func(types.Type) types.Type) {
+	newObj.Properties = make(map[string]types.Type)
+	newObj.OptionalProperties = typ.OptionalProps()
+	newObj.ReadOnlyProperties = typ.ReadOnlyProps()
+	newObj.BaseTypes = typ.Bases()
+	if len(typ.Bases()) > 0 {
+		// Inherited members are read through the bases.
+		newObj.BaseTypes = make([]types.Type, len(typ.Bases()))
+		for i, base := range typ.Bases() {
+			newObj.BaseTypes[i] = substitute(base)
+		}
+	}
+	for _, name := range typ.PropertyNames() {
+		newObj.SetProperty(name, substitute(typ.Props()[name]))
+	}
+	for _, indexSig := range typ.IndexSigs() {
+		if indexSig == nil {
+			continue
+		}
+		newObj.IndexSignatures = append(newObj.IndexSignatures, &types.IndexSignature{
+			KeyType:        substitute(indexSig.KeyType),
+			ValueType:      substitute(indexSig.ValueType),
+			IsMapped:       indexSig.IsMapped,
+			TypeParameter:  indexSig.TypeParameter,
+			ConstraintType: substitute(indexSig.ConstraintType),
+		})
+	}
+	for _, sig := range typ.CallSigs() {
+		newObj.CallSignatures = append(newObj.CallSignatures, c.substituteMemberSignature(sig, solution, substitute))
+	}
+	for _, sig := range typ.ConstructSigs() {
+		newObj.ConstructSignatures = append(newObj.ConstructSignatures, c.substituteMemberSignature(sig, solution, substitute))
+	}
 }
 
 // substituteMemberSignature substitutes in a signature that is a member of an
