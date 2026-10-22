@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf16"
 
 	"github.com/nooga/paserati/pkg/errors"
@@ -5406,6 +5407,11 @@ func (p *Parser) peekPrecedence() int {
 	if p.noIn && p.peekToken.Type == lexer.IN {
 		return LOWEST
 	}
+	// `f<T>(x)` binds like a call, also as an operand: `1 + f<number>(2)`
+	// (tsc's parseCallExpressionRest), not `(1 + f) < ...`.
+	if p.peekToken.Type == lexer.LT && p.typeArgumentsCallFollows() {
+		return CALL
+	}
 	if p, ok := precedences[p.peekToken.Type]; ok {
 		return p
 	}
@@ -5418,6 +5424,34 @@ func (p *Parser) withIn() func() {
 	saved := p.noIn
 	p.noIn = false
 	return func() { p.noIn = saved }
+}
+
+// typeArgumentsCallFollows reports whether the '<' after the current token
+// opens type arguments followed by a call's '(' or a tagged template.
+func (p *Parser) typeArgumentsCallFollows() bool {
+	// The callee ends in a name (a contextual keyword too: `box.get<T>()`),
+	// a call or an element access.
+	switch p.curToken.Type {
+	case lexer.RPAREN, lexer.RBRACKET:
+	default:
+		if !isIdentifierLike(p.curToken.Literal) {
+			return false
+		}
+	}
+	savedCur, savedPeek := p.curToken, p.peekToken
+	savedErrorCount := len(p.errors)
+	lexerState := p.l.SaveState()
+	p.nextToken() // '<'
+	var typeArgs []Expression
+	var err error
+	p.speculatively(func() { typeArgs, err = p.parseTypeArguments() })
+	follows := err == nil && len(typeArgs) > 0 && (p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.TEMPLATE_START))
+	p.l.RestoreState(lexerState)
+	p.curToken, p.peekToken = savedCur, savedPeek
+	if len(p.errors) > savedErrorCount {
+		p.errors = p.errors[:savedErrorCount]
+	}
+	return follows
 }
 
 func (p *Parser) curPrecedence() int {
@@ -14361,4 +14395,19 @@ func jsNumberString(f float64) string {
 		return mant + "e" + sign + digits
 	}
 	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+// isIdentifierLike reports whether s is spelled like an identifier (or a
+// keyword), as a member name may be.
+func isIdentifierLike(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r == '_' || r == '$' || unicode.IsLetter(r) || i > 0 && unicode.IsDigit(r) {
+			continue
+		}
+		return false
+	}
+	return true
 }
