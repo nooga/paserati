@@ -435,6 +435,10 @@ type Checker struct {
 	// to its arms.
 	ternaryContexts map[*parser.TernaryExpression]*ContextualType
 	ternaryArms     map[*parser.ArrowFunctionLiteral]bool
+	// inferenceArrows are arrow arguments of a generic call visited before
+	// any of its type parameters is inferred: a contextual return type that
+	// names them types the body but is not checked against it.
+	inferenceArrows map[*parser.ArrowFunctionLiteral]bool
 	// uncheckedReturns: the current function's returns are contextually
 	// typed but not checked (FunctionCheckContext.InferUnderContext).
 	uncheckedReturns bool
@@ -5605,7 +5609,8 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			// A block body is not elaborated either: its returns are not
 			// checked against the contextual return type.
 			_, blockBody := node.Body.(*parser.BlockStatement)
-			if (c.ternaryArms[node] || blockBody && !node.IsAsync) && node.ReturnTypeAnnotation == nil {
+			inferring := c.inferenceArrows[node] && expectedReturnTypeForBodyCheck != nil && c.typeContainsTypeParameter(expectedReturnTypeForBodyCheck)
+			if (c.ternaryArms[node] || blockBody && !node.IsAsync || inferring) && node.ReturnTypeAnnotation == nil {
 				if _, predicate := expectedReturnTypeForBodyCheck.(*types.TypePredicateType); !predicate {
 					ctx.InferUnderContext = true
 				}

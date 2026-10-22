@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -2070,12 +2071,36 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			}
 			bodySubstitution, bodyVisited = unshadowed, make(map[types.Type]types.Type)
 		}
+		// Own parameters whose default names an outer one (Promise<T>'s
+		// then<TResult1 = T>) are fresh copies with it substituted, which the
+		// body then names. FIXME: constraints naming an outer parameter keep
+		// it; freshening them too broke substitution memoization (tRPC hung).
+		ownParams := typ.TypeParameters
+		for i, tp := range typ.TypeParameters {
+			if tp == nil || tp.Default == nil {
+				continue
+			}
+			def := c.substituteTypesWithVisited(tp.Default, bodySubstitution, make(map[types.Type]types.Type))
+			con := tp.Constraint
+			if def == tp.Default {
+				continue
+			}
+			if &ownParams[0] == &typ.TypeParameters[0] {
+				ownParams = slices.Clone(typ.TypeParameters)
+				bodySubstitution = maps.Clone(bodySubstitution)
+				bodyVisited = make(map[types.Type]types.Type)
+			}
+			fresh := *tp
+			fresh.Default, fresh.Constraint = def, con
+			ownParams[i] = &fresh
+			bodySubstitution[tp.Name] = &types.TypeParameterType{Parameter: &fresh}
+		}
 		newBody := c.substituteTypesWithVisited(body, bodySubstitution, bodyVisited)
 		if newBody == typ.Body {
 			visited[typ] = typ
 			return typ
 		}
-		result := &types.GenericType{Name: typ.Name, TypeParameters: typ.TypeParameters, Body: newBody}
+		result := &types.GenericType{Name: typ.Name, TypeParameters: ownParams, Body: newBody}
 		visited[typ] = result
 		return result
 

@@ -90,12 +90,21 @@ func (c *Checker) getAwaitedType(t types.Type) types.Type {
 
 	if objType, ok := t.(*types.ObjectType); ok {
 		if thenProp, hasThen := objType.EffectiveProperty("then"); hasThen {
+			// A generic then (`then<TResult1, TResult2>(...)`) is its body.
+			if g, isGeneric := thenProp.(*types.GenericType); isGeneric {
+				thenProp = g.Body
+			}
 			if thenFuncType, ok := thenProp.(*types.ObjectType); ok && len(thenFuncType.CallSigs()) > 0 {
 				sig := thenFuncType.CallSigs()[0]
 				if len(sig.ParameterTypes) > 0 {
-					if callbackFuncType, ok := sig.ParameterTypes[0].(*types.ObjectType); ok && len(callbackFuncType.CallSigs()) > 0 {
+					// onfulfilled may be optional: `(value: T) => ... | undefined | null`.
+					callback := types.RemoveNullishTypes(sig.ParameterTypes[0])
+					if callbackFuncType, ok := callback.(*types.ObjectType); ok && len(callbackFuncType.CallSigs()) > 0 {
 						callbackSig := callbackFuncType.CallSigs()[0]
 						if len(callbackSig.ParameterTypes) > 0 {
+							if value := callbackSig.ParameterTypes[0]; value != t {
+								return c.getAwaitedType(value)
+							}
 							return callbackSig.ParameterTypes[0]
 						}
 					}
@@ -658,8 +667,10 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 		if inferred == nil {
 			inferred = types.Any
 		}
-		// The inferred type stands in for the contextual one when it fits.
-		if c.rel.IsAssignable(inferred, expectedReturnType) {
+		// The inferred type stands in for the contextual one when it fits,
+		// unless it is any or the context still names type parameters being
+		// inferred: then the body's own type is what inference needs.
+		if inferred != types.Any && !c.typeContainsTypeParameter(expectedReturnType) && c.rel.IsAssignable(inferred, expectedReturnType) {
 			inferred = expectedReturnType
 		}
 		finalReturnType = inferred
@@ -702,12 +713,25 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 				if deferToCaller && !c.assignableToFresh(bodyExpr, sourceType, targetType) {
 					finalReturnType = bodyType
 				} else {
+					fits := true
 					if bodyExpr != nil && !c.assignableToFresh(bodyExpr, sourceType, targetType) {
 						c.reportNotAssignable(exprBody, bodyExpr, sourceType, targetType, headAssign)
+						fits = false
 					} else if bodyExpr == nil && !c.isAssignableWithExpansion(sourceType, targetType) {
 						c.reportNotAssignable(exprBody, nil, sourceType, targetType, headAssign)
+						fits = false
 					}
 					finalReturnType = expectedReturnType
+					if ctx.ReturnTypeAnnotation == nil && fits && !ctx.IsAsync {
+						// Unannotated, the arrow returns its body's type: the
+						// contextual type only typed the body (tsc's
+						// getReturnTypeFromBody), and widens a literal it
+						// does not ask for.
+						finalReturnType = bodyType
+						if lit, ok := bodyType.(*types.LiteralType); ok && !literalKeptByContext(lit, expectedReturnType) {
+							finalReturnType = c.rel.GetWidenedType(lit)
+						}
+					}
 				}
 			} else {
 				finalReturnType = bodyType

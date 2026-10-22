@@ -4083,64 +4083,10 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 		c.visit(node.Argument)
 		argType := node.Argument.GetComputedType()
 
-		// 2. Unwrap Promise<T> to get T
+		// 2. The awaited type (tsc's getAwaitedType): a Promise<T> or other
+		// thenable gives its value, recursively; anything else is itself.
 		if argType != nil {
-			// Check if this is a Promise<T> type (InstantiatedType before substitution)
-			if instType, ok := argType.(*types.InstantiatedType); ok {
-				if instType.Generic != nil && instType.Generic.Name == "Promise" {
-					// Extract the inner type T from Promise<T>
-					if len(instType.TypeArguments) > 0 {
-						innerType := instType.TypeArguments[0]
-						node.SetComputedType(innerType)
-						if checkerDebug {
-							debugPrintf("// [Checker AwaitExpression] Unwrapped Promise<%s> to %s\n",
-								innerType.String(), innerType.String())
-						}
-						return
-					}
-				}
-			}
-
-			// Check if this is a Promise-shaped object (after substitution)
-			// Promise objects have .then(), .catch(), .finally() methods
-			// The .then() callback's first parameter type is the resolved value
-			if objType, ok := argType.(*types.ObjectType); ok {
-				if thenProp, hasThen := objType.Props()["then"]; hasThen {
-					// Extract the type from the .then() callback parameter
-					if thenFuncType, ok := thenProp.(*types.ObjectType); ok {
-						if len(thenFuncType.CallSigs()) > 0 {
-							sig := thenFuncType.CallSigs()[0]
-							// The first parameter should be a function that receives the resolved value
-							if len(sig.ParameterTypes) > 0 {
-								callbackType := sig.ParameterTypes[0]
-								if callbackFuncType, ok := callbackType.(*types.ObjectType); ok {
-									if len(callbackFuncType.CallSigs()) > 0 {
-										callbackSig := callbackFuncType.CallSigs()[0]
-										if len(callbackSig.ParameterTypes) > 0 {
-											// This is the resolved value type
-											resolvedType := callbackSig.ParameterTypes[0]
-											node.SetComputedType(resolvedType)
-											if checkerDebug {
-												debugPrintf("// [Checker AwaitExpression] Unwrapped Promise-shaped object to %s\n",
-													resolvedType.String())
-											}
-											return
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// If not a Promise type, await still accepts the value and returns it
-			// This matches TypeScript behavior where await can be used on non-Promise values
-			node.SetComputedType(argType)
-			if checkerDebug {
-				debugPrintf("// [Checker AwaitExpression] Non-Promise type %s, returning as-is\n",
-					argType.String())
-			}
+			node.SetComputedType(c.getAwaitedType(argType))
 		} else {
 			// No type information, default to any
 			node.SetComputedType(types.Any)

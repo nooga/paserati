@@ -390,48 +390,67 @@ func init() {
 	promiseT := NewTypeParameter("T", 0, nil)
 	promiseTType := &TypeParameterType{Parameter: promiseT}
 
-	// Create a proper Promise body that tracks the resolved value type
-	// The .then() method should accept a callback that receives T
-	// For now we'll create a simplified but tracked version
+	// Promise<T>'s methods as lib.es5 declares them. The body names
+	// Promise itself, so the generic is made first and filled in after.
+	promiseGeneric := &GenericType{Name: "Promise", TypeParameters: []*TypeParameter{promiseT}}
+	promiseOf := func(t Type) Type { return NewInstantiatedType(promiseGeneric, []Type{t}) }
+	// FIXME: PromiseLike<T> is not modelled; a callback's T | PromiseLike<T>
+	// is T | Promise<T>.
+	awaitable := func(t Type) Type { return NewUnionType(t, promiseOf(t)) }
+	orNullish := func(t Type) Type { return NewUnionType(t, Undefined, Null) }
 	promiseBody := NewObjectType()
 
-	// .then(onFulfilled?: (value: T) => any, onRejected?: (reason: any) => any): Promise<any>
-	// The callback parameter should be typed as T
-	thenCallback := NewFunctionType(&Signature{
-		ParameterTypes: []Type{promiseTType},
-		ReturnType:     Any,
+	// then<TResult1 = T, TResult2 = never>(
+	//   onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null,
+	//   onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null,
+	// ): Promise<TResult1 | TResult2>
+	tResult1 := &TypeParameter{Name: "TResult1", Default: promiseTType, Index: 0}
+	tResult2 := &TypeParameter{Name: "TResult2", Default: Never, Index: 1}
+	r1, r2 := &TypeParameterType{Parameter: tResult1}, &TypeParameterType{Parameter: tResult2}
+	onFulfilled := NewFunctionType(&Signature{ParameterNames: []string{"value"}, ParameterTypes: []Type{promiseTType}, ReturnType: awaitable(r1)})
+	onRejected := NewFunctionType(&Signature{ParameterNames: []string{"reason"}, ParameterTypes: []Type{Any}, ReturnType: awaitable(r2)})
+	promiseBody.WithProperty("then", &GenericType{
+		Name:           "then",
+		TypeParameters: []*TypeParameter{tResult1, tResult2},
+		Body: NewFunctionType(&Signature{
+			ParameterNames: []string{"onfulfilled", "onrejected"},
+			ParameterTypes: []Type{orNullish(onFulfilled), orNullish(onRejected)},
+			OptionalParams: []bool{true, true},
+			ReturnType:     promiseOf(NewUnionType(r1, r2)),
+		}),
 	})
-	rejectCallback := NewFunctionType(&Signature{
-		ParameterTypes: []Type{Any},
-		ReturnType:     Any,
+
+	// catch<TResult = never>(
+	//   onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null,
+	// ): Promise<T | TResult>
+	tResult := &TypeParameter{Name: "TResult", Default: Never, Index: 0}
+	r := &TypeParameterType{Parameter: tResult}
+	onCatch := NewFunctionType(&Signature{ParameterNames: []string{"reason"}, ParameterTypes: []Type{Any}, ReturnType: awaitable(r)})
+	promiseBody.WithProperty("catch", &GenericType{
+		Name:           "catch",
+		TypeParameters: []*TypeParameter{tResult},
+		Body: NewFunctionType(&Signature{
+			ParameterNames: []string{"onrejected"},
+			ParameterTypes: []Type{orNullish(onCatch)},
+			OptionalParams: []bool{true},
+			ReturnType:     promiseOf(NewUnionType(promiseTType, r)),
+		}),
 	})
-	thenReturnPromise := NewObjectType().
-		WithProperty("then", Any).
-		WithProperty("catch", Any).
-		WithProperty("finally", Any)
-	promiseBody.WithProperty("then", NewOptionalFunction(
-		[]Type{thenCallback, rejectCallback},
-		thenReturnPromise,
-		[]bool{true, true}))
 
-	// .catch(onRejected?: (reason: any) => any): Promise<any>
-	promiseBody.WithProperty("catch", NewOptionalFunction(
-		[]Type{rejectCallback},
-		thenReturnPromise,
-		[]bool{true}))
+	// finally(onfinally?: (() => void) | undefined | null): Promise<T>
+	onFinally := NewFunctionType(&Signature{ReturnType: Void})
+	promiseBody.WithProperty("finally", NewFunctionType(&Signature{
+		ParameterNames: []string{"onfinally"},
+		ParameterTypes: []Type{orNullish(onFinally)},
+		OptionalParams: []bool{true},
+		ReturnType:     promiseOf(promiseTType),
+	}))
 
-	// .finally(onFinally?: () => void): Promise<any>
-	// Returns a simplified promise type to avoid circular reference
-	finallyCallback := NewFunctionType(&Signature{
-		ParameterTypes: []Type{},
-		ReturnType:     Void,
-	})
-	promiseBody.WithProperty("finally", NewOptionalFunction(
-		[]Type{finallyCallback},
-		thenReturnPromise, // Returns a promise type
-		[]bool{true}))
-
-	PromiseGeneric = NewGenericType("Promise", []*TypeParameter{promiseT}, promiseBody)
+	// Its instances print, and relate by arguments, as Promise<X>.
+	promiseBody.GenericName = "Promise"
+	promiseBody.GenericArgs = []Type{promiseTType}
+	promiseGeneric.Body = promiseBody
+	PromiseGeneric = promiseGeneric
 
 	// Create Generator<T, TReturn, TNext> generic type
 	t := NewTypeParameter("T", 0, nil)

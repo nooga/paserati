@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/nooga/paserati/pkg/errors"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
@@ -679,6 +680,27 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 				debugPrintf("// [Checker CallExpr] Calling generic method, using body type: %s\n", bodyObj.String())
 			}
 			funcNodeType = bodyObj
+			// The method's own type parameters (and their defaults) go with
+			// its signatures: `then<TResult1 = T, TResult2 = never>(...)`.
+			if sigs := bodyObj.CallSigs(); len(sigs) > 0 && len(genericType.TypeParameters) > 0 {
+				withParams := make([]*types.Signature, len(sigs))
+				changed := false
+				for i, sig := range sigs {
+					withParams[i] = sig
+					if len(sig.TypeParameters) == 0 {
+						cp := *sig
+						cp.TypeParameters = genericType.TypeParameters
+						withParams[i] = &cp
+						changed = true
+					}
+				}
+				if changed {
+					callable := types.NewObjectType()
+					callable.Materialize()
+					callable.CallSignatures = withParams
+					funcNodeType = callable
+				}
+			}
 		} else {
 			c.addError(node, fmt.Sprintf("cannot call generic type '%s' (body is not callable)", funcNodeType.String()))
 			node.SetComputedType(types.Any)
@@ -1783,8 +1805,13 @@ func (c *Checker) inferGenericFunctionCallIn(callNode *parser.CallExpression, ge
 		if argTypes[i] == nil {
 			if i < len(genericSig.ParameterTypes) {
 				paramType := genericSig.ParameterTypes[i]
-				if _, isFn := argNode.(*parser.ArrowFunctionLiteral); isFn && i < len(ctxParams) {
+				if arrow, isFn := argNode.(*parser.ArrowFunctionLiteral); isFn && i < len(ctxParams) {
 					paramType = c.withReturnContextInferences(callNode, genericSig, nil, ctxParams[i])
+					if c.inferenceArrows == nil {
+						c.inferenceArrows = map[*parser.ArrowFunctionLiteral]bool{}
+					}
+					c.inferenceArrows[arrow] = true
+					defer delete(c.inferenceArrows, arrow)
 				}
 				if _, isObj := argNode.(*parser.ObjectLiteral); isObj && i < len(objCtxParams) {
 					paramType = objCtxParams[i]
@@ -2119,6 +2146,20 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		}
 		return constraints
 	}
+	// So does a reference against an instance already expanded from the
+	// same generic (an async callback's Promise<number> against T |
+	// Promise<T>), named by its generic arguments.
+	if pIsInst && aObj != nil && len(aObj.GenericArgs) == len(pInst.TypeArguments) &&
+		(aObj.Instantiates == pInst.Generic || aObj.Instantiates == nil && pInst.Generic == types.PromiseGeneric && aObj.GenericName == "Promise") {
+		for i, pArg := range pInst.TypeArguments {
+			constraints = append(constraints, c.collectConstraintsFromTypeSeen(pArg, aObj.GenericArgs[i], seen)...)
+		}
+		return constraints
+	}
+	if pObj != nil && aObj != nil && pObj.GenericName == "Promise" && aObj.GenericName == "Promise" &&
+		pObj.Instantiates == nil && aObj.Instantiates == nil && len(pObj.GenericArgs) == 1 && len(aObj.GenericArgs) == 1 {
+		return append(constraints, c.collectConstraintsFromTypeSeen(pObj.GenericArgs[0], aObj.GenericArgs[0], seen)...)
+	}
 	if pIsInst || aIsInst {
 		if pIsInst {
 			if body := pInst.Substitute(); body != nil {
@@ -2421,6 +2462,84 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 					src = types.NewUnionType(rest...)
 				}
 				constraints = append(constraints, c.collectConstraintsFromTypeSeen(target, src, seen)...)
+			}
+			break
+		}
+		// A union argument against a union parameter: members identical on
+		// both sides (null, undefined) match each other, and the rest infer
+		// to the rest (tsc's inferFromMatchingTypes): `null | (() => void)`
+		// against `((v: T) => R) | undefined | null`.
+		if au, ok := argType.(*types.UnionType); ok {
+			var restArgs, restParams []types.Type
+			matchedParam := make([]bool, len(pType.Types))
+			for _, a := range au.Types {
+				matched := false
+				for j, p := range pType.Types {
+					if c.typesEqual(a, p) && sameTypeParameter(a, p) {
+						matched, matchedParam[j] = true, true
+						break
+					}
+				}
+				if !matched {
+					restArgs = append(restArgs, a)
+				}
+			}
+			for j, p := range pType.Types {
+				if !matchedParam[j] {
+					restParams = append(restParams, p)
+				}
+			}
+			if len(restArgs) > 0 && len(restArgs) < len(au.Types) && len(restParams) > 0 {
+				var src, dst types.Type = restArgs[0], restParams[0]
+				if len(restArgs) > 1 {
+					src = types.NewUnionType(restArgs...)
+				}
+				if len(restParams) > 1 {
+					dst = types.NewUnionType(restParams...)
+				}
+				constraints = append(constraints, c.collectConstraintsFromTypeSeen(dst, src, seen)...)
+				break
+			}
+		}
+		// One naked type parameter beside generic members (T | Promise<T>):
+		// each argument member is inferred to the generic members first, and
+		// the members none of them infers from go to the naked one (tsc's
+		// inferToMultipleTypes): Promise<number> infers T = number.
+		var naked *types.TypeParameterType
+		nakedCount := 0
+		for _, m := range pType.Types {
+			if t, ok := m.(*types.TypeParameterType); ok {
+				naked = t
+				nakedCount++
+			}
+		}
+		if nakedCount == 1 && len(pType.Types) > 1 {
+			argMembers := []types.Type{argType}
+			if au, ok := argType.(*types.UnionType); ok {
+				argMembers = au.Types
+			}
+			var rest []types.Type
+			for _, a := range argMembers {
+				matched := false
+				for _, m := range pType.Types {
+					if m == naked {
+						continue
+					}
+					if cs := c.collectConstraintsFromTypeSeen(m, a, seen); len(cs) > 0 {
+						constraints = append(constraints, cs...)
+						matched = true
+					}
+				}
+				if !matched {
+					rest = append(rest, a)
+				}
+			}
+			if len(rest) > 0 {
+				var src types.Type = rest[0]
+				if len(rest) > 1 {
+					src = types.NewUnionType(rest...)
+				}
+				constraints = append(constraints, c.collectConstraintsFromTypeSeen(naked, src, seen)...)
 			}
 			break
 		}
@@ -3465,6 +3584,18 @@ func (c *Checker) keepsLiteralCandidate(tp *types.TypeParameter, paramType types
 	return true
 }
 
+// sameTypeParameter reports whether a and p, when either is a type
+// parameter, are the same one: typesEqual matches them by name, which pairs
+// a caller's TResult with a callee's own TResult.
+func sameTypeParameter(a, p types.Type) bool {
+	at, aok := a.(*types.TypeParameterType)
+	pt, pok := p.(*types.TypeParameterType)
+	if !aok && !pok {
+		return true
+	}
+	return aok && pok && at.Parameter == pt.Parameter
+}
+
 // nakedTypeParamUnion returns the one naked type parameter of u and its other
 // members, when those mention no type parameter.
 func (c *Checker) nakedTypeParamUnion(u *types.UnionType) (*types.TypeParameterType, []types.Type) {
@@ -3479,6 +3610,10 @@ func (c *Checker) nakedTypeParamUnion(u *types.UnionType) (*types.TypeParameterT
 			continue
 		}
 		if c.typeContainsTypeParameter(m) {
+			return nil, nil
+		}
+		// Promise<T>: the type arguments of an instantiation name it too.
+		if inst, ok := m.(*types.InstantiatedType); ok && slices.ContainsFunc(inst.TypeArguments, c.typeContainsTypeParameter) {
 			return nil, nil
 		}
 		fixed = append(fixed, m)
