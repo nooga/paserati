@@ -751,7 +751,17 @@ func adoptAssigned(dst, src map[string]bool) {
 // assigned, ignoring reachability. Used for constructs whose control flow this
 // pass does not model, so an unmodelled path can only silence a diagnostic.
 func unionSyntacticWrites(assigned map[string]bool, node parser.Node) {
-	forEachDescendant(node, func(n parser.Node) {
+	forEachDescendant(node, markSyntacticWrite(assigned))
+}
+
+// unionWritesInScope is unionSyntacticWrites without nested function bodies:
+// a closure's assignment doesn't undo the enclosing flow's narrowing in tsc.
+func unionWritesInScope(assigned map[string]bool, node parser.Node) {
+	forEachNodeInScope(node, markSyntacticWrite(assigned))
+}
+
+func markSyntacticWrite(assigned map[string]bool) func(parser.Node) {
+	return func(n parser.Node) {
 		switch w := n.(type) {
 		case *parser.AssignmentExpression:
 			if id, ok := w.Left.(*parser.Identifier); ok && assignmentDefinitelyWrites(w.Operator) {
@@ -777,7 +787,7 @@ func unionSyntacticWrites(assigned map[string]bool, node parser.Node) {
 		case *parser.ForInStatement:
 			markLoopVariableWrite(assigned, w.Variable)
 		}
-	})
+	}
 }
 
 // collectAnyWrites records every name anything in node may write: plain,

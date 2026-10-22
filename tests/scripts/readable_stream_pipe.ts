@@ -15,7 +15,7 @@ async function main(): Promise<boolean> {
     },
   });
   const collected: unknown[] = [];
-  let destClosed = false;
+  let destClosed = false as boolean;
   const dest = new WritableStream({
     write(chunk: any) {
       collected.push(chunk);
@@ -36,7 +36,7 @@ async function main(): Promise<boolean> {
   // by reclaiming the register directory's cursor in
   // executeUserFunctionSafe/executeUserFunctionWithNewTarget's error paths,
   // the same way Interpret's own nested-call error path already did.)
-  let cancelled = false;
+  let cancelled = false as boolean;
   const source2 = new ReadableStream({
     start(c: any) {
       c.enqueue("a");
@@ -51,7 +51,7 @@ async function main(): Promise<boolean> {
       if (chunk === "b") throw new Error("write failed");
     },
   });
-  let pipeRejected = false;
+  let pipeRejected = false as boolean;
   try {
     await source2.pipeTo(failingDest);
   } catch (e) {

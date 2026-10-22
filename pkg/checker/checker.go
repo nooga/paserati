@@ -1540,6 +1540,10 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 		}
 	}
 
+	if typeAnnotation != nil && assignable {
+		flow.trackAnnotatedInit(c, varName.Value, computedInitializerType)
+	}
+
 	// --- FIX: Refine variable type in environment if no annotation ---
 	if typeAnnotation == nil && found { // Check if ANNOTATION was nil
 		// Widen literal types before updating environment, unless it's empty array

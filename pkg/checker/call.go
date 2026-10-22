@@ -1850,8 +1850,22 @@ func (c *Checker) inferGenericFunctionCallIn(callNode *parser.CallExpression, ge
 	// call's result is expected to have, at lower priority than arguments.
 	if expected := c.returnContexts[callNode]; expected != nil && expected != types.Any && genericSig.ReturnType != nil {
 		retSig := &types.Signature{ParameterTypes: []types.Type{genericSig.ReturnType}}
+		// The null and undefined of `let d: null | Deferred<T> = f()`
+		// infer nothing; the rest is what the result is matched against.
+		if _, isUnion := expected.(*types.UnionType); isUnion {
+			if rest := types.RemoveNullUndefined(expected); rest != types.Never {
+				expected = rest
+			}
+		}
 		retConstraints := c.collectTypeParameterConstraints(retSig, []types.Type{stripReadonlyArrays(expected)})
 		for tp, t := range c.solveTypeParameterConstraints(retConstraints) {
+			// Only the call's own type parameters: an enclosing function's
+			// T in `q.catch(...)`'s Promise<T | TResult> is fixed.
+			// FIXME: polymorphic `this` (`x = x.self()`) is solved here from
+			// the context; tsc takes it from the receiver.
+			if tp != types.PolymorphicThis && !slices.Contains(genericSig.TypeParameters, tp) {
+				continue
+			}
 			if _, have := solution[tp]; !have {
 				if solution == nil {
 					solution = map[*types.TypeParameter]types.Type{}

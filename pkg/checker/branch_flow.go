@@ -519,7 +519,7 @@ func (c *Checker) loopFixpointSeeds(loop parser.Node, keys []string, originalEnv
 			// A straight-line narrowing the loop's writes dropped, as the
 			// declared members it narrowed to.
 			entry = t
-			if reduced := c.assignmentReducedType(declared, c.rel.GetWidenedType(t)); reduced != nil {
+			if reduced := c.assignmentReducedType(declared, c.assignedWidened(t)); reduced != nil {
 				entry = reduced
 			}
 		}
@@ -560,7 +560,7 @@ func (c *Checker) loopFixpointSeeds(loop parser.Node, keys []string, originalEnv
 					next = declared
 					break
 				}
-				assigned := c.assignmentReducedType(declared, c.rel.GetWidenedType(rhs))
+				assigned := c.assignmentReducedType(declared, c.assignedWidened(rhs))
 				if assigned == nil {
 					assigned = declared
 				}

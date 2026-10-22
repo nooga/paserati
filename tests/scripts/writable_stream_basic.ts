@@ -8,7 +8,7 @@ const results: unknown[] = [];
 async function main(): Promise<boolean> {
   // Basic write()/close(), with a start() and controller.error() left unused.
   const written: unknown[] = [];
-  let closedCalled = false;
+  let closedCalled = false as boolean;
   const sink = new WritableStream({
     write(chunk: any) {
       written.push(chunk);
@@ -29,7 +29,7 @@ async function main(): Promise<boolean> {
   results.push(lockable.locked === false);
   const w1 = lockable.getWriter();
   results.push(lockable.locked === true);
-  let threw = false;
+  let threw = false as boolean;
   try {
     lockable.getWriter();
   } catch {
@@ -57,7 +57,7 @@ async function main(): Promise<boolean> {
   const closed = new WritableStream({ write() {} });
   const cWriter = closed.getWriter();
   await cWriter.close();
-  let rejectedAfterClose = false;
+  let rejectedAfterClose = false as boolean;
   try {
     await cWriter.write("late");
   } catch {
@@ -76,7 +76,7 @@ async function main(): Promise<boolean> {
   const aWriter = abortable.getWriter();
   await aWriter.abort("bye");
   results.push(abortReason === "bye");
-  let closedRejected = false;
+  let closedRejected = false as boolean;
   try {
     await aWriter.closed;
   } catch (e) {
@@ -85,7 +85,7 @@ async function main(): Promise<boolean> {
   results.push(closedRejected);
 
   // controller.error() rejects subsequent writes without invoking abort().
-  let abortCalledOnError = false;
+  let abortCalledOnError = false as boolean;
   const erroring = new WritableStream({
     write(chunk: any, controller: any) {
       if (chunk === "boom") controller.error(new Error("boom"));
@@ -96,7 +96,7 @@ async function main(): Promise<boolean> {
   });
   const eWriter = erroring.getWriter();
   await eWriter.write("boom");
-  let rejectedAfterError = false;
+  let rejectedAfterError = false as boolean;
   try {
     await eWriter.write("more");
   } catch (e) {

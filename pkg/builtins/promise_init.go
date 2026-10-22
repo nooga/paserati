@@ -71,11 +71,20 @@ func (p *PromiseInitializer) InitTypes(ctx *TypeContext) error {
 		))
 
 	// Add call signature for Promise constructor
-	executorType := types.NewSimpleFunction(
-		[]types.Type{types.Any, types.Any}, // resolve, reject
+	// new <T>(executor: (resolve: (value: T | PromiseLike<T>) => void,
+	//   reject: (reason?: any) => void) => void): Promise<T>
+	promiseT := &types.TypeParameterType{Parameter: types.PromiseGeneric.TypeParameters[0]}
+	resolveType := types.NewSimpleFunction(
+		[]types.Type{types.NewUnionType(promiseT, types.NewInstantiatedType(types.PromiseLikeGeneric, []types.Type{promiseT}))},
 		types.Void,
 	)
-	promiseCtorType = promiseCtorType.WithSimpleCallSignature([]types.Type{executorType}, promiseProtoType)
+	rejectType := types.NewOptionalFunction([]types.Type{types.Any}, types.Void, []bool{true})
+	executorType := types.NewFunctionType(&types.Signature{
+		ParameterNames: []string{"resolve", "reject"},
+		ParameterTypes: []types.Type{resolveType, rejectType},
+		ReturnType:     types.Void,
+	})
+	promiseCtorType = promiseCtorType.WithSimpleCallSignature([]types.Type{executorType}, types.PromiseGeneric)
 
 	// lib.es5's interface PromiseLike<T>.
 	if err := ctx.DefineTypeAlias("PromiseLike", types.PromiseLikeGeneric); err != nil {

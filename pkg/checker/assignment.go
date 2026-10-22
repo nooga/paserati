@@ -225,7 +225,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 				}
 				if found && !isConst {
 					// Update the type in the nearest defining scope to the widened RHS type
-					widenedRhs := c.rel.GetWidenedType(rhsType)
+					widenedRhs := c.assignedWidened(rhsType)
 					// The declared union reduced to what the value can be
 					// (`r.D = {}` leaves the object member, not `{}`).
 					if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil {
@@ -249,7 +249,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			if rhsType != nil {
 				key := expressionToNarrowingKey(memberLHS)
 				if key != "" {
-					widenedRhs := c.rel.GetWidenedType(rhsType)
+					widenedRhs := c.assignedWidened(rhsType)
 					if c.hasNarrowingInChain(key) {
 						if declared := c.resolveMemberExpressionOriginalType(key); declared != nil {
 							if reduced := c.assignmentReducedType(declared, widenedRhs); reduced != nil {
@@ -595,6 +595,16 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 
 // assignmentReducedType is the declared union narrowed by an assignment: the
 // members the assigned type can be. It returns nil when nothing narrows.
+// assignedWidened widens an assigned literal for assignment narrowing. A
+// type parameter stays itself: GetWidenedType's step to its constraint is
+// for arithmetic, and `v = r` of `let v: R | symbol` narrows v to R.
+func (c *Checker) assignedWidened(t types.Type) types.Type {
+	if _, isParam := t.(*types.TypeParameterType); isParam {
+		return t
+	}
+	return c.rel.GetWidenedType(t)
+}
+
 func (c *Checker) assignmentReducedType(declared, assigned types.Type) types.Type {
 	union, ok := declared.(*types.UnionType)
 	if !ok || assigned == nil || assigned == types.Any {

@@ -36,7 +36,7 @@ const checks: boolean[] = [];
 // removeEventListener actually unregisters the listener.
 {
   const c = new AbortController();
-  let called = false;
+  let called = false as boolean;
   const handler = () => { called = true; };
   c.signal.addEventListener("abort", handler);
   c.signal.removeEventListener("abort", handler);
@@ -47,7 +47,7 @@ const checks: boolean[] = [];
 // A listener removed by an earlier listener in the same dispatch doesn't fire.
 {
   const c = new AbortController();
-  let secondCalled = false;
+  let secondCalled = false as boolean;
   const second = () => { secondCalled = true; };
   c.signal.addEventListener("abort", () => {
     c.signal.removeEventListener("abort", second);
@@ -60,7 +60,7 @@ const checks: boolean[] = [];
 // onabort fires alongside addEventListener listeners.
 {
   const c = new AbortController();
-  let fired = false;
+  let fired = false as boolean;
   c.signal.onabort = () => { fired = true; };
   c.abort();
   checks.push(fired === true);
@@ -81,7 +81,7 @@ const checks: boolean[] = [];
   const a = new AbortController();
   const b = new AbortController();
   const combined = AbortSignal.any([a.signal, b.signal]);
-  let fired = false;
+  let fired = false as boolean;
   combined.addEventListener("abort", () => { fired = true; });
   checks.push(combined.aborted === false);
   b.abort("second");

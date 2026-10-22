@@ -33,6 +33,14 @@ import (
 type flowNarrowState struct {
 	c       *Checker
 	tracked map[string]bool
+	// shadowed holds an enclosing sequence's entry this one overwrote (a
+	// closure assigning an outer variable), restored when this one drops it.
+	shadowed map[string]overlayEntry
+}
+
+type overlayEntry struct {
+	t   types.Type
+	env *Environment
 }
 
 func (c *Checker) newFlowNarrowState() *flowNarrowState {
@@ -42,6 +50,12 @@ func (c *Checker) newFlowNarrowState() *flowNarrowState {
 // track records that name's flow type is narrowType until something
 // invalidates it.
 func (f *flowNarrowState) track(name string, narrowType types.Type) {
+	if prev, held := f.c.flowNarrowOverlay[name]; held && !f.tracked[name] {
+		if f.shadowed == nil {
+			f.shadowed = make(map[string]overlayEntry)
+		}
+		f.shadowed[name] = overlayEntry{prev, f.c.flowNarrowOverlayEnv[name]}
+	}
 	if f.c.flowNarrowOverlay == nil {
 		f.c.flowNarrowOverlay = make(map[string]types.Type)
 	}
@@ -66,6 +80,11 @@ func (c *Checker) overlayFor(name string) (types.Type, bool) {
 		if _, rebound := e.symbols[name]; rebound {
 			return nil, false
 		}
+		// A function body opened since runs at some other time: it reads
+		// the declared type, as tsc's captured mutable variables do.
+		if e.isFunctionScope {
+			return nil, false
+		}
 	}
 	return t, true
 }
@@ -78,15 +97,26 @@ func (f *flowNarrowState) forget(name string) {
 	if !f.tracked[name] {
 		return
 	}
-	delete(f.c.flowNarrowOverlay, name)
+	f.release(name)
 	delete(f.tracked, name)
+}
+
+// release removes name's entry, putting back an enclosing sequence's.
+func (f *flowNarrowState) release(name string) {
+	if prev, ok := f.shadowed[name]; ok {
+		f.c.flowNarrowOverlay[name] = prev.t
+		f.c.flowNarrowOverlayEnv[name] = prev.env
+		delete(f.shadowed, name)
+		return
+	}
+	delete(f.c.flowNarrowOverlay, name)
 }
 
 // invalidateAll drops every narrowing this state holds, because a statement
 // follows that this analysis can't linearly account for.
 func (f *flowNarrowState) invalidateAll() {
 	for name := range f.tracked {
-		delete(f.c.flowNarrowOverlay, name)
+		f.release(name)
 	}
 	f.tracked = make(map[string]bool)
 }
@@ -100,7 +130,7 @@ func (f *flowNarrowState) dropAssignedIn(node parser.Node) {
 		return
 	}
 	writes := map[string]bool{}
-	unionSyntacticWrites(writes, node)
+	unionWritesInScope(writes, node)
 	for name := range writes {
 		f.forget(name)
 	}
@@ -148,7 +178,11 @@ func narrowsOnAssignment(declared types.Type) bool {
 // initializer's own computed type.
 func (f *flowNarrowState) trackVarDeclarationNarrowing(c *Checker, declarators []*parser.VarDeclarator) {
 	for _, declarator := range declarators {
-		if declarator == nil || declarator.Name == nil || declarator.Value == nil || declarator.TypeAnnotation != nil {
+		if declarator == nil || declarator.Name == nil || declarator.Value == nil {
+			continue
+		}
+		if declarator.TypeAnnotation != nil {
+			f.trackAnnotatedInit(c, declarator.Name.Value, declarator.Value.GetComputedType())
 			continue
 		}
 		narrowType, isLiteral := declarator.Value.GetComputedType().(*types.LiteralType)
@@ -160,6 +194,25 @@ func (f *flowNarrowState) trackVarDeclarationNarrowing(c *Checker, declarators [
 			continue
 		}
 		f.track(declarator.Name.Value, narrowType)
+	}
+}
+
+// trackAnnotatedInit narrows a declared union to what its initializer can
+// be, as tsc's assignment narrowing does for the declaration itself
+// (`let d: null | Deferred<T> = createDeferred()` is a Deferred<T> after).
+func (f *flowNarrowState) trackAnnotatedInit(c *Checker, name string, initType types.Type) {
+	if initType == nil || initType == types.Any {
+		return
+	}
+	declared, _, found := c.env.Resolve(name)
+	if !found || declared == nil {
+		return
+	}
+	if _, isUnion := declared.(*types.UnionType); !isUnion {
+		return
+	}
+	if reduced := c.assignmentReducedType(declared, c.assignedWidened(initType)); reduced != nil && !reduced.Equals(declared) {
+		f.track(name, reduced)
 	}
 }
 
@@ -210,7 +263,7 @@ func (f *flowNarrowState) observeExpressionStatement(c *Checker, node *parser.Ex
 	if rhsType != nil {
 		// `x = f()` narrows a declared union to the members f() can be.
 		declared := c.env.ResolveDeclaredType(ident.Value)
-		if reduced := c.assignmentReducedType(declared, c.rel.GetWidenedType(rhsType)); reduced != nil {
+		if reduced := c.assignmentReducedType(declared, c.assignedWidened(rhsType)); reduced != nil {
 			f.track(ident.Value, reduced)
 		}
 	}
