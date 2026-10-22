@@ -816,6 +816,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 			originalType = declared
 		}
 	}
+	originalType = c.inGuardAlternatives(guard, originalType)
 	if originalType == nil {
 		debugPrintf("// [TypeNarrowing] Variable '%s' found but has nil type\n", guard.VariableName)
 		return nil
@@ -1388,6 +1389,7 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 			originalType = declared
 		}
 	}
+	originalType = c.inGuardAlternatives(guard, originalType)
 
 	// Handle discriminated union narrowing in else branch
 	// e.g., after "if (expr.kind === 'num')", the else branch has all members except those with kind='num'
@@ -2620,10 +2622,16 @@ func (c *Checker) resolveObjectTypeForNarrowing(t types.Type) (*types.ObjectType
 func (c *Checker) filterUnionByProperty(t types.Type, propertyName string, wantPresent bool) (types.Type, bool) {
 	unionType, ok := t.(*types.UnionType)
 	if !ok {
-		if c.typeHasProperty(t, propertyName) == wantPresent {
-			return t, true
+		// A lone `{ id } & (A | B)` (or an alias instance of one) filters
+		// its alternatives like a union.
+		if spread := distributeIntersectionMembers(&types.UnionType{Types: []types.Type{t}}); len(spread.Types) > 1 {
+			unionType = spread
+		} else {
+			if c.typeHasProperty(t, propertyName) == wantPresent {
+				return t, true
+			}
+			return nil, false
 		}
-		return nil, false
 	}
 
 	unionType = distributeIntersectionMembers(unionType)
@@ -2641,6 +2649,42 @@ func (c *Checker) filterUnionByProperty(t types.Type, propertyName string, wantP
 		return matchingMembers[0], true
 	}
 	return types.NewUnionType(matchingMembers...), true
+}
+
+// inGuardAlternatives lets an `in` guard on a lone `{ id } & (A | B)` (or
+// an alias instance of one) filter its alternatives like a union's. A
+// forward-referenced alias instance is instantiated first.
+// FIXME: inside an import cycle (tRPC's transformer.ts and rpc/envelopes.ts)
+// the alias is not defined yet when this runs, so nothing is filtered.
+func (c *Checker) inGuardAlternatives(guard *TypeGuard, t types.Type) types.Type {
+	if _, isIn := guard.NarrowedType.(*types.PropertyExistenceMarker); !isIn || t == nil {
+		return t
+	}
+	expand := func(m types.Type) types.Type {
+		if ref, ok := m.(*types.GenericTypeAliasForwardReference); ok {
+			if inst := c.instantiateAliasReference(ref); inst != nil {
+				return inst
+			}
+		}
+		return m
+	}
+	if u, isUnion := t.(*types.UnionType); isUnion {
+		members := make([]types.Type, len(u.Types))
+		changed := false
+		for i, m := range u.Types {
+			members[i] = expand(m)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
+		return t
+	}
+	t = expand(t)
+	if spread := distributeIntersectionMembers(&types.UnionType{Types: []types.Type{t}}); len(spread.Types) > 1 {
+		return spread
+	}
+	return t
 }
 
 // maxDistributedMembers bounds distributeIntersectionMembers' product.
