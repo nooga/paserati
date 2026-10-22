@@ -1802,8 +1802,15 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						}
 					}
 				} else {
-					// Property not found in explicit properties - check index signatures
+					// Property not found in explicit properties. Object.prototype's
+					// members come before an index signature, as tsc's apparent
+					// type has them (`rec.hasOwnProperty` on a Record<string, unknown>).
 					if len(obj.IndexSigs()) > 0 {
+						if methodType := c.env.GetPrimitivePrototypeMethodType("object", propertyName); methodType != nil {
+							resultType = methodType
+						}
+					}
+					if resultType == types.Never && len(obj.IndexSigs()) > 0 {
 						if checkerDebug {
 							debugPrintf("// [Checker MemberExpr] Property '%s' not found, checking %d index signatures\n", propertyName, len(obj.IndexSigs()))
 						}
@@ -1926,9 +1933,17 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						debugPrintf("// [Checker MemberExpr] Found property '%s' in expanded type: %s\n", propertyName, propType.String())
 					}
 				} else {
-					// Check index signatures before reporting error
+					// Object.prototype's members, then index signatures,
+					// before reporting an error.
 					found := false
+					if methodType := c.env.GetPrimitivePrototypeMethodType("object", propertyName); methodType != nil {
+						resultType = methodType
+						found = true
+					}
 					for _, sig := range expandedObj.IndexSigs() {
+						if found {
+							break
+						}
 						if sig.KeyType == types.String || sig.KeyType == types.Any {
 							resultType = sig.ValueType
 							found = true

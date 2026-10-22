@@ -236,6 +236,21 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 
 		if isPositive || isNegative {
 
+			// A predicate call compared with a boolean literal:
+			// `isObject(o) === false` narrows like `!isObject(o)`.
+			for _, side := range [][2]parser.Expression{{infix.Left, infix.Right}, {infix.Right, infix.Left}} {
+				lit, isBool := side[1].(*parser.BooleanLiteral)
+				if _, isCall := side[0].(*parser.CallExpression); !isBool || !isCall {
+					continue
+				}
+				if guard := c.detectTypeGuard(side[0]); guard != nil && guard.Predicate {
+					if lit.Value == isNegative {
+						guard.IsNegated = !guard.IsNegated
+					}
+					return guard
+				}
+			}
+
 			// Pattern 1: typeof <expression> === "literal"
 			// Now supports both identifiers (x) and member expressions (this.value, obj.prop)
 			if typeofExpr, ok := infix.Left.(*parser.TypeofExpression); ok {
@@ -1586,6 +1601,14 @@ func (c *Checker) checkImpossibleComparison(leftType, rightType types.Type, oper
 	// Only check strict equality and inequality operators
 	if operator != "===" && operator != "!==" && operator != "==" && operator != "!=" {
 		return
+	}
+
+	// A type predicate's call is a boolean value.
+	if _, ok := leftType.(*types.TypePredicateType); ok {
+		leftType = types.Boolean
+	}
+	if _, ok := rightType.(*types.TypePredicateType); ok {
+		rightType = types.Boolean
 	}
 
 	// Skip if either type is Any - anything can be compared to Any
