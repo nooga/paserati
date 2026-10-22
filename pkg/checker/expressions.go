@@ -604,6 +604,44 @@ func (c *Checker) mergeSpread(fields map[string]types.Type, optional map[string]
 			c.mergeSpread(fields, optional, c.rel.GetWidenedType(p.Constraint), mayLack)
 		}
 		return true
+	case *types.IntersectionType:
+		// `T & { error: unknown }` (an `in`-narrowed type parameter) is
+		// spreadable when every member is; its object members contribute
+		// their properties. FIXME: tsc's spread of a generic intersection
+		// stays generic; merging generic members here (tRPC's
+		// `{ ...opts }` of HTTPBaseHandlerOptions<TRouter, TRequest> & {...})
+		// made inference blow up, so members mentioning type parameters add
+		// nothing.
+		for _, member := range spreadType.Types {
+			switch m := member.(type) {
+			case *types.ObjectType:
+				if !m.IsInterface && m.DisplayName == "" && c.typeContainsTypeParameter(m) {
+					continue
+				}
+			case *types.TypeParameterType, *types.IndexedAccessType, *types.ConditionalType, *types.MappedType:
+				continue
+			default:
+				if c.typeContainsTypeParameter(member) {
+					continue
+				}
+			}
+			if !c.mergeSpread(fields, optional, c.apparentType(c.rel.GetWidenedType(member)), mayLack) {
+				return false
+			}
+		}
+		return true
+	case *types.MappedType:
+		if expanded, ok := c.structuralObject(spreadType); ok {
+			return c.mergeSpread(fields, optional, expanded, mayLack)
+		}
+		return true // generic: spreadable, as a type parameter is
+	case *types.IndexedAccessType, *types.ConditionalType:
+		// A generic object type is spreadable; its base constraint's known
+		// properties carry over.
+		if base := c.baseConstraint(t, 0); base != nil && base != t {
+			c.mergeSpread(fields, optional, c.apparentType(c.rel.GetWidenedType(base)), mayLack)
+		}
+		return true
 	case *types.LiteralType:
 		// A literal member of a union only ever shows up here as the falsy
 		// branch a logical operator retained (e.g. `false` from `cnd && {}`);
@@ -637,6 +675,17 @@ func spreadableProps(obj *types.ObjectType) map[string]types.Type {
 		}
 	}
 	all := obj.Props()
+	// An interface's inherited members (`interface RequestInit extends
+	// _RequestInit {}` with the base resolved lazily) are spread too.
+	if len(obj.Bases()) > 0 {
+		inherited := make(map[string]types.Type, len(all))
+		for _, name := range obj.EffectivePropertyNames() {
+			if t, ok := obj.EffectiveProperty(name); ok {
+				inherited[name] = t
+			}
+		}
+		all = inherited
+	}
 	for name, t := range all {
 		if strings.HasPrefix(name, "__get__") || strings.HasPrefix(name, "__set__") {
 			continue // an object literal accessor's implementation
