@@ -3255,6 +3255,23 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		debugPrintf("// [ConditionalType] After resolving typeof: ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
 	}
 
+	// A side that still holds type parameters (`[A] extends [B]`, `{ a: A }
+	// extends { a: B }`) is decided false only when it fails with every
+	// parameter as any, tsc's permissive instantiation; failing as written
+	// it waits for its arguments.
+	if params := genericParamsOf(checkType, extendsType); len(params) > 0 {
+		if !c.inferFromConditional(checkType, extendsType, map[string]types.Type{}) {
+			permissive := make(map[string]types.Type, len(params))
+			for name := range params {
+				permissive[name] = types.Any
+			}
+			if c.inferFromConditional(c.substituteTypes(checkType, permissive), c.substituteTypes(extendsType, permissive), map[string]types.Type{}) {
+				return nil
+			}
+			return falseType
+		}
+	}
+
 	// Check if the extends type contains infer types that we need to match
 	inferences := make(map[string]types.Type)
 	if c.inferFromConditional(checkType, extendsType, inferences) {
@@ -3296,6 +3313,15 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 }
 
 // computeIndexedAccessType computes the result of an indexed access type like T[K]
+// withOptionalUndefined is an optional property's type as an indexed access
+// reads it: `{ a?: X }["a"]` is X | undefined under strictNullChecks.
+func (c *Checker) withOptionalUndefined(obj *types.ObjectType, name string, propType types.Type) types.Type {
+	if !c.rel.StrictNullChecks || !obj.IsPropertyOptional(name) {
+		return propType
+	}
+	return types.NewUnionType(propType, types.Undefined)
+}
+
 func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) types.Type {
 	// `(typeof X)[K]` written before X had a type: index X's type now.
 	if _, ok := objectType.(*types.TypeofType); ok {
@@ -3413,7 +3439,7 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 				strVal := literalType.Value.AsString()
 				// Look up the property directly, inherited members included
 				if propType, exists := objType.EffectiveProperty(strVal); exists {
-					return propType
+					return c.withOptionalUndefined(objType, strVal, propType)
 				}
 				// Otherwise a string index signature has it (tailwind's
 				// CustomThemeConfig['anything']), or it is missing (TS2339,
@@ -3436,7 +3462,7 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 				// Collect all property types
 				var propTypes []types.Type
 				for _, propName := range types.SortedPropertyNames(props) {
-					propTypes = append(propTypes, props[propName])
+					propTypes = append(propTypes, c.withOptionalUndefined(objType, propName, props[propName]))
 				}
 				if len(propTypes) == 0 {
 					return types.Never // No properties means never
@@ -3456,7 +3482,7 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 					if literalType.Value.Type() == vm.TypeString {
 						strVal := literalType.Value.AsString()
 						if propType, exists := props[strVal]; exists {
-							resultTypes = append(resultTypes, propType)
+							resultTypes = append(resultTypes, c.withOptionalUndefined(objType, strVal, propType))
 						}
 					}
 				}
@@ -4649,6 +4675,56 @@ func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams 
 // waitsForTypeParameter reports whether t is keyof a type parameter, or a
 // conditional type whose check or extends side is a type parameter or waits
 // for one, so that no conditional checking it can be decided yet.
+// genericParamsOf names the type parameters the sides of a conditional hold
+// in their structure: tuple and array elements, union and intersection
+// members, and the members of object type literals (not of classes or
+// interfaces, which a conditional compares by their own declarations).
+func genericParamsOf(sides ...types.Type) map[string]bool {
+	params := map[string]bool{}
+	seen := map[types.Type]bool{}
+	var walk func(t types.Type, depth int)
+	walk = func(t types.Type, depth int) {
+		if t == nil || depth > 6 || seen[t] {
+			return
+		}
+		seen[t] = true
+		switch tt := t.(type) {
+		case *types.TypeParameterType:
+			if tt.Parameter != nil {
+				params[tt.Parameter.Name] = true
+			}
+		case *types.TupleType:
+			for _, e := range tt.ElementTypes {
+				walk(e, depth+1)
+			}
+			walk(tt.RestElementType, depth+1)
+		case *types.ArrayType:
+			walk(tt.ElementType, depth+1)
+		case *types.ReadonlyType:
+			walk(tt.InnerType, depth+1)
+		case *types.UnionType:
+			for _, m := range tt.Types {
+				walk(m, depth+1)
+			}
+		case *types.IntersectionType:
+			for _, m := range tt.Types {
+				walk(m, depth+1)
+			}
+		case *types.ObjectType:
+			if _, _, lazy := tt.LazySource(); tt.ClassMeta != nil || lazy || len(tt.Bases()) > 0 {
+				return
+			}
+			for _, name := range types.SortedPropertyNames(tt.Props()) {
+				walk(tt.Props()[name], depth+1)
+			}
+		}
+	}
+	for _, side := range sides {
+		walk(side, 0)
+	}
+	return params
+}
+
 func waitsForTypeParameter(t types.Type, depth int) bool {
 	if depth > 8 {
 		return false
@@ -4660,6 +4736,10 @@ func waitsForTypeParameter(t types.Type, depth int) bool {
 	case *types.ConditionalType:
 		for _, side := range []types.Type{tt.CheckType, tt.ExtendsType} {
 			if _, isParam := side.(*types.TypeParameterType); isParam || waitsForTypeParameter(side, depth+1) {
+				return true
+			}
+			// expect-type's IsAny<Actual> is `[Actual] extends [Secret]`.
+			if len(genericParamsOf(side)) > 0 {
 				return true
 			}
 		}
