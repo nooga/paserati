@@ -495,7 +495,11 @@ func earlyExitRefKeys(c *Checker, arms ...parser.Statement) []string {
 			if !ok || ifs == nil || !isNilNode(ifs.Alternative) || !blockAlwaysTerminates(ifs.Consequence) {
 				continue
 			}
-			for _, key := range conditionRefKeys(ifs.Condition, c.detectTypeGuard(ifs.Condition)) {
+			// The nested condition is looked at before its block's own
+			// bindings exist, so whatever the detection reports is discarded.
+			var guard *TypeGuard
+			c.speculate(func() { guard = c.detectTypeGuard(ifs.Condition) })
+			for _, key := range conditionRefKeys(ifs.Condition, guard) {
 				// FIXME: member chains are left out; seeding them disturbs
 				// sibling member narrowings in the arm.
 				if !strings.Contains(key, ".") {

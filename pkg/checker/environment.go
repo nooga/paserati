@@ -249,6 +249,17 @@ func (e *Environment) GetPrimitivePrototypeMethodType(primitiveName, methodName 
 	return nil
 }
 
+// PrimitivePrototypeType returns the prototype object registered for a
+// primitive name ("array", "string", ...), or nil.
+func (e *Environment) PrimitivePrototypeType(primitiveName string) *types.ObjectType {
+	for current := e; current != nil; current = current.outer {
+		if current.primitivePrototypes != nil {
+			return current.primitivePrototypes[primitiveName]
+		}
+	}
+	return nil
+}
+
 // Define adds a new *variable* type binding and its const status to the current environment scope.
 // Returns false if the name conflicts with an existing variable/const in this scope.
 // Note: TypeScript-style declaration merging allows the same name to exist as both a value and a type.

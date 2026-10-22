@@ -47,7 +47,20 @@ func isValidRestParameterType(t types.Type) bool {
 	case *types.ObjectType:
 		// Interfaces extending Array carry no members here, so an empty object
 		// type gets the benefit of the doubt; one with members is not an array.
-		return len(tt.Props()) == 0 && len(tt.CallSigs()) == 0 && len(tt.ConstructSigs()) == 0
+		if len(tt.CallSigs()) != 0 || len(tt.ConstructSigs()) != 0 {
+			return false
+		}
+		if len(tt.Props()) == 0 {
+			return true
+		}
+		// An interface extending Array or ReadonlyArray inherits their members.
+		props := tt.Props()
+		for _, name := range []string{"length", "concat", "slice", "forEach"} {
+			if _, ok := props[name]; !ok {
+				return false
+			}
+		}
+		return true
 	}
 	// Conditional, indexed-access, infer and other deferred types cannot be
 	// judged here.

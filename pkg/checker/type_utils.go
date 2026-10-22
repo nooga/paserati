@@ -34,6 +34,43 @@ func isFreshLiteralExpression(node parser.Node) bool {
 	return false
 }
 
+// widenConditionalLiterals widens each literal of the union a mutable
+// variable's conditional initializer produced: `let x = b ? 0.5 : 0.75`
+// declares number, not 0.5 | 0.75, when both arms are fresh literals.
+func (c *Checker) widenConditionalLiterals(initializer parser.Node, t types.Type) types.Type {
+	union, ok := t.(*types.UnionType)
+	if !ok || !isFreshLiteralConditional(initializer) {
+		return t
+	}
+	parts := make([]types.Type, len(union.Types))
+	for i, member := range union.Types {
+		parts[i] = c.rel.GetWidenedType(member)
+	}
+	return types.NewUnionType(parts...)
+}
+
+// isFreshLiteralConditional reports whether node is a conditional whose arms
+// are fresh literals (or such conditionals).
+func isFreshLiteralConditional(node parser.Node) bool {
+	t, ok := node.(*parser.TernaryExpression)
+	if !ok {
+		return false
+	}
+	arm := func(n parser.Node) bool { return isFreshLiteralExpression(n) || isFreshLiteralConditional(n) }
+	return arm(t.Consequence) && arm(t.Alternative)
+}
+
+// evolvingArrayType is the type an unannotated variable initialized with `[]`
+// declares. tsc gives it an evolving array type that takes its element type
+// from what is pushed or assigned later; without modelling that, any[] keeps
+// the elements usable (unknown[] would reject `items.forEach(i => f(i))`).
+func evolvingArrayType(initializer parser.Expression, t types.Type) types.Type {
+	if arr, ok := t.(*types.ArrayType); ok && arr.ElementType == types.Unknown && isEmptyArrayLiteral(initializer) {
+		return &types.ArrayType{ElementType: types.Any}
+	}
+	return t
+}
+
 // constLiteralType is the type of an unannotated const whose initializer has
 // literal type computed: a fresh literal becomes a widening literal type.
 func (c *Checker) constLiteralType(initializer parser.Node, computed types.Type) types.Type {

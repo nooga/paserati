@@ -283,8 +283,15 @@ func (c *Checker) resolveExtendedInterfaceObjectType(t types.Type) (*types.Objec
 			return obj, true
 		}
 		return types.NewObjectType(), true
-	case *types.ArrayType, *types.TupleType:
+	case *types.ArrayType:
+		return c.arrayMembersObject(tt.ElementType, false), true
+	case *types.TupleType:
 		return types.NewObjectType(), true
+	case *types.ReadonlyType:
+		if arr, ok := tt.InnerType.(*types.ArrayType); ok {
+			return c.arrayMembersObject(arr.ElementType, true), true
+		}
+		return c.resolveExtendedInterfaceObjectType(tt.InnerType)
 	}
 
 	return nil, false
