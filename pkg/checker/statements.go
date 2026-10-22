@@ -179,8 +179,18 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 				typeParam.Default = defaultType
 
 				// Validate that default type satisfies constraint if both are present
-				if typeParam.Constraint != nil && !c.satisfiesTypeArgConstraint(defaultType, typeParam.Constraint)() {
-					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
+				if typeParam.Constraint != nil {
+					constraint, node := typeParam.Constraint, param.DefaultType
+					check := func() {
+						if !c.satisfiesTypeArgConstraint(defaultType, constraint)() {
+							c.addError(node, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), constraint.String()))
+						}
+					}
+					if c.awaitsUndeclaredAlias(defaultType) {
+						c.deferRelationCheck(check)
+					} else {
+						check()
+					}
 				}
 			}
 		}

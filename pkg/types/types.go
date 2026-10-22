@@ -294,6 +294,9 @@ type InferType struct {
 	// as the argument for a constrained type parameter (EF<infer X> of
 	// `EF<T extends S>` makes X extend S), or nil.
 	Constraint Type
+	// Extends is the written constraint, `infer X extends C`: a candidate C
+	// does not admit fails the match.
+	Extends Type
 }
 
 func (it *InferType) String() string {

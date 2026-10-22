@@ -243,6 +243,26 @@ func reachesPending(t types.Type, depth int, seen map[types.Type]bool) bool {
 	return false
 }
 
+// awaitsUndeclaredAlias reports whether t is an indexed access whose base
+// constraint indexes a generic its module has not declared yet (an import
+// cycle still declaring it): TRouter['_def']['_config'] reads
+// RootConfig<...>['$types'] until rootConfig.ts declares RootConfig.
+func (c *Checker) awaitsUndeclaredAlias(t types.Type) bool {
+	if _, ok := t.(*types.IndexedAccessType); !ok {
+		return false
+	}
+	base := c.baseConstraint(t, 0)
+	for {
+		ia, ok := base.(*types.IndexedAccessType)
+		if !ok {
+			break
+		}
+		base = ia.ObjectType
+	}
+	ref, ok := base.(*types.GenericTypeAliasForwardReference)
+	return ok && c.instantiateAliasReference(ref) == nil
+}
+
 // reachesUnresolvedTypeof reports whether t reaches a `typeof x` whose x has
 // no type yet (a const declared after the interface whose heritage names
 // `(typeof xs)[number]`): a check against t waits for it.
@@ -665,10 +685,14 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				tupleType := &types.TupleType{ElementTypes: elementTypes, OptionalElements: flags, RestElementType: rt.RestElementType}
 				node.SetComputedType(tupleType)
 				return tupleType
+			case *types.InferType:
+				// A conditional's pattern ([infer H, ...infer T]): T takes
+				// the rest of the matched tuple (tryInferTuple).
+				restElementType = rt
 			default:
-				// Variadic tuple elements (a type parameter, `infer X`, a
-				// generic alias) are not modelled; they widen to any[]. tsc
-				// only refuses a rest type that cannot be an array (TS2574).
+				// Variadic tuple elements (a type parameter, a generic
+				// alias) are not modelled; they widen to any[]. tsc only
+				// refuses a rest type that cannot be an array (TS2574).
 				if isConcreteNonArrayType(restType) {
 					var at parser.Node = node.RestElement
 					if node.RestToken != nil {
@@ -1859,7 +1883,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 					argType.String(), constraintType.String())
 			}
 
-			if reachesPending(argType, 0, nil) || reachesPending(constraintType, 0, nil) || c.reachesUnresolvedTypeof(constraintType, 0) {
+			if reachesPending(argType, 0, nil) || reachesPending(constraintType, 0, nil) || c.reachesUnresolvedTypeof(constraintType, 0) || c.awaitsUndeclaredAlias(argType) {
 				// A class or interface not filled in yet is reachable (a
 				// hoisted alias names it, or `interface BB extends AA<BB>`
 				// names BB in its own heritage): its members are filled in
@@ -1996,6 +2020,11 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 	}
 
 	switch typ := t.(type) {
+	case *types.InferType:
+		if replacement, exists := substitution[inferKey(typ.TypeParameter)]; exists {
+			return replacement
+		}
+		return typ
 	case *types.TypeParameterType:
 		// Replace type parameter with concrete type
 		if replacement, exists := substitution[typ.Parameter.Name]; exists {
@@ -2202,6 +2231,16 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		var newRest types.Type
 		if typ.RestElementType != nil {
 			newRest = c.substituteTypesWithVisited(typ.RestElementType, substitution, visited)
+		}
+		// [H, ...T] with T a tuple spreads its elements.
+		if spread, ok := newRest.(*types.TupleType); ok {
+			flags := make([]bool, len(newElementTypes), len(newElementTypes)+len(spread.ElementTypes))
+			copy(flags, typ.OptionalElements)
+			for i, e := range spread.ElementTypes {
+				newElementTypes = append(newElementTypes, e)
+				flags = append(flags, i < len(spread.OptionalElements) && spread.OptionalElements[i])
+			}
+			return &types.TupleType{ElementTypes: newElementTypes, OptionalElements: flags, RestElementType: spread.RestElementType}
 		}
 		return &types.TupleType{ElementTypes: newElementTypes, OptionalElements: typ.OptionalElements, RestElementType: newRest}
 
@@ -2610,16 +2649,24 @@ func (c *Checker) resolveInferTypeExpression(node *parser.InferTypeExpression) t
 	// The placeholder the conditional's infer scope binds (withInferScope),
 	// so what is learnt about it here (an implied constraint) holds where
 	// the true branch names it.
+	var it *types.InferType
 	if t, ok := c.env.ResolveType(node.TypeParameter); ok {
-		if scoped, ok := t.(*types.InferType); ok {
-			return scoped
+		it, _ = t.(*types.InferType)
+	}
+	if it == nil {
+		// Create an InferType that represents the inferred type placeholder
+		// The actual inference happens during conditional type resolution
+		it = &types.InferType{TypeParameter: node.TypeParameter}
+	}
+	if node.Constraint != nil && it.Extends == nil {
+		if constraint := c.resolveTypeAnnotation(node.Constraint); constraint != nil {
+			it.Extends = constraint
+			if it.Constraint == nil {
+				it.Constraint = constraint
+			}
 		}
 	}
-	// Create an InferType that represents the inferred type placeholder
-	// The actual inference happens during conditional type resolution
-	return &types.InferType{
-		TypeParameter: node.TypeParameter,
-	}
+	return it
 }
 
 // computeKeyofType computes the keyof type for a given type
@@ -4099,6 +4146,10 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 	}
 	switch et := extendsType.(type) {
 	case *types.InferType:
+		// `infer X extends C` matches only what C admits.
+		if et.Extends != nil && !c.rel.IsAssignable(checkType, et.Extends) {
+			return false
+		}
 		// This is an infer type - capture the checkType
 		// If we already have an inference for this parameter, create a union
 		if existingType, found := inferences[et.TypeParameter]; found {
@@ -4193,10 +4244,60 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		}
 		return false
 
+	case *types.TupleType:
+		return c.tryInferTuple(checkType, et, inferences)
+
 	default:
 		// For other types, check if they're structurally compatible
 		return c.rel.IsAssignable(checkType, extendsType)
 	}
+}
+
+// tryInferTuple matches checkType against a tuple pattern element by
+// element, the pattern's rest (`...infer Tail`) taking what is left as a
+// tuple: [A, B] against [infer H, ...infer T] gives H = A, T = [B].
+func (c *Checker) tryInferTuple(checkType types.Type, et *types.TupleType, inferences map[string]types.Type) bool {
+	optional := func(t *types.TupleType, i int) bool { return i < len(t.OptionalElements) && t.OptionalElements[i] }
+	var src *types.TupleType
+	switch ct := checkType.(type) {
+	case *types.TupleType:
+		src = ct
+	case *types.ArrayType:
+		src = &types.TupleType{RestElementType: ct}
+	default:
+		return c.rel.IsAssignable(checkType, et)
+	}
+	n := len(et.ElementTypes)
+	for i := 0; i < n; i++ {
+		if i >= len(src.ElementTypes) {
+			if !optional(et, i) {
+				return false
+			}
+			continue
+		}
+		if optional(src, i) && !optional(et, i) {
+			return false
+		}
+		if !c.tryInferTypes(src.ElementTypes[i], et.ElementTypes[i], inferences) {
+			return false
+		}
+	}
+	var remaining []types.Type
+	var remainingOptional []bool
+	if len(src.ElementTypes) > n {
+		remaining = src.ElementTypes[n:]
+		if len(src.OptionalElements) > n {
+			remainingOptional = src.OptionalElements[n:]
+		}
+	}
+	if et.RestElementType == nil {
+		return len(remaining) == 0 && src.RestElementType == nil
+	}
+	rest := src.RestElementType
+	if len(remaining) > 0 || rest == nil {
+		rest = &types.TupleType{ElementTypes: remaining, OptionalElements: remainingOptional, RestElementType: src.RestElementType}
+	}
+	return c.tryInferTypes(rest, et.RestElementType, inferences)
 }
 
 // tryInferFromFunctionTypes handles function type inference
@@ -4364,37 +4465,26 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 
 // substituteInferredTypes substitutes inferred types into the target type
 func (c *Checker) substituteInferredTypes(targetType types.Type, inferences map[string]types.Type) types.Type {
-	if targetType == nil {
-		return nil
-	}
-
-	switch t := targetType.(type) {
-	case *types.InferType:
-		// Replace infer type with inferred type
-		if inferredType, found := inferences[t.TypeParameter]; found {
-			return inferredType
-		}
-		return targetType
-
-	case *types.ArrayType:
-		// Recursively substitute in array element type
-		substitutedElement := c.substituteInferredTypes(t.ElementType, inferences)
-		return &types.ArrayType{ElementType: substitutedElement}
-
-	case *types.UnionType:
-		// Recursively substitute in union members
-		var substitutedTypes []types.Type
-		for _, memberType := range t.Types {
-			substituted := c.substituteInferredTypes(memberType, inferences)
-			substitutedTypes = append(substitutedTypes, substituted)
-		}
-		return types.NewUnionType(substitutedTypes...)
-
-	default:
-		// For other types, return as-is
+	if targetType == nil || len(inferences) == 0 {
 		return targetType
 	}
+	if it, ok := targetType.(*types.InferType); ok {
+		if inferred, found := inferences[it.TypeParameter]; found {
+			return inferred
+		}
+		return targetType
+	}
+	keyed := make(map[string]types.Type, len(inferences))
+	for name, t := range inferences {
+		keyed[inferKey(name)] = t
+	}
+	return c.substituteTypes(targetType, keyed)
 }
+
+// inferKey is the substitution key that replaces `infer name` (a type
+// parameter's name never has the colon): the true branch's { v: U } is
+// instantiated like any other type.
+func inferKey(name string) string { return "infer:" + name }
 
 // substituteMappedType substitutes type arguments into a mapped type
 func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams []*types.TypeParameter, typeArgs []types.Type) *types.MappedType {
@@ -5254,8 +5344,10 @@ func mayMentionTypeParamNamesAt(t types.Type, names map[string]types.Type, visit
 		}
 		return false
 	case *types.InferType:
-		// Declared by its conditional; substitution leaves it alone.
-		return false
+		// Declared by its conditional; substitution leaves it alone, unless
+		// it is what the conditional inferred (substituteInferredTypes).
+		_, inferred := names[inferKey(tt.TypeParameter)]
+		return inferred
 	case *types.ConditionalType:
 		// Like tsc's couldContainTypeVariables. The true branch means the
 		// conditional's own `infer T`, not an outer T: playwright's
