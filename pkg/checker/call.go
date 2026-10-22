@@ -1628,7 +1628,13 @@ func (c *Checker) inferGenericFunctionCallIn(callNode *parser.CallExpression, ge
 
 		// Visit non-function arguments without contextual typing to get their natural types
 		argContexts[argNode] = nil
-		c.visit(argNode)
+		if tp, ok := parameterTypeAt(genericSig, i).(*types.TypeParameterType); ok && isArrayLiteralNode(argNode) {
+			// An array literal for a tuple-constrained type parameter is a
+			// tuple (see visitWithContext).
+			c.visitWithContext(argNode, &ContextualType{ExpectedType: tp, IsContextual: true})
+		} else {
+			c.visit(argNode)
+		}
 		argType := argNode.GetComputedType()
 		if argType == nil {
 			argType = types.Any
@@ -3577,4 +3583,9 @@ func parameterTypeAt(sig *types.Signature, i int) types.Type {
 		return sig.RestParameterType
 	}
 	return nil
+}
+
+func isArrayLiteralNode(n parser.Expression) bool {
+	_, ok := n.(*parser.ArrayLiteral)
+	return ok
 }

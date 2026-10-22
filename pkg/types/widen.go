@@ -58,8 +58,11 @@ func (r *Relation) DeeplyWidenType(t Type) Type {
 	// Widen top-level literals first
 	widenedT := r.GetWidenedType(t)
 
-	// If it's an object after top-level widening, widen its properties
-	if objType, ok := widenedT.(*ObjectType); ok {
+	// If it's an object after top-level widening, widen its properties. A
+	// declared type (an interface, a class instance) is never widened: only
+	// an object literal's literal properties are (`b: 1` in interface B
+	// stays 1, or id(b) would no longer be a B).
+	if objType, ok := widenedT.(*ObjectType); ok && !objType.IsInterface && objType.ClassMeta == nil {
 		newFields := make(map[string]Type, len(objType.Props()))
 		for _, name := range SortedPropertyNames(objType.Props()) {
 			propType := objType.Props()[name]
@@ -94,6 +97,26 @@ func (r *Relation) DeeplyWidenType(t Type) Type {
 		// For now, let's not recurse into arrays here, only objects.
 		// return &types.ArrayType{ElementType: deeplyWidenType(arrType.ElementType)}
 		return arrType // Return array type as is for now
+	}
+
+	// Without strictNullChecks a tuple's null and undefined elements widen
+	// to any, as an array literal's do (`var y = foo([undefined])` with
+	// foo<T extends [any]> declares [any]).
+	if tuple, ok := widenedT.(*TupleType); ok && !r.StrictNullChecks {
+		var elems []Type
+		for i, e := range tuple.ElementTypes {
+			if e == Null || e == Undefined {
+				if elems == nil {
+					elems = append([]Type(nil), tuple.ElementTypes...)
+				}
+				elems[i] = Any
+			}
+		}
+		if elems != nil {
+			cp := *tuple
+			cp.ElementTypes = elems
+			return &cp
+		}
 	}
 
 	// Return the (potentially top-level widened) type if not an object

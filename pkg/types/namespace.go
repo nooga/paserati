@@ -91,3 +91,19 @@ func (n *NamespaceType) LookupTypeMember(name string) Type {
 	}
 	return nil
 }
+
+// ExportPair is a module export whose name means one thing as a value and
+// another as a type: zod's `export interface $ZodType<O, I, Internals>` with
+// `export declare const $ZodType: $constructor<$ZodType>`. An importer binds
+// Value on the value side and Type on the type side.
+type ExportPair struct {
+	Value Type
+	Type  Type
+}
+
+func (p *ExportPair) typeNode()      {}
+func (p *ExportPair) String() string { return p.Value.String() }
+func (p *ExportPair) Equals(other Type) bool {
+	o, ok := other.(*ExportPair)
+	return ok && (p == o || p.Value.Equals(o.Value) && p.Type.Equals(o.Type))
+}

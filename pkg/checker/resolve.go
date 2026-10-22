@@ -5,6 +5,7 @@ import (
 	"maps"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
@@ -42,8 +43,11 @@ func (c *Checker) checkTypeRefDefined(node parser.Expression) {
 		}
 		c.addCannotFindNameError(n, c.env, n.Value)
 	case *parser.GenericTypeRef:
-		// Check the base name
-		c.checkTypeRefDefined(n.Name)
+		// Check the base name. A qualified one (`core.T<X>`) names a member
+		// of its namespace, which resolving the reference checks.
+		if n.Qualifier == nil {
+			c.checkTypeRefDefined(n.Name)
+		}
 		// Check type arguments recursively
 		for _, arg := range n.TypeArguments {
 			c.checkTypeRefDefined(arg)
@@ -1800,9 +1804,12 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	}
 
 	// Validate constraints before instantiation (not in a library file under
-	// skipLibCheck)
+	// skipLibCheck). Only a reference written here is checked (typeArgNodes
+	// non-nil, empty for one taking every default): an instantiation made
+	// while expanding a declaration (`or<T>(o: T): ZodUnion<[this, T]>`
+	// reached through an alias) was checked where it was declared.
 	for i, typeParam := range genericType.TypeParameters {
-		if typeParam.Constraint != nil && !c.skipValidation() {
+		if typeParam.Constraint != nil && !c.skipValidation() && typeArgNodes != nil {
 			argType := c.resolveTypeofTypeIfNeeded(finalTypeArgs[i])
 			if _, deferred := argType.(*types.TypeofType); deferred {
 				// `typeof X` before X has a type (a hoisted alias): there is
@@ -5175,11 +5182,33 @@ func mappedKeyCaptures(substitution map[string]types.Type, name string, value ty
 		if !mayMentionTypeParamNames(value, map[string]types.Type{param: t}, map[types.Type]bool{}, map[string]map[types.Type]bool{}) {
 			continue
 		}
-		if mayMentionTypeParamNames(t, key, map[types.Type]bool{}, map[string]map[types.Type]bool{}) {
+		if typeMayMentionName(t, name, key) {
 			return true
 		}
 	}
 	return false
+}
+
+// mentionCache memoizes typeMayMentionName: the substituted types are often
+// whole library graphs (zod's schema types), walked again for every mapped
+// type instantiated with them.
+var mentionCache sync.Map // mentionKey -> bool
+
+type mentionKey struct {
+	t    types.Type
+	name string
+}
+
+// typeMayMentionName reports whether t may mention a type parameter called
+// name (key is {name: nil}).
+func typeMayMentionName(t types.Type, name string, key map[string]types.Type) bool {
+	k := mentionKey{t, name}
+	if v, ok := mentionCache.Load(k); ok {
+		return v.(bool)
+	}
+	r := mayMentionTypeParamNames(t, key, map[types.Type]bool{}, map[string]map[types.Type]bool{})
+	mentionCache.Store(k, r)
+	return r
 }
 
 func unshadowedNames[V any](names map[string]V, own []*types.TypeParameter) (map[string]V, bool) {

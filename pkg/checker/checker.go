@@ -5199,6 +5199,19 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		if apparent := c.apparentContextualType(context.ExpectedType); apparent != context.ExpectedType {
 			context = &ContextualType{ExpectedType: apparent, IsContextual: context.IsContextual}
 		}
+	case *parser.ArrayLiteral:
+		// A tuple constraint makes the literal a tuple (zod's
+		// tuple<T extends readonly [SomeType, ...SomeType[]]>(items: T)
+		// infers [ZodString, ZodNumber]); an array one leaves it an array.
+		if _, isParam := context.ExpectedType.(*types.TypeParameterType); isParam {
+			apparent := c.apparentContextualType(context.ExpectedType)
+			if ro, ok := apparent.(*types.ReadonlyType); ok {
+				apparent = ro.InnerType
+			}
+			if _, isTuple := apparent.(*types.TupleType); isTuple {
+				context = &ContextualType{ExpectedType: apparent, IsContextual: context.IsContextual}
+			}
+		}
 	}
 
 	c.markContextuallyTypedFunction(node, context.ExpectedType)
@@ -6056,6 +6069,9 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 // importedTypeAlias is what an imported name means in a type position: a
 // class (a constructor type) stands for its instance type.
 func importedTypeAlias(t types.Type) types.Type {
+	if pair, ok := t.(*types.ExportPair); ok {
+		return pair.Type
+	}
 	if g, ok := t.(*types.GenericType); ok && g.InstanceType != nil {
 		return g.InstanceType // a generic class: ZodType<Output, Def, Input>
 	}
@@ -6071,6 +6087,9 @@ func importedTypeAlias(t types.Type) types.Type {
 // exported namespace (export { z } of an import * as z, or of a namespace
 // declaration) is its value shape.
 func importedValue(t types.Type) types.Type {
+	if pair, ok := t.(*types.ExportPair); ok {
+		return pair.Value
+	}
 	if ns, ok := t.(*types.NamespaceType); ok {
 		return ns.ValueShape
 	}

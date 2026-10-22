@@ -101,8 +101,61 @@ func (me *ModuleEnvironment) DefineExport(localName, exportName string, exported
 	if exportName == "default" {
 		me.DefaultExport = binding
 	} else {
+		if prev := me.ExportedNames[exportName]; prev != nil && !prev.IsReExport {
+			binding.ExportedType = mergeExportSides(prev, exportedType, decl)
+		}
 		me.ExportedNames[exportName] = binding
 	}
+}
+
+// exportSide is the meaning a declaration gives its name.
+type exportSide int
+
+const (
+	exportBothSides exportSide = iota // a class, enum, namespace or unknown
+	exportValueSide                   // var, let, const, function
+	exportTypeSide                    // interface, type alias
+)
+
+func declarationExportSide(decl parser.Statement) exportSide {
+	switch d := decl.(type) {
+	case *parser.InterfaceDeclaration, *parser.TypeAliasStatement:
+		return exportTypeSide
+	case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement, *parser.FunctionSignature:
+		return exportValueSide
+	case *parser.ExpressionStatement:
+		if _, fn := d.Expression.(*parser.FunctionLiteral); fn {
+			return exportValueSide
+		}
+	}
+	return exportBothSides
+}
+
+// mergeExportSides is the type a name exported again exports: when one
+// declaration is a value and the other a type (an interface and a const of
+// the same name), both sides, else the later declaration's type.
+func mergeExportSides(prev *ExportBinding, exportedType types.Type, decl parser.Statement) types.Type {
+	side := declarationExportSide(decl)
+	if side == exportBothSides {
+		return exportedType
+	}
+	if pair, ok := prev.ExportedType.(*types.ExportPair); ok {
+		merged := *pair
+		if side == exportValueSide {
+			merged.Value = exportedType
+		} else {
+			merged.Type = exportedType
+		}
+		return &merged
+	}
+	prevSide := declarationExportSide(prev.Declaration)
+	if prevSide == exportBothSides || prevSide == side || prev.ExportedType == nil || exportedType == nil {
+		return exportedType
+	}
+	if side == exportValueSide {
+		return &types.ExportPair{Value: exportedType, Type: prev.ExportedType}
+	}
+	return &types.ExportPair{Value: prev.ExportedType, Type: exportedType}
 }
 
 // DefineReExport adds a re-export binding (export { name } from "module")

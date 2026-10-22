@@ -302,6 +302,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	defer func() { interfaceType.Pending = false }()
 	if interfaceType.DisplayName == "" && interfaceType.GenericName == "" && interfaceType.ClassMeta == nil {
 		interfaceType.DisplayName = node.Name.Value // a placeholder made before the declaration was reached
+		interfaceType.IsInterface = true
 	}
 
 	// Use the interface type's properties maps (either from placeholder or new)
@@ -1056,9 +1057,38 @@ func (c *Checker) rebindThisType(t types.Type, rb *thisRebind) types.Type {
 			cp.Body = body
 			return &cp
 		}
+
+	case *types.InstantiatedType:
+		// `optional(): ZodOptional<this>`.
+		if args, changed := c.rebindThisTypes(typ.TypeArguments, rb); changed {
+			return types.NewInstantiatedType(typ.Generic, args)
+		}
+
+	case *types.GenericTypeAliasForwardReference:
+		// The same, naming a generic declared later.
+		if args, changed := c.rebindThisTypes(typ.TypeArguments, rb); changed {
+			cp := *typ
+			cp.TypeArguments = args
+			return &cp
+		}
 	}
 
 	return t
+}
+
+// rebindThisTypes rebinds each of ts, reporting whether any changed.
+func (c *Checker) rebindThisTypes(ts []types.Type, rb *thisRebind) ([]types.Type, bool) {
+	var out []types.Type
+	for i, t := range ts {
+		r := c.rebindThisType(t, rb)
+		if r != t && out == nil {
+			out = append(make([]types.Type, 0, len(ts)), ts[:i]...)
+		}
+		if out != nil {
+			out = append(out, r)
+		}
+	}
+	return out, out != nil
 }
 
 func (c *Checker) rebindSignaturesThisType(signatures []*types.Signature, rb *thisRebind) []*types.Signature {

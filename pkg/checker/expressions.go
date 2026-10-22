@@ -230,8 +230,32 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 		}
 
 		if elementTypesMatch {
-			// All elements match - use the tuple type
-			node.SetComputedType(tupleType)
+			// All elements match: a tuple of the elements' own (contextually
+			// typed) types, as in tsc, so `T extends [Some, ...Some[]]`
+			// infers [A, B] from [a, b] rather than its constraint.
+			elemTypes := make([]types.Type, len(node.Elements))
+			for i, elemNode := range node.Elements {
+				if elemTypes[i] = elemNode.GetComputedType(); elemTypes[i] == nil {
+					elemTypes[i] = types.Any
+				}
+				var ctx types.Type
+				if i < len(tupleType.ElementTypes) {
+					ctx = tupleType.ElementTypes[i]
+				} else if arr, ok := tupleType.RestElementType.(*types.ArrayType); ok {
+					ctx = arr.ElementType
+				}
+				if mentionsTypeofType(ctx) {
+					// A hoisted function read before `type K = typeof k`
+					// resolves: the element keeps its contextual type,
+					// which relates once k is typed.
+					elemTypes[i] = ctx
+					continue
+				}
+				if lit, ok := elemTypes[i].(*types.LiteralType); ok && !literalKeptByContext(lit, ctx) {
+					elemTypes[i] = c.rel.GetWidenedType(lit)
+				}
+			}
+			node.SetComputedType(&types.TupleType{ElementTypes: elemTypes})
 			if checkerDebug {
 				debugPrintf("// [Checker ArrayLitContext] All elements match tuple. Set type to: %s\n", tupleType.String())
 			}
@@ -4690,4 +4714,53 @@ func (c *Checker) checkTupleLiteralWithSpreads(node *parser.ArrayLiteral, tuple 
 		result.RestElementType = &types.ArrayType{ElementType: types.NewUnionType(restTypes...)}
 	}
 	node.SetComputedType(result)
+}
+
+// literalKeptByContext is tsc's isLiteralOfContextualType: a literal keeps
+// its literal type where the contextual type has literals of its kind
+// (`[1]` against `[1 | 2]` is [1], against `[unknown]` is [number]).
+func literalKeptByContext(lit *types.LiteralType, ctx types.Type) bool {
+	switch ct := ctx.(type) {
+	case nil:
+		return false
+	case *types.UnionType:
+		for _, m := range ct.Types {
+			if literalKeptByContext(lit, m) {
+				return true
+			}
+		}
+		return false
+	case *types.LiteralType:
+		return lit.Value.Type() == ct.Value.Type() ||
+			isNumberValue(lit.Value) && isNumberValue(ct.Value)
+	case *types.TemplateLiteralType, *types.StringMappingType:
+		return lit.Value.Type() == vm.TypeString
+	}
+	return ctx == types.Boolean && lit.Value.Type() == vm.TypeBoolean
+}
+
+func isNumberValue(v vm.Value) bool {
+	return v.Type() == vm.TypeFloatNumber || v.Type() == vm.TypeIntegerNumber
+}
+
+// mentionsTypeofType reports whether t is, or is a union or intersection
+// with, a `typeof x` not yet settled to x's type.
+func mentionsTypeofType(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.TypeofType:
+		return true
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if mentionsTypeofType(m) {
+				return true
+			}
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if mentionsTypeofType(m) {
+				return true
+			}
+		}
+	}
+	return false
 }
