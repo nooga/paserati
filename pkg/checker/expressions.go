@@ -110,6 +110,10 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 // checkArrayLiteralWithContext checks array literals with contextual type information
 func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, context *ContextualType) {
 	expectedType := context.ExpectedType
+	if only := soleArrayMember(expectedType); only != nil {
+		// `ReadonlyArray<T> | null = []`: the array member is the context.
+		expectedType = only
+	}
 	if checkerDebug {
 		debugPrintf("// [Checker ArrayLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
 	}
@@ -345,6 +349,34 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 	// For other expected types, fall back to regular array literal checking
 	debugPrintf("// [Checker ArrayLitContext] Expected type is not array or tuple (%T). Using regular array checking.\n", expectedType)
 	c.checkArrayLiteral(node)
+}
+
+// soleArrayMember is the array type a union context names besides nullish
+// and primitive members (readonly unwrapped), or nil.
+func soleArrayMember(t types.Type) *types.ArrayType {
+	u, ok := t.(*types.UnionType)
+	if !ok {
+		return nil
+	}
+	var found *types.ArrayType
+	for _, m := range u.Types {
+		if ro, isRO := m.(*types.ReadonlyType); isRO {
+			m = ro.InnerType
+		}
+		switch mt := m.(type) {
+		case *types.ArrayType:
+			if found != nil {
+				return nil
+			}
+			found = mt
+		case *types.Primitive:
+		default:
+			if _, lit := m.(*types.LiteralType); !lit {
+				return nil
+			}
+		}
+	}
+	return found
 }
 
 // checkObjectLiteralWithContext handles contextual typing for object literals
