@@ -398,6 +398,10 @@ type Checker struct {
 	// Set by the namespace pre-pass: the nested namespace declaration about to
 	// be checked is exported.
 	nsDeclExported bool
+	// Top-level namespace declarations Pass 1 has not reached yet, by name,
+	// and those an earlier qualified type name already checked on demand.
+	pendingNamespaces map[string][]pendingNamespace
+	earlyNamespaces   map[*parser.NamespaceDeclaration]bool
 
 	reportedErrors map[string]bool // dedupe of identical coded diagnostics
 
@@ -484,6 +488,8 @@ type Checker struct {
 	typeQueryThis *parser.ThisExpression
 	// Parallel to unresolvedTypeofNodes: the name is a type in the scope of the query (TS2693).
 	unresolvedTypeofTypeOnly []bool
+	// Parallel to unresolvedTypeofNodes: the scope the query was written in.
+	unresolvedTypeofEnvs []*Environment
 
 	// --- NEW: Generator function tracking ---
 	// Track generator function names for yield* validation
@@ -1753,7 +1759,20 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 		}
 	}
-	defer func() { c.pendingAliases, c.pendingAliasEnv = nil, nil }()
+	c.pendingNamespaces = map[string][]pendingNamespace{}
+	c.earlyNamespaces = map[*parser.NamespaceDeclaration]bool{}
+	for _, stmt := range program.Statements {
+		ns, ok := stmt.(*parser.NamespaceDeclaration)
+		exported := false
+		if exp, isExp := stmt.(*parser.ExportNamedDeclaration); isExp && exp.Declaration != nil {
+			ns, ok = exp.Declaration.(*parser.NamespaceDeclaration)
+			exported = true
+		}
+		if ok && ns.Name != nil && !ns.AmbientModule {
+			c.pendingNamespaces[ns.Name.Value] = append(c.pendingNamespaces[ns.Name.Value], pendingNamespace{decl: ns, exported: exported})
+		}
+	}
+	defer func() { c.pendingAliases, c.pendingAliasEnv, c.pendingNamespaces = nil, nil, nil }()
 	// Defer class method body checking until after Pass 2 (function hoisting)
 	// so that hoisted functions (including type predicate functions) are available
 	c.deferMethodBodies = true
@@ -1778,7 +1797,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			nodesProcessedPass2[classStmt] = true // Also mark for Pass 2 skip
 		} else if nsStmt, ok := stmt.(*parser.NamespaceDeclaration); ok {
 			debugPrintf("// [Checker Pass 1] Processing Namespace: %s\n", nsStmt.Name.Value)
-			c.checkNamespaceDeclaration(nsStmt)
+			c.checkPendingNamespace(nsStmt, false)
 			nodesProcessedPass1[nsStmt] = true
 			nodesProcessedPass2[nsStmt] = true
 		} else if ieStmt, ok := stmt.(*parser.ImportEqualsDeclaration); ok {
@@ -1825,8 +1844,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					nodesProcessedPass2[exportStmt] = true
 				} else if nsStmt, ok := exportStmt.Declaration.(*parser.NamespaceDeclaration); ok {
 					debugPrintf("// [Checker Pass 1] Processing Exported Namespace: %s\n", nsStmt.Name.Value)
-					c.checkNamespaceDeclaration(nsStmt)
-					c.processExportDeclaration(nsStmt)
+					c.checkPendingNamespace(nsStmt, true)
 					nodesProcessedPass1[nsStmt] = true
 					nodesProcessedPass2[nsStmt] = true
 					nodesProcessedPass1[exportStmt] = true
@@ -2533,16 +2551,23 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 	// Emit TS2304/TS2552 for typeof expressions with identifiers that were never resolved
 	for i, node := range c.unresolvedTypeofNodes {
-		if _, _, found := globalEnv.Resolve(node.Identifier); !found {
+		// A block-scoped name declared later in its scope is in scope for the
+		// type query, so resolve where the query was written.
+		scope := globalEnv
+		if i < len(c.unresolvedTypeofEnvs) && c.unresolvedTypeofEnvs[i] != nil {
+			scope = c.unresolvedTypeofEnvs[i]
+		}
+		if _, _, found := scope.Resolve(node.Identifier); !found {
 			if i < len(c.unresolvedTypeofTypeOnly) && c.unresolvedTypeofTypeOnly[i] {
 				c.addErrorWithCode(node, "TS2693", fmt.Sprintf("'%s' only refers to a type, but is being used as a value here.", node.Identifier))
 				continue
 			}
-			c.addCannotFindNameError(node, globalEnv, node.Identifier)
+			c.addCannotFindNameError(node, scope, node.Identifier)
 		}
 	}
 	c.unresolvedTypeofNodes = nil
 	c.unresolvedTypeofTypeOnly = nil
+	c.unresolvedTypeofEnvs = nil
 
 	// Relation checks that need every declaration resolved (class members vs
 	// their base class, whose `typeof` annotations are only resolved in Pass 5).
@@ -3397,6 +3422,15 @@ func (c *Checker) visit(node parser.Node) {
 		c.preRegisterBlockScoped(node.Statements)
 
 		// --- NEW: Process Hoisted Declarations for this block FIRST ---
+		if len(node.HoistedDeclarations) > 0 {
+			// Hoisted function signatures may name the block's local type
+			// aliases, which are in scope for the whole block.
+			for _, stmt := range node.Statements {
+				if alias, ok := stmt.(*parser.TypeAliasStatement); ok {
+					c.checkTypeAliasStatement(alias)
+				}
+			}
+		}
 		if node.HoistedDeclarations != nil {
 			for _, hoisted := range hoistedInSourceOrder(node.HoistedDeclarations) {
 				name, hoistedNode := hoisted.name, hoisted.node

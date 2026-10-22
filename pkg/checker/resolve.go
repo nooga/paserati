@@ -2385,11 +2385,13 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 		if len(path) == 1 {
 			c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
 			c.unresolvedTypeofTypeOnly = append(c.unresolvedTypeofTypeOnly, c.isTypeOnlyName(node.Identifier))
+			c.unresolvedTypeofEnvs = append(c.unresolvedTypeofEnvs, c.env)
 			return &types.TypeofType{Identifier: node.Identifier, Scope: c.env}
 		}
 		// Not declared yet (a hoisted annotation): resolve it later.
 		c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
 		c.unresolvedTypeofTypeOnly = append(c.unresolvedTypeofTypeOnly, false)
+		c.unresolvedTypeofEnvs = append(c.unresolvedTypeofEnvs, c.env)
 		return &types.TypeofType{Identifier: path[0], Path: path, Scope: c.env}
 	}
 
@@ -4656,6 +4658,7 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 	var containerType types.Type
 	switch obj := node.Object.(type) {
 	case *parser.Identifier:
+		c.resolvePendingNamespace(obj.Value)
 		// Prefer the type env for NamespaceType. Enums live in the value env as
 		// *types.EnumType (their type-env entry is the union of members, not EnumType).
 		if t, found := c.env.ResolveType(obj.Value); found {

@@ -20,6 +20,46 @@ import (
 //     namespace's exports; non-exported declarations are local to the body env.
 //   - `declare namespace` is type-only (no runtime effect), but contributes the
 //     same bindings.
+type pendingNamespace struct {
+	decl     *parser.NamespaceDeclaration
+	exported bool
+}
+
+// checkPendingNamespace checks a top-level namespace declaration in Pass 1,
+// unless a qualified type name met earlier already checked it on demand.
+func (c *Checker) checkPendingNamespace(node *parser.NamespaceDeclaration, exported bool) {
+	if c.earlyNamespaces[node] {
+		return
+	}
+	c.earlyNamespaces[node] = true
+	if node.Name != nil {
+		if rest := c.pendingNamespaces[node.Name.Value]; len(rest) > 0 && rest[0].decl == node {
+			c.pendingNamespaces[node.Name.Value] = rest[1:]
+		}
+	}
+	c.checkNamespaceDeclaration(node)
+	if exported {
+		c.processExportDeclaration(node)
+	}
+}
+
+// resolvePendingNamespace checks the top-level declarations of namespace name
+// that Pass 1 has not reached yet, so a qualified type name in an earlier
+// declaration (`interface S { p: S.P }` before `namespace S`) sees its members.
+func (c *Checker) resolvePendingNamespace(name string) {
+	decls := c.pendingNamespaces[name]
+	if len(decls) == 0 {
+		return
+	}
+	delete(c.pendingNamespaces, name)
+	outerEnv := c.env
+	c.env = c.pendingAliasEnv
+	defer func() { c.env = outerEnv }()
+	for _, p := range decls {
+		c.checkPendingNamespace(p.decl, p.exported)
+	}
+}
+
 func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	if node == nil || node.Name == nil {
 		return

@@ -960,7 +960,16 @@ type thisRebind struct {
 	// instance type (an interface merged into a class), whose `this` is the
 	// receiver's type.
 	this types.Type
+	// copies counts the objects copied so far.
+	copies int
 }
+
+// maxThisRebindCopies bounds the copy: members of lazily substituted
+// instantiations are fresh objects on every expansion, so a recursive generic
+// (fastify's instance and route types) never meets visited again.
+// FIXME: tsc instantiates `this` lazily instead of copying; past the bound
+// an object keeps its old `this`.
+const maxThisRebindCopies = 2000
 
 func newThisRebind(from, to *types.ObjectType) *thisRebind {
 	var this types.Type = to
@@ -997,6 +1006,10 @@ func (c *Checker) rebindThisType(t types.Type, rb *thisRebind) types.Type {
 			visited[typ] = typ
 			return typ
 		}
+		if rb.copies >= maxThisRebindCopies {
+			return typ
+		}
+		rb.copies++
 
 		result := &types.ObjectType{
 			Properties:         make(map[string]types.Type),
