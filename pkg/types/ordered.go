@@ -122,6 +122,9 @@ func (ot *ObjectType) PropertyDoc(name string) string {
 // arguments of a generic class instance through sub.
 func (ot *ObjectType) CopyDisplay(clone *ObjectType, sub func(Type) Type) {
 	clone.DisplayName = ot.DisplayName
+	// An instantiated interface is still one (no implicit index signature,
+	// no widening of its literal members).
+	clone.IsInterface = clone.IsInterface || ot.IsInterface
 	if ot.GenericName == "" {
 		return
 	}

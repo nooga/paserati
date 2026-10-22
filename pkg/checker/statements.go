@@ -797,6 +797,9 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		bodyType.Materialize()
 		bodyType.OptionalProperties = make(map[string]bool)
 	}
+	if bodyType.ClassMeta == nil {
+		bodyType.IsInterface = true
+	}
 	nameGenericType(bodyType, node.Name.Value, typeParams)
 	properties := bodyType.Props()
 	optionalProperties := bodyType.OptionalProps()

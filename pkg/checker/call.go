@@ -2900,6 +2900,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				Doc:                typ.Doc,
 				ClassMeta:          typ.ClassMeta,
 				IsReflectIntrinsic: typ.IsReflectIntrinsic,
+				IsInterface:        typ.IsInterface,
 			}
 			memo[t] = newObj
 			typ.CopyDisplay(newObj, substitute)
@@ -3014,6 +3015,15 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				return inst
 			}
 			return ref
+		case *types.GenericType:
+			// A generic method of an instantiated type (tRPC's
+			// procedure.query<$Output>, whose result names the root's
+			// TOptions) takes the solution in its body, as substituteTypes
+			// does it.
+			if !types.MentionsAnyTypeParameter(typ, solution) {
+				return typ
+			}
+			return c.substituteTypes(typ, solutionByName(solution))
 		// Add more cases as needed
 		default:
 			return typ
