@@ -127,6 +127,16 @@ func (c *Checker) seedBranchEnvWith(base *Environment, keys []string, declared b
 			if d := c.env.ResolveDeclaredType(key); d != nil {
 				t = d
 			}
+		} else {
+			// A straight-line narrowing newer than the binding found
+			// (`let x: string | number = 42`) is what the arm starts with;
+			// rebinding the declared type would hide it.
+			saved := c.env
+			c.env = lookup()
+			if ot, live := c.overlayFor(key); live {
+				t = ot
+			}
+			c.env = saved
 		}
 		if env == nil {
 			env = NewEnclosedEnvironment(c.env)

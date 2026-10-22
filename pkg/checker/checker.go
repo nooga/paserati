@@ -4113,10 +4113,7 @@ func (c *Checker) visit(node parser.Node) {
 			}
 		}
 		thenEnd := armEnd(node.Consequence)
-		consequenceTerminates := blockAlwaysTerminates(node.Consequence)
 		alternativeTerminates := node.Alternative != nil && blockAlwaysTerminates(node.Alternative)
-		joinPossible := !(consequenceTerminates && node.Alternative == nil)
-
 		thenEnv := narrowedEnv
 		if len(refKeys) > 0 {
 			thenEnv = c.seedBranchEnv(narrowedEnv, refKeys)
@@ -4129,8 +4126,8 @@ func (c *Checker) visit(node parser.Node) {
 		thenEnv = thenEnd(thenEnv)
 		// Again, now that calls in the branch have types: one of a function
 		// returning never ends it too.
-		consequenceTerminates = blockAlwaysTerminates(node.Consequence)
-		joinPossible = !(consequenceTerminates && node.Alternative == nil)
+		consequenceTerminates := blockAlwaysTerminates(node.Consequence)
+		joinPossible := !(consequenceTerminates && node.Alternative == nil)
 
 		// Restore original environment before checking alternative
 		c.env = originalEnv

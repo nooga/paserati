@@ -1170,6 +1170,11 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		// isB is an A & B.
 		canNarrow = true
 		narrowedType = types.NewIntersectionType(originalType, guard.NarrowedType)
+	} else if isTypeofPrimitive(guard.NarrowedType) && isTypeofPrimitive(c.rel.GetWidenedType(originalType)) {
+		// `typeof x === "string"` with x a number (declared, or narrowed by
+		// its initializer): nothing is left.
+		canNarrow = true
+		narrowedType = types.Never
 	} else {
 		// NarrowedType might be nil for discriminated union guards that couldn't find a match
 		narrowedTypeStr := "<nil>"

@@ -41,7 +41,7 @@ func TestUnionTypeNarrowing(t *testing.T) {
 		{
 			name: "Number narrowing in else branch",
 			input: `
-				let x: string | number = 42;
+				let x = 42 as string | number;
 				let result;
 				if (typeof x === "string") {
 					result = x.length;
@@ -69,7 +69,7 @@ func TestUnionTypeNarrowing(t *testing.T) {
 		{
 			name: "Three-way union else branch",
 			input: `
-				let x: string | number | boolean = 42;
+				let x = 42 as string | number | boolean;
 				let result;
 				if (typeof x === "string") {
 					result = x.toUpperCase();
