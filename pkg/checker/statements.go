@@ -258,10 +258,19 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		c.addErrorWithCode(node.Name, errors.TS2427, fmt.Sprintf("Interface name cannot be '%s'.", node.Name.Value))
 	}
 
-	// 1. Handle generic interfaces
+	// 1. Handle generic interfaces, and a declaration without type
+	// parameters merging into a generic one whose parameters all have
+	// defaults (@types/node's `interface Buffer` beside
+	// `interface Buffer<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike>`).
 	if len(node.TypeParameters) > 0 {
 		c.checkGenericInterfaceDeclaration(node)
 		return
+	}
+	if existing, ok := c.env.ResolveTypeLocal(node.Name.Value); ok {
+		if g, ok := existing.(*types.GenericType); ok && minTypeArgumentCount(g.TypeParameters) == 0 {
+			c.checkGenericInterfaceDeclaration(node)
+			return
+		}
 	}
 
 	// 2. Get or create the interface ObjectType. Multiple interface declarations with the
@@ -581,12 +590,15 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 
 	var existingGeneric *types.GenericType
 	var bodyType *types.ObjectType
+	replaceNonGeneric := false
 	if existingType, exists := c.env.ResolveTypeLocal(node.Name.Value); exists {
 		switch existing := existingType.(type) {
 		case *types.GenericType:
 			existingGeneric = existing
 			c.instCache.reopen(existing)
-			if len(existing.TypeParameters) != len(node.TypeParameters) {
+			// tsc's areTypeParametersIdentical: a declaration may leave off
+			// trailing parameters that have defaults.
+			if n := len(node.TypeParameters); n > len(existing.TypeParameters) || n < minTypeArgumentCount(existing.TypeParameters) {
 				c.reportInterfaceTypeParameterMismatch(existing, node)
 				existingGeneric = nil
 			}
@@ -594,8 +606,14 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 				bodyType = existingBody
 			}
 		case *types.ObjectType:
-			c.addErrorWithCode(node.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
-			return
+			// A declaration without type parameters came first: the generic
+			// one takes over its members when it needs no type arguments.
+			if !allTypeParametersDefaulted(node.TypeParameters) {
+				c.addErrorWithCode(node.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
+				return
+			}
+			bodyType = existing
+			replaceNonGeneric = true
 		}
 	}
 
@@ -655,7 +673,12 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			}
 		}
 		earlyGeneric := &types.GenericType{Name: node.Name.Value, TypeParameters: typeParams, Body: bodyType}
-		earlyDefined = c.env.DefineTypeAlias(node.Name.Value, earlyGeneric)
+		if replaceNonGeneric {
+			c.env.ReplaceTypeAliasLocal(node.Name.Value, earlyGeneric)
+			earlyDefined = true
+		} else {
+			earlyDefined = c.env.DefineTypeAlias(node.Name.Value, earlyGeneric)
+		}
 		if earlyDefined {
 			c.recordGenericInterfaceDecl(earlyGeneric, node)
 		}
@@ -2234,4 +2257,27 @@ func (c *Checker) keepClassBaseForAccess(iface, base *types.ObjectType) {
 			return
 		}
 	}
+}
+
+// minTypeArgumentCount is the number of leading type parameters without a
+// default.
+func minTypeArgumentCount(params []*types.TypeParameter) int {
+	n := 0
+	for i, p := range params {
+		if p.Default == nil {
+			n = i + 1
+		}
+	}
+	return n
+}
+
+// allTypeParametersDefaulted reports whether every declared type parameter
+// has a default, so the type needs no type arguments.
+func allTypeParametersDefaulted(params []*parser.TypeParameter) bool {
+	for _, p := range params {
+		if p.DefaultType == nil {
+			return false
+		}
+	}
+	return true
 }

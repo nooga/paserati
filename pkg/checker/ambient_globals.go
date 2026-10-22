@@ -217,3 +217,40 @@ var ambientTypeStubs = func() map[string]bool {
 	}
 	return m
 }()
+
+// typedArrayNames are the typed arrays, generic over their buffer in tsc's
+// lib but modelled without that parameter.
+var typedArrayNames = map[string]bool{
+	"Int8Array": true, "Uint8Array": true, "Uint8ClampedArray": true, "Int16Array": true, "Uint16Array": true,
+	"Int32Array": true, "Uint32Array": true, "Float32Array": true, "Float64Array": true,
+	"BigInt64Array": true, "BigUint64Array": true,
+}
+
+// typedArrayInstanceType is the instance type of the builtin typed array
+// name, which `Uint8Array<ArrayBuffer>` stands for once its argument is
+// dropped. FIXME: the buffer type parameter (Uint8Array<TArrayBuffer>) is not
+// modelled, so `.buffer` is not narrowed by it.
+func (c *Checker) typedArrayInstanceType(name string) types.Type {
+	if !typedArrayNames[name] {
+		return nil
+	}
+	if _, declared := c.env.ResolveType(name); declared {
+		return nil
+	}
+	value, _, found := c.env.Resolve(name)
+	if !found {
+		return nil
+	}
+	ctor, ok := value.(*types.ObjectType)
+	if !ok {
+		return nil
+	}
+	for _, sigs := range [][]*types.Signature{ctor.GetConstructSignatures(), ctor.GetCallSignatures()} {
+		if len(sigs) > 0 {
+			if inst, ok := sigs[0].ReturnType.(*types.ObjectType); ok {
+				return inst
+			}
+		}
+	}
+	return nil
+}

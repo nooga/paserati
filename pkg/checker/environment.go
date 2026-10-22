@@ -332,6 +332,12 @@ func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
 	return true
 }
 
+// ReplaceTypeAliasLocal rebinds a type name in this scope, for a generic
+// interface declaration taking over a non-generic one of the same name.
+func (e *Environment) ReplaceTypeAliasLocal(name string, typ types.Type) {
+	e.typeAliases[name] = typ
+}
+
 // definingScope is the nearest scope from e out that declares the value name.
 func (e *Environment) definingScope(name string) *Environment {
 	for ; e != nil; e = e.outer {

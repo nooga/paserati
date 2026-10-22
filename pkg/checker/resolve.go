@@ -836,6 +836,15 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				}
 			}
 
+			if !exists && node.Qualifier == nil {
+				if inst := c.typedArrayInstanceType(node.Name.Value); inst != nil {
+					for _, arg := range node.TypeArguments {
+						c.resolveTypeAnnotation(arg)
+					}
+					return inst
+				}
+			}
+
 			if !exists {
 				// A generic declared later in the program (or imported, or from a
 				// lib Paserati does not model) is only a forward reference; a name
