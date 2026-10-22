@@ -4013,6 +4013,14 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		return c.rel.IsAssignable(checkType, extendsType)
 
 	case *types.ObjectType:
+		// A generic class's constructor (`typeof Resp` of `class Resp<Q>`)
+		// infers through its construct signatures, generic over the class's
+		// parameters.
+		if g, ok := checkType.(*types.GenericType); ok && len(et.ConstructSigs()) > 0 {
+			if sigs := c.extractConstructSignaturesFromType(g); len(sigs) > 0 {
+				return c.tryInferFromFunctionTypes(sigs[0], et.ConstructSigs()[0], inferences)
+			}
+		}
 		// Handle function type inference like (...args: any[]) => infer R
 		debugPrintf("// [TryInfer] Both are ObjectType\n")
 		if ct, ok := checkType.(*types.ObjectType); ok {
@@ -4106,6 +4114,43 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 		return false
 	}
 
+	// A generic source signature is read with its type parameters at their
+	// constraints (unknown when unconstrained), as tsc's getErasedSignature
+	// ... instantiation for `infer` does: InstanceType<typeof Resp> of
+	// `class Resp<Q>` is Resp<unknown>.
+	// A generic pattern (Obs<infer V>'s map<U> against map<U>) matches it
+	// parameter for parameter instead.
+	if len(checkSig.TypeParameters) > 0 && len(extendsSig.TypeParameters) == 0 {
+		substitution := make(map[string]types.Type, len(checkSig.TypeParameters))
+		for _, tp := range checkSig.TypeParameters {
+			if tp.Constraint != nil && tp.Constraint != types.Any {
+				constraint := tp.Constraint
+				if ref, ok := constraint.(*types.GenericTypeAliasForwardReference); ok {
+					if inst := c.instantiateAliasReference(ref); inst != nil {
+						constraint = inst
+					} else {
+						// FIXME: an alias not declared yet (an import
+						// cycle) erases to any rather than to itself.
+						constraint = types.Any
+					}
+				}
+				substitution[tp.Name] = constraint
+			} else {
+				substitution[tp.Name] = types.Unknown
+			}
+		}
+		erased := *checkSig
+		erased.TypeParameters = nil
+		erased.ReturnType = c.substituteTypes(checkSig.ReturnType, substitution)
+		erased.ParameterTypes = make([]types.Type, len(checkSig.ParameterTypes))
+		for i, p := range checkSig.ParameterTypes {
+			erased.ParameterTypes[i] = c.substituteTypes(p, substitution)
+		}
+		if checkSig.RestParameterType != nil {
+			erased.RestParameterType = c.substituteTypes(checkSig.RestParameterType, substitution)
+		}
+		checkSig = &erased
+	}
 	if checkerDebug {
 		debugPrintf("// [TryInferFunc] Check return: %s\n", checkSig.ReturnType.String())
 	}

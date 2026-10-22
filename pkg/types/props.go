@@ -93,8 +93,9 @@ func (r *Relation) GetPropertyType(objectType Type, propertyName string, isOptio
 				return Never
 			}
 		case *ObjectType:
-			// Look for the property in the object's fields
-			fieldType, exists := obj.Props()[propertyName]
+			// Look for the property in the object's fields, inherited ones
+			// (a class's base members) included
+			fieldType, exists := obj.EffectiveProperty(propertyName)
 			if exists {
 				// Property found
 				if fieldType == nil { // Should ideally not happen if checker populates correctly

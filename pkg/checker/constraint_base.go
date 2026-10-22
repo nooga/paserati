@@ -207,6 +207,33 @@ func (c *Checker) apparentContextualType(t types.Type) types.Type {
 	return t
 }
 
+// conditionalMembersConstrained replaces the conditional members of an
+// intersection with their base constraints, the apparent type a member is
+// read from: `InstanceType<Response> & { req: ... }` (@types/node's
+// RequestListener) while Response is not inferred yet reads Response's
+// constraint's instances.
+func (c *Checker) conditionalMembersConstrained(t types.Type) types.Type {
+	it, ok := t.(*types.IntersectionType)
+	if !ok {
+		return t
+	}
+	members := make([]types.Type, len(it.Types))
+	changed := false
+	for i, m := range it.Types {
+		members[i] = m
+		if _, isCond := m.(*types.ConditionalType); isCond {
+			if base := c.baseConstraint(m, 0); base != nil && base != types.Unknown {
+				members[i] = base
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return t
+	}
+	return types.NewIntersectionType(members...)
+}
+
 // outerConstraintKey is a type parameter and the outer substitution (by map
 // identity) its constraint is substituted by.
 type outerConstraintKey struct {

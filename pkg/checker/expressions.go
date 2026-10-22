@@ -1833,7 +1833,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		case *types.IntersectionType:
 			// Handle property access on intersection types
 			var propType types.Type
-			if apparent, ok := c.apparentType(obj).(*types.IntersectionType); ok {
+			if apparent, ok := c.conditionalMembersConstrained(c.apparentType(obj)).(*types.IntersectionType); ok {
 				propType = c.getPropertyTypeFromIntersection(apparent, propertyName)
 			} else {
 				propType = c.getPropertyTypeFromType(c.apparentType(obj), propertyName, false)
