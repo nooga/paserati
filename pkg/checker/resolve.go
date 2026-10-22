@@ -2281,6 +2281,9 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		if mapped := c.mapHomomorphicOverArray(typ, substitution, visited); mapped != nil {
 			return mapped
 		}
+		if mapped := c.distributeHomomorphicMapped(typ, substitution, visited); mapped != nil {
+			return mapped
+		}
 		// Recursively substitute types in mapped type
 		var newConstraintType types.Type
 		if keyof, ok := typ.ConstraintType.(*types.KeyofType); ok {

@@ -2782,6 +2782,12 @@ func (c *Checker) typeHasProperty(t types.Type, propertyName string) bool {
 		return false
 	case *types.InstantiatedType:
 		return c.typeHasProperty(typ.Substitute(), propertyName)
+	case *types.MappedType:
+		// Partial<{ a: 1 }> left unexpanded in a union.
+		if expanded := c.expandIfMappedType(typ); expanded != t {
+			return c.typeHasProperty(expanded, propertyName)
+		}
+		return false
 	case *types.ArrayType:
 		// Arrays have "length" property and some built-in methods
 		if propertyName == "length" {
@@ -3042,24 +3048,57 @@ func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
 			// (#706: `if (o.x === undefined) o.x = 5` with o: any).
 			return types.Any
 		}
-		if objType, ok := currentType.(*types.ObjectType); ok {
-			propType, exists := objType.Props()[parts[i]]
-			if !exists {
-				// Inherited members (a property of a generic base class).
-				propType, exists = objType.EffectiveProperty(parts[i])
-			}
-			if !exists {
-				return nil
-			}
-			if objType.IsPropertyOptional(parts[i]) {
-				propType = types.NewUnionType(propType, types.Undefined)
-			}
-			currentType = propType
-		} else {
+		currentType = c.refPropertyType(currentType, parts[i], 0)
+		if currentType == nil {
 			return nil
 		}
 	}
 	return currentType
+}
+
+// refPropertyType is the declared type of a reference's property: an
+// optional one adds undefined. Of an intersection it is the one part
+// declaring it (`Omit<A, 'socket'> & { socket?: S }`), of a union every
+// member's; nil when that is not known.
+func (c *Checker) refPropertyType(t types.Type, name string, depth int) types.Type {
+	if depth > 8 {
+		return nil
+	}
+	switch tt := c.expandIfMappedType(types.GetEffectiveType(t)).(type) {
+	case *types.ObjectType:
+		propType, exists := tt.Props()[name]
+		if !exists {
+			// Inherited members (a property of a generic base class).
+			propType, exists = tt.EffectiveProperty(name)
+		}
+		if !exists {
+			return nil
+		}
+		if tt.IsPropertyOptional(name) {
+			propType = types.NewUnionType(propType, types.Undefined)
+		}
+		return propType
+	case *types.IntersectionType:
+		var found types.Type
+		for _, part := range tt.Types {
+			if pt := c.refPropertyType(part, name, depth+1); pt != nil {
+				if found != nil {
+					return nil
+				}
+				found = pt
+			}
+		}
+		return found
+	case *types.UnionType:
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			if members[i] = c.refPropertyType(m, name, depth+1); members[i] == nil {
+				return nil
+			}
+		}
+		return types.NewUnionType(members...)
+	}
+	return nil
 }
 
 // splitNarrowingKey splits a narrowing key like "this._tools" into ["this", "_tools"].

@@ -282,3 +282,50 @@ func (c *Checker) mapHomomorphicOverArray(mt *types.MappedType, substitution map
 	}
 	return result
 }
+
+// distributeHomomorphicMapped is tsc's instantiateMappedType over a union:
+// `{ [K in keyof T]: X }` with T a union maps each member on its own
+// (Partial<Socket | TLSSocket> is Partial<Socket> | Partial<TLSSocket>, not
+// a mapping over their common keys); a primitive member maps to itself. nil
+// when T is not substituted by a union.
+func (c *Checker) distributeHomomorphicMapped(mt *types.MappedType, substitution map[string]types.Type, visited map[types.Type]types.Type) types.Type {
+	keyof, ok := mt.ConstraintType.(*types.KeyofType)
+	if !ok {
+		return nil
+	}
+	tp, ok := keyof.OperandType.(*types.TypeParameterType)
+	if !ok || tp.Parameter == nil {
+		return nil
+	}
+	repl, ok := substitution[tp.Parameter.Name]
+	if !ok {
+		return nil
+	}
+	if ia, isIA := repl.(*types.IndexedAccessType); isIA {
+		if computed := c.computeIndexedAccessType(ia.ObjectType, ia.IndexType); computed != nil {
+			repl = computed
+		}
+	}
+	u, ok := repl.(*types.UnionType)
+	if !ok {
+		return nil
+	}
+	members := make([]types.Type, len(u.Types))
+	for i, m := range u.Types {
+		switch types.GetEffectiveType(m).(type) {
+		case *types.ObjectType, *types.IntersectionType, *types.InstantiatedType, *types.ArrayType, *types.TupleType, *types.ReadonlyType:
+		default:
+			if m != types.Any && m != types.Unknown {
+				members[i] = m
+				continue
+			}
+		}
+		sub := make(map[string]types.Type, len(substitution))
+		for k, v := range substitution {
+			sub[k] = v
+		}
+		sub[tp.Parameter.Name] = m
+		members[i] = c.substituteTypesWithVisited(mt, sub, make(map[types.Type]types.Type))
+	}
+	return types.NewUnionType(members...)
+}
