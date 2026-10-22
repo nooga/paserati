@@ -1342,6 +1342,24 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		if guard.NarrowedType != nil {
 			newEnv.narrowings[guard.VariableName+"__complement"] = guard.NarrowedType
 			debugPrintf("// [InvertedTypeNarrowing] Stored complement marker for %s\n", guard.VariableName)
+			// A narrowing of the reference copied from the enclosing scope
+			// (a branch arm that assigns it seeds its declared type) would
+			// be read before the marker: narrow it here instead.
+			if cur, ok := newEnv.narrowings[guard.VariableName]; ok {
+				if u, isUnion := cur.(*types.UnionType); isUnion {
+					remaining := types.Type(u)
+					removed := []types.Type{guard.NarrowedType}
+					if gu, ok := guard.NarrowedType.(*types.UnionType); ok {
+						removed = gu.Types
+					}
+					for _, r := range removed {
+						if ru, ok := remaining.(*types.UnionType); ok {
+							remaining = ru.RemoveType(r)
+						}
+					}
+					newEnv.narrowings[guard.VariableName] = remaining
+				}
+			}
 		}
 
 		// Back-propagate narrowing to the base object for optional chaining guards
