@@ -263,7 +263,27 @@ func (c *Checker) awaitsUndeclaredAlias(t types.Type) bool {
 		base = ia.ObjectType
 	}
 	ref, ok := base.(*types.GenericTypeAliasForwardReference)
-	return ok && c.instantiateAliasReference(ref) == nil
+	if ok && c.instantiateAliasReference(ref) == nil {
+		return true
+	}
+	// TConfig['EventSource'] whose TConfig extends an interface declared
+	// further down: the constraint is a placeholder until then.
+	obj := t
+	for {
+		ia, ok := obj.(*types.IndexedAccessType)
+		if !ok {
+			break
+		}
+		obj = ia.ObjectType
+	}
+	for depth := 0; depth < 8; depth++ {
+		tp, ok := obj.(*types.TypeParameterType)
+		if !ok || tp.Parameter == nil || tp.Parameter.Constraint == nil {
+			break
+		}
+		obj = tp.Parameter.Constraint
+	}
+	return reachesPending(obj, 0, nil)
 }
 
 // reachesUnresolvedTypeof reports whether t reaches a `typeof x` whose x has
