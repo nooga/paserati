@@ -4198,9 +4198,24 @@ setYieldedType:
 
 // checkAwaitExpression checks an await expression and unwraps the Promise type
 func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
+	c.checkAwaitExpressionIn(node, nil)
+}
+
+// checkAwaitExpressionIn checks an await expression whose value is
+// contextually typed by expected (or nil). Its operand is then contextually
+// typed by expected | PromiseLike<expected>, as tsc's
+// getContextualTypeForAwaitOperand does: `const t: [A, B] = await run(async
+// () => [a, b])` types the returned literal as the tuple.
+func (c *Checker) checkAwaitExpressionIn(node *parser.AwaitExpression, expected types.Type) {
 	// 1. Check the argument expression
 	if node.Argument != nil {
-		c.visit(node.Argument)
+		if expected != nil && types.PromiseLikeGeneric != nil {
+			awaited := c.getAwaitedType(expected)
+			operandContext := types.NewUnionType(expected, types.NewInstantiatedType(types.PromiseLikeGeneric, []types.Type{awaited}))
+			c.visitWithContext(node.Argument, &ContextualType{ExpectedType: operandContext, IsContextual: true})
+		} else {
+			c.visit(node.Argument)
+		}
 		argType := node.Argument.GetComputedType()
 
 		// 2. The awaited type (tsc's getAwaitedType): a Promise<T> or other

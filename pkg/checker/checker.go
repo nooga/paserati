@@ -4497,9 +4497,11 @@ func (c *Checker) visit(node parser.Node) {
 				// Only validate if we had an explicit annotation (inference case already visited above)
 				// Use the temporary environment that includes previously defined parameters
 				originalEnv := c.env
-				c.env = tempEnv             // Use progressive environment that includes earlier parameters
-				c.visit(param.DefaultValue) // This will set the computed type
-				c.env = originalEnv         // Restore original environment
+				c.env = tempEnv // Use progressive environment that includes earlier parameters
+				// The declared type is the default's contextual type: `path:
+				// readonly string[] = []` is not an unknown[].
+				c.visitWithContext(param.DefaultValue, &ContextualType{ExpectedType: resolvedParamType, IsContextual: true})
+				c.env = originalEnv // Restore original environment
 
 				defaultValueType := param.DefaultValue.GetComputedType()
 				if defaultValueType != nil && !c.assignableToFresh(param.DefaultValue, defaultValueType, resolvedParamType) {
@@ -5366,6 +5368,8 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 				node.SetComputedType(ro.InnerType)
 			}
 		}
+	case *parser.AwaitExpression:
+		c.checkAwaitExpressionIn(node, context.ExpectedType)
 	case *parser.CallExpression:
 		if c.returnContexts == nil {
 			c.returnContexts = map[*parser.CallExpression]types.Type{}
