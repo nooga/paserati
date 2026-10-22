@@ -4948,7 +4948,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 
 		// Handle default value if present
 		if element.Default != nil {
-			c.visit(element.Default)
+			c.visitPatternDefault(element.Default, elemType)
 			defaultType := element.Default.GetComputedType()
 			if defaultType == nil {
 				defaultType = types.Any

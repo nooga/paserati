@@ -806,11 +806,17 @@ func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parse
 // the element's declared type (tsc checks every binding initializer against
 // it; without an annotation the default only widens the binding).
 func (c *Checker) visitPatternDefault(def parser.Expression, declared types.Type) {
-	if !c.annotatedPattern || declared == nil || declared == types.Any || declared == types.Undefined || declared == types.Unknown {
+	if declared == nil || declared == types.Any || declared == types.Undefined || declared == types.Unknown {
 		c.visit(def)
 		return
 	}
+	// The value's member types the default contextually (tsc's binding
+	// element contextual type) whether or not the pattern is annotated;
+	// only an annotated one requires the default to fit it.
 	c.visitWithContext(def, &ContextualType{ExpectedType: declared, IsContextual: true})
+	if !c.annotatedPattern {
+		return
+	}
 	if t := def.GetComputedType(); t != nil && !c.isAssignableWithExpansion(t, declared) {
 		c.reportNotAssignable(def, def, t, declared, headAssign)
 	}
