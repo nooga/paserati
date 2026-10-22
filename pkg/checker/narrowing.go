@@ -2137,13 +2137,17 @@ func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 	// If it's a union type, remove null and undefined
 	if unionType, ok := originalType.(*types.UnionType); ok {
 		var truthyMembers []types.Type
+		changed := false
 		for _, member := range unionType.Types {
-			if member != types.Null && member != types.Undefined {
-				truthyMembers = append(truthyMembers, member)
+			// Definitely falsy members (null, undefined, void, false, "", 0) go.
+			m := types.RemoveFalsyTypes(member)
+			changed = changed || m != member
+			if m != types.Never {
+				truthyMembers = append(truthyMembers, m)
 			}
 		}
 
-		if len(truthyMembers) < len(unionType.Types) {
+		if changed {
 			// We actually narrowed something
 			var narrowedType types.Type
 			if len(truthyMembers) == 0 {
@@ -2301,13 +2305,16 @@ func (c *Checker) applyMemberTruthinessNarrowing(memberExpr *parser.MemberExpres
 	}
 
 	var truthyMembers []types.Type
+	changed := false
 	for _, member := range unionType.Types {
-		if member != types.Null && member != types.Undefined {
-			truthyMembers = append(truthyMembers, member)
+		m := types.RemoveFalsyTypes(member)
+		changed = changed || m != member
+		if m != types.Never {
+			truthyMembers = append(truthyMembers, m)
 		}
 	}
 
-	if len(truthyMembers) >= len(unionType.Types) {
+	if !changed {
 		return nil // Nothing was narrowed
 	}
 
