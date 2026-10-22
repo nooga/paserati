@@ -173,9 +173,10 @@ func (r *Relation) isAssignable(source, target Type) bool {
 
 // isAssignableStep is isAssignable for a pair not already assumed.
 func (r *Relation) isAssignableStep(source, target Type) bool {
-	// Simplify mapped types (e.g., Record<string, T>) to ObjectType with index signatures
-	source = simplifyMappedType(source)
-	target = simplifyMappedType(target)
+	// The checker expands a mapped type first: over string it substitutes
+	// the key into the template (`{ [K in string]: any[K] extends infer V ?
+	// ... }`, tRPC's DecorateRouterRecord<any>), which simplifyMappedType,
+	// for Record<string, T>, does not.
 	if r.ExpandMapped != nil {
 		if _, ok := source.(*MappedType); ok {
 			source = r.ExpandMapped(source)
@@ -184,6 +185,8 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 			target = r.ExpandMapped(target)
 		}
 	}
+	source = simplifyMappedType(source)
+	target = simplifyMappedType(target)
 	source = simplifyKeyof(source)
 	target = simplifyKeyof(target)
 	if r.ResolveTypeof != nil {
