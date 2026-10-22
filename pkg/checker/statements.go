@@ -617,7 +617,16 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 // checkGenericInterfaceDeclaration handles generic interface declarations
 func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclaration) {
-	defer c.markGenericComplete(node.Name.Value)
+	var reopened *types.GenericType
+	defer func() {
+		c.markGenericComplete(node.Name.Value)
+		if reopened != nil {
+			// Instances made before this declaration (a reference earlier in
+			// this file to the generic another file declared) take its
+			// members too.
+			c.refillInstances(reopened)
+		}
+	}()
 	if checkerDebug {
 		debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n",
 			node.Name.Value, len(node.TypeParameters))
@@ -630,7 +639,9 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		switch existing := existingType.(type) {
 		case *types.GenericType:
 			existingGeneric = existing
-			c.instCache.reopen(existing)
+			if c.instCache.reopen(existing) {
+				reopened = existing
+			}
 			// tsc's areTypeParametersIdentical: a declaration may leave off
 			// trailing parameters that have defaults.
 			if n := len(node.TypeParameters); n > len(existing.TypeParameters) || n < minTypeArgumentCount(existing.TypeParameters) {

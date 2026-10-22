@@ -4975,18 +4975,23 @@ func newInstantiationCache() *instantiationCache {
 }
 
 // reopen forgets g's instantiations: a declaration merging into g is about
-// to change its body in place.
-func (ic *instantiationCache) reopen(g *types.GenericType) {
+// to change its body in place. It reports whether g was complete; the
+// instances already handed out are kept for refillInstances.
+func (ic *instantiationCache) reopen(g *types.GenericType) bool {
 	if !ic.complete[g] {
-		return
+		return false
 	}
 	delete(ic.complete, g)
 	delete(ic.closed, g)
-	for key := range ic.inst {
+	for key, inst := range ic.inst {
 		if key.generic == g {
+			if obj, ok := inst.(*types.ObjectType); ok {
+				ic.refilled[g] = append(ic.refilled[g], obj)
+			}
 			delete(ic.inst, key)
 		}
 	}
+	return true
 }
 
 // markGenericComplete records that the generic declared as name (type and,
