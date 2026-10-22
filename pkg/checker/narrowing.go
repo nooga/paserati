@@ -558,6 +558,13 @@ func (c *Checker) literalToType(expr parser.Expression) types.Type {
 		return types.Null
 	case *parser.UndefinedLiteral:
 		return types.Undefined
+	case *parser.Identifier:
+		// A unique symbol const (`const sym = Symbol()`) is a unit type too.
+		// FIXME: unique symbol types are not modelled; it narrows as symbol.
+		if c.env.ResolveBindingKind(lit.Value) == BindingUniqueSymbol {
+			return types.Symbol
+		}
+		return nil
 	case *parser.MemberExpression:
 		// An enum member (`Choice.Yes`) is a unit type like a literal.
 		if em, ok := lit.GetComputedType().(*types.EnumMemberType); ok {

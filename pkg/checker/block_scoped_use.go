@@ -90,6 +90,9 @@ func (c *Checker) preRegisterBlockScoped(stmts []parser.Statement) {
 						if info := c.declareBlockScoped(c.env, d.Name.Value, d.Name.Token, bsVariable); info != nil && info.constInit == nil {
 							info.constInit = d.Value
 						}
+						if isSymbolCall(d.Value) && (d.TypeAnnotation == nil || d.TypeAnnotation.String() == "unique symbol") {
+							c.env.MarkBindingKind(d.Name.Value, BindingUniqueSymbol)
+						}
 					}
 				}
 			}
@@ -99,6 +102,24 @@ func (c *Checker) preRegisterBlockScoped(stmts []parser.Statement) {
 			}
 		}
 	}
+}
+
+// isSymbolCall reports whether expr is `Symbol(...)` or `Symbol.for(...)`,
+// which give a const a unique symbol type.
+func isSymbolCall(expr parser.Expression) bool {
+	call, ok := expr.(*parser.CallExpression)
+	if !ok {
+		return false
+	}
+	switch fn := call.Function.(type) {
+	case *parser.Identifier:
+		return fn.Value == "Symbol"
+	case *parser.MemberExpression:
+		obj, isIdent := fn.Object.(*parser.Identifier)
+		prop, isProp := fn.Property.(*parser.Identifier)
+		return isIdent && isProp && obj.Value == "Symbol" && prop.Value == "for"
+	}
+	return false
 }
 
 // reportUnresolvedOrTDZ reports an identifier that did not resolve: a name that

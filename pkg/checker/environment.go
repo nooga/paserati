@@ -87,6 +87,9 @@ const (
 	BindingClass
 	BindingNamespace
 	BindingFunction
+	// BindingUniqueSymbol is a const initialized by Symbol() or Symbol.for():
+	// its type is a unique symbol, a unit type equality narrows by.
+	BindingUniqueSymbol
 )
 
 // MarkBindingKind records the declaration kind of a name bound in this scope.
