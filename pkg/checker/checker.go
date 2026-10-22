@@ -1565,6 +1565,10 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 			finalInferredType = computedInitializerType
 		} else {
 			finalInferredType = c.rel.DeeplyWidenType(computedInitializerType) // Use the deep widen helper
+			finalInferredType = evolvingArrayType(initializer, finalInferredType)
+			if !isConstVarLikeName(varName, globalEnv) {
+				finalInferredType = c.widenConditionalLiterals(initializer, finalInferredType)
+			}
 			if !isConstVarLikeName(varName, globalEnv) {
 				finalInferredType = types.WidenEnumMember(finalInferredType)
 			}
@@ -3000,8 +3004,9 @@ func (c *Checker) visit(node parser.Node) {
 					} else {
 						finalVariableType = computedInitializerType
 						if isWideningInitializer(declarator.Value) {
-							finalVariableType = c.rel.DeeplyWidenType(computedInitializerType)
+							finalVariableType = c.widenConditionalLiterals(declarator.Value, c.rel.DeeplyWidenType(computedInitializerType))
 						}
+						finalVariableType = evolvingArrayType(declarator.Value, finalVariableType)
 						finalVariableType = types.WidenEnumMember(finalVariableType)
 						if checkerDebug {
 							debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
@@ -3167,6 +3172,7 @@ func (c *Checker) visit(node parser.Node) {
 					if isWideningInitializer(declarator.Value) {
 						finalType = c.rel.DeeplyWidenType(computedInitializerType)
 					}
+					finalType = evolvingArrayType(declarator.Value, finalType)
 				}
 			}
 
@@ -3315,8 +3321,9 @@ func (c *Checker) visit(node parser.Node) {
 					} else {
 						finalVariableType = computedInitializerType
 						if isWideningInitializer(declarator.Value) {
-							finalVariableType = c.rel.DeeplyWidenType(computedInitializerType)
+							finalVariableType = c.widenConditionalLiterals(declarator.Value, c.rel.DeeplyWidenType(computedInitializerType))
 						}
+						finalVariableType = evolvingArrayType(declarator.Value, finalVariableType)
 						finalVariableType = types.WidenEnumMember(finalVariableType)
 						if checkerDebug {
 							debugPrintf("// [Checker VarStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)

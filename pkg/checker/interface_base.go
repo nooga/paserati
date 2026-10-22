@@ -23,7 +23,9 @@ func (c *Checker) interfaceBaseObjects(t types.Type) ([]*types.ObjectType, bool)
 	switch bt := t.(type) {
 	case *types.ObjectType:
 		return []*types.ObjectType{bt}, true
-	case *types.ArrayType, *types.TupleType:
+	case *types.ArrayType:
+		return []*types.ObjectType{c.arrayMembersObject(bt.ElementType, false)}, true
+	case *types.TupleType:
 		return nil, true
 	case *types.IntersectionType:
 		var objs []*types.ObjectType
@@ -35,6 +37,11 @@ func (c *Checker) interfaceBaseObjects(t types.Type) ([]*types.ObjectType, bool)
 			objs = append(objs, sub...)
 		}
 		return objs, true
+	case *types.ReadonlyType:
+		if arr, ok := bt.InnerType.(*types.ArrayType); ok {
+			return []*types.ObjectType{c.arrayMembersObject(arr.ElementType, true)}, true
+		}
+		return c.interfaceBaseObjects(bt.InnerType)
 	case *types.InstantiatedType:
 		if sub := types.GetEffectiveType(bt.Substitute()); sub != t {
 			return c.interfaceBaseObjects(sub)
@@ -55,4 +62,26 @@ func (c *Checker) reportInvalidInterfaceBase(expr parser.Expression, baseType ty
 		return
 	}
 	c.addErrorWithCode(expr, errors.TS2312, "An interface can only extend an object type or intersection of object types with statically known members.")
+}
+
+// mutatingArrayMethods are the Array members ReadonlyArray lacks.
+var mutatingArrayMethods = map[string]bool{
+	"push": true, "pop": true, "shift": true, "unshift": true, "splice": true,
+	"sort": true, "reverse": true, "fill": true, "copyWithin": true,
+}
+
+// arrayMembersObject is the object an interface extending an array type
+// inherits: `length` and the Array methods for the element type.
+func (c *Checker) arrayMembersObject(elem types.Type, readonly bool) *types.ObjectType {
+	obj := types.NewObjectType()
+	obj.SetProperty("length", types.Number)
+	if proto := c.env.PrimitivePrototypeType("array"); proto != nil {
+		for _, name := range proto.PropertyNames() {
+			if readonly && mutatingArrayMethods[name] {
+				continue
+			}
+			obj.SetProperty(name, c.instantiateGenericMethod(proto.Props()[name], elem))
+		}
+	}
+	return obj
 }
