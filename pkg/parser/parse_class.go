@@ -656,8 +656,15 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		} else if isAsync {
 			// async method (without asterisk): async methodName() { ... }
-			method := p.parseAsyncMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
-			if method != nil {
+			// An overload signature (`async m(): Promise<T>;`) is kept as one.
+			result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, true)
+			if sig, ok := result.(*MethodSignature); ok {
+				p.noteDecoratedSignature(memberDecorators)
+				methodSigs = append(methodSigs, sig)
+			} else if method, ok := result.(*MethodDefinition); ok {
+				if method.Value != nil {
+					method.Value.IsAsync = true
+				}
 				attachDecorators(method)
 				methods = append(methods, method)
 			}
@@ -1094,28 +1101,6 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 		IsProtected: isProtected,
 		IsOverride:  isOverride,
 	}
-}
-
-// parseAsyncMethod parses an async method in a class
-// Reuses parseMethod logic with isAsync=true
-func (p *Parser) parseAsyncMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) *MethodDefinition {
-	result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, true)
-	if result == nil {
-		return nil
-	}
-
-	// parseMethod can return either MethodSignature or MethodDefinition
-	if method, ok := result.(*MethodDefinition); ok {
-		// IsAsync is already set by parseMethod, but ensure it's marked
-		if method.Value != nil {
-			method.Value.IsAsync = true
-		}
-		return method
-	}
-
-	// If it's a signature, we can't make it async (would need to return MethodSignature)
-	// For now, just treat as method definition
-	return nil
 }
 
 // parseProperty parses a property declaration

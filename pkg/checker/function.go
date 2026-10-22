@@ -6,6 +6,7 @@ import (
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
@@ -338,9 +339,70 @@ func generatorBodyReturnType(annotation types.Type) types.Type {
 	case "Iterable", "AsyncIterable":
 		return types.Any
 	}
+	// An interface extending one of them (`interface I extends Iterator<0, 1,
+	// 2> {}`) is flattened: its next() result still names the return type.
+	if ret := iteratorReturnTypeOf(annotation); ret != nil {
+		return ret
+	}
 	// Not modelled (a lib iterator interface we only know by name): the
 	// annotation itself, as before generators were understood.
 	return annotation
+}
+
+// iteratorReturnTypeOf is the value type of the `done: true` member of the
+// result next() of the iterator type t returns, or nil when t has no such
+// next().
+func iteratorReturnTypeOf(t types.Type) types.Type {
+	obj, ok := t.(*types.ObjectType)
+	if !ok {
+		return nil
+	}
+	next, ok := obj.Props()["next"].(*types.ObjectType)
+	if !ok || len(next.CallSigs()) == 0 {
+		return nil
+	}
+	return iterationResultValue(next.CallSigs()[0].ReturnType, true)
+}
+
+// iterationResultValue is the type of the `value` of the iteration results
+// in result (an IteratorResult<Y, R>, or a hand-written union of the same
+// shape): the members whose `done` is the literal true give the return
+// side, the others the yield side. nil when there are none.
+func iterationResultValue(result types.Type, returnSide bool) types.Type {
+	var values []types.Type
+	var collect func(t types.Type, depth int)
+	collect = func(t types.Type, depth int) {
+		if depth > 6 || t == nil {
+			return
+		}
+		switch tt := t.(type) {
+		case *types.UnionType:
+			for _, m := range tt.Types {
+				collect(m, depth+1)
+			}
+			return
+		case *types.InstantiatedType:
+			if tt.Generic != nil {
+				collect(tt.Substitute(), depth+1)
+			}
+			return
+		case *types.ObjectType:
+			value, hasValue := tt.Props()["value"]
+			if !hasValue {
+				return
+			}
+			done, isLit := tt.Props()["done"].(*types.LiteralType)
+			isReturn := isLit && done.Value.Type() == vm.TypeBoolean && done.Value.AsBoolean()
+			if isReturn == returnSide {
+				values = append(values, value)
+			}
+		}
+	}
+	collect(result, 0)
+	if len(values) == 0 {
+		return nil
+	}
+	return types.NewUnionType(values...)
 }
 
 // checkGeneratorAnnotation reports TS2322 on a generator's return annotation

@@ -75,6 +75,8 @@ func walkTypeParamRefs(v reflect.Value, names map[string]bool, inType bool, repo
 			names = withoutShadowed(names, n.TypeParameters)
 		case *parser.ArrowFunctionLiteral:
 			names = withoutShadowed(names, n.TypeParameters)
+		case *parser.MethodSignature:
+			names = withoutShadowed(names, n.TypeParameters)
 		}
 		v = v.Elem()
 	}

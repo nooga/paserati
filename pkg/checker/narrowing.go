@@ -306,6 +306,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 						VariableName: ident.Value,
 						NarrowedType: narrowedType,
 						IsNegated:    isNegative,
+						Also:         c.destructuredDiscriminantGuard(ident, narrowedType, isNegative),
 					}
 				}
 			}
@@ -322,6 +323,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 						VariableName: ident.Value,
 						NarrowedType: narrowedType,
 						IsNegated:    isNegative,
+						Also:         c.destructuredDiscriminantGuard(ident, narrowedType, isNegative),
 					}
 				}
 			}
@@ -619,6 +621,16 @@ func (c *Checker) literalToType(expr parser.Expression) types.Type {
 		// FIXME: unique symbol types are not modelled; it narrows as symbol.
 		if c.env.ResolveBindingKind(lit.Value) == BindingUniqueSymbol {
 			return types.Symbol
+		}
+		// FIXME: an imported symbol const is not known to be unique (the
+		// export carries only `symbol`); one that is symbol-typed is taken as
+		// the unit type it most likely is.
+		if c.IsModuleMode() && c.moduleEnv != nil {
+			if binding, imported := c.moduleEnv.ImportedNames[lit.Value]; imported && !binding.IsTypeOnly {
+				if t, _, found := c.env.Resolve(lit.Value); found && t == types.Symbol {
+					return types.Symbol
+				}
+			}
 		}
 		return nil
 	case *parser.MemberExpression:
@@ -3206,6 +3218,19 @@ func blockAlwaysTerminates(node parser.Node) bool {
 		return true
 	case *parser.ContinueStatement:
 		return true
+	case *parser.ExpressionStatement:
+		// A call of a function declared to return never does not return.
+		if call, ok := n.Expression.(*parser.CallExpression); ok {
+			if fn, ok := call.Function.GetComputedType().(*types.ObjectType); ok && len(fn.CallSigs()) > 0 {
+				for _, sig := range fn.CallSigs() {
+					if sig.ReturnType != types.Never {
+						return false
+					}
+				}
+				return true
+			}
+		}
+		return false
 	case *parser.BlockStatement:
 		// A block terminates if its last statement terminates
 		if len(n.Statements) == 0 {

@@ -45,6 +45,7 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).    // IterableIterator<K>
 		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).  // IterableIterator<V>
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)). // IterableIterator<[K, V]>
+		WithProperty("__COMPUTED_PROPERTY__", types.NewSimpleFunction(nil, types.NewInstantiatedType(types.IterableIteratorGeneric, []types.Type{&types.TupleType{ElementTypes: []types.Type{kType, vType}}}))). // [Symbol.iterator]()
 		WithProperty("size", types.Number)
 
 	// Now set the body of the generic type
@@ -69,6 +70,7 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("__COMPUTED_PROPERTY__", types.NewSimpleFunction(nil, types.NewInstantiatedType(types.IterableIteratorGeneric, []types.Type{&types.TupleType{ElementTypes: []types.Type{kType, vType}}}))).
 		WithProperty("size", types.Number)
 
 	// Register map primitive prototype

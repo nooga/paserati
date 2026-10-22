@@ -499,12 +499,12 @@ func init() {
 	tReturnType := &TypeParameterType{Parameter: tReturn}
 	tNextType := &TypeParameterType{Parameter: tNext}
 
-	// Create IteratorResult<T, TReturn> type
-	iteratorResultType := NewObjectType().
-		WithProperty("value", NewUnionType(tType, tReturnType)).
-		WithProperty("done", Boolean)
+	iteratorResultType := IteratorResultOf(tType, tReturnType)
 
-	// Create generator body with iterator protocol methods
+	// Generator<T, TReturn, TNext> extends IteratorObject: it is its own
+	// iterator, [Symbol.iterator](): Generator<T, TReturn, TNext>.
+	t.Default, tReturn.Default, tNext.Default = Unknown, Any, Any
+	GeneratorGeneric = &GenericType{Name: "Generator", TypeParameters: []*TypeParameter{t, tReturn, tNext}}
 	generatorBody := NewObjectType().
 		// next(value?: TNext): IteratorResult<T, TReturn>
 		WithProperty("next", NewOptionalFunction(
@@ -521,13 +521,12 @@ func init() {
 		WithProperty("throw", NewOptionalFunction(
 			[]Type{Any},
 			iteratorResultType,
-			[]bool{true}))
-
-	// lib.es2015.generator: interface Generator<T = unknown, TReturn = any, TNext = any>
-	t.Default, tReturn.Default, tNext.Default = Unknown, Any, Any
+			[]bool{true})).
+		WithProperty("__COMPUTED_PROPERTY__", NewSimpleFunction(nil,
+			NewInstantiatedType(GeneratorGeneric, []Type{tType, tReturnType, tNextType})))
 	generatorBody.GenericName = "Generator"
 	generatorBody.GenericArgs = []Type{tType, tReturnType, tNextType}
-	GeneratorGeneric = NewGenericType("Generator", []*TypeParameter{t, tReturn, tNext}, generatorBody)
+	GeneratorGeneric.Body = generatorBody
 
 	// Create AsyncGenerator<T, TReturn, TNext> generic type
 	tAsync := NewTypeParameter("T", 0, nil)
@@ -538,14 +537,9 @@ func init() {
 	tReturnTypeAsync := &TypeParameterType{Parameter: tReturnAsync}
 	tNextTypeAsync := &TypeParameterType{Parameter: tNextAsync}
 
-	// Create IteratorResult<T, TReturn> type for async generator
-	iteratorResultTypeAsync := NewObjectType().
-		WithProperty("value", NewUnionType(tTypeAsync, tReturnTypeAsync)).
-		WithProperty("done", Boolean)
-
-	// For AsyncGenerator, methods return Promise<IteratorResult<T, TReturn>>
-	// We instantiate the Promise generic with IteratorResult
-	promiseIteratorResult := NewInstantiatedType(PromiseGeneric, []Type{iteratorResultTypeAsync})
+	// AsyncGenerator's methods return Promise<IteratorResult<T, TReturn>>.
+	promiseIteratorResult := NewInstantiatedType(PromiseGeneric, []Type{IteratorResultOf(tTypeAsync, tReturnTypeAsync)})
+	AsyncGeneratorGeneric = &GenericType{Name: "AsyncGenerator", TypeParameters: []*TypeParameter{tAsync, tReturnAsync, tNextAsync}}
 
 	// Create async generator body with iterator protocol methods that return promises
 	asyncGeneratorBody := NewObjectType().
@@ -564,9 +558,15 @@ func init() {
 		WithProperty("throw", NewOptionalFunction(
 			[]Type{Any},
 			promiseIteratorResult,
-			[]bool{true}))
+			[]bool{true})).
+		// [Symbol.asyncIterator](): AsyncGenerator<T, TReturn, TNext>
+		WithProperty("@@symbol:asyncIterator", NewSimpleFunction(nil,
+			NewInstantiatedType(AsyncGeneratorGeneric, []Type{tTypeAsync, tReturnTypeAsync, tNextTypeAsync})))
 
-	AsyncGeneratorGeneric = NewGenericType("AsyncGenerator", []*TypeParameter{tAsync, tReturnAsync, tNextAsync}, asyncGeneratorBody)
+	tAsync.Default, tReturnAsync.Default, tNextAsync.Default = Unknown, Any, Any
+	asyncGeneratorBody.GenericName = "AsyncGenerator"
+	asyncGeneratorBody.GenericArgs = []Type{tTypeAsync, tReturnTypeAsync, tNextTypeAsync}
+	AsyncGeneratorGeneric.Body = asyncGeneratorBody
 }
 
 // substituteSignature performs type parameter substitution in a signature

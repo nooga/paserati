@@ -1597,7 +1597,9 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 				elementType = types.Any
 			} else {
 				// Should be AsyncIterable<T> or have Symbol.asyncIterator
-				// For now, accept any type and use Any as element type
+				// FIXME: the element type is T of an AsyncIterable<T>
+				// (asyncIterationYieldType); using it surfaces a class
+				// relation gap (tRPC's EventSourcePolyfill vs EventSource).
 				elementType = types.Any
 			}
 		} else {

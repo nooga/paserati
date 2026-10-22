@@ -547,6 +547,11 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 					}
 				}
 				if !assignable {
+					if so, ok := sType.(*ObjectType); ok {
+						if halves := booleanHalves(so); halves != nil && r.isAssignable(halves[0], target) && r.isAssignable(halves[1], target) {
+							continue
+						}
+					}
 					return false
 				}
 			}
@@ -563,6 +568,14 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 			if tp, ok := source.(*TypeParameterType); ok {
 				if c := typeParameterConstraint(tp); c != nil && c != source && r.isAssignable(c, target) {
 					return true
+				}
+			}
+			// An object with a boolean member relates as the union of its two
+			// halves, `{ done: boolean }` to `{ done: true } | { done?: false }`
+			// (tsc's discriminated-union decomposition).
+			if so, ok := source.(*ObjectType); ok {
+				if halves := booleanHalves(so); halves != nil {
+					return r.isAssignable(halves[0], target) && r.isAssignable(halves[1], target)
 				}
 			}
 			// An intersection is assignable to the union when one of its
@@ -1774,8 +1787,39 @@ func isMutableArrayLike(t Type) bool {
 // apparentMembersAssignable reports whether source's apparent type (the wrapper
 // prototype of a primitive, array or tuple) satisfies the plain object type tgt.
 func (r *Relation) apparentMembersAssignable(source Type, tgt *ObjectType) bool {
-	if r.PrimitivePrototypeMembers == nil || tgt.IsCallable() || len(tgt.ConstructSigs()) > 0 || len(tgt.IndexSigs()) > 0 {
+	if r.PrimitivePrototypeMembers == nil || tgt.IsCallable() || len(tgt.ConstructSigs()) > 0 {
 		return false
+	}
+	// A numeric index signature (`ArrayLike<T>`) reads the elements of an
+	// array, a tuple or a string.
+	if sigs := tgt.IndexSigs(); len(sigs) > 0 {
+		var element Type
+		switch src := source.(type) {
+		case *ArrayType:
+			element = src.ElementType
+		case *TupleType:
+			elements := append([]Type(nil), src.ElementTypes...)
+			if src.RestElementType != nil {
+				if rest, ok := src.RestElementType.(*ArrayType); ok {
+					elements = append(elements, rest.ElementType)
+				}
+			}
+			element = NewUnionType(elements...)
+		default:
+			if source == String {
+				element = String
+			} else if lit, ok := source.(*LiteralType); ok && lit.Value.Type() == vm.TypeString {
+				element = String
+			}
+		}
+		if element == nil {
+			return false
+		}
+		for _, sig := range sigs {
+			if sig.KeyType != Number || !r.isAssignable(element, sig.ValueType) {
+				return false
+			}
+		}
 	}
 	kind := ""
 	switch src := source.(type) {
@@ -2234,6 +2278,45 @@ func literalKeys(t Type) bool {
 func noInferArg(t Type) Type {
 	if ref, ok := t.(*GenericTypeAliasForwardReference); ok && ref.AliasName == "NoInfer" && len(ref.TypeArguments) == 1 {
 		return ref.TypeArguments[0]
+	}
+	return nil
+}
+
+// booleanHalves splits an object type on its first required `boolean`
+// property into the two object types that property is `true` and `false` in,
+// or nil when it has none.
+func booleanHalves(obj *ObjectType) []*ObjectType {
+	if len(obj.BaseTypes) > 0 || obj.ClassMeta != nil {
+		return nil
+	}
+	effective := obj.GetEffectiveProperties()
+	for _, name := range obj.EffectivePropertyNames() {
+		if effective[name] != Boolean || obj.IsPropertyOptional(name) {
+			continue
+		}
+		halves := make([]*ObjectType, 2)
+		for i, lit := range []Type{TrueType, FalseType} {
+			half := &ObjectType{
+				Properties:         make(map[string]Type),
+				OptionalProperties: make(map[string]bool),
+			}
+			for _, other := range obj.EffectivePropertyNames() {
+				if other == name {
+					half.SetProperty(other, lit)
+				} else {
+					half.SetProperty(other, effective[other])
+					half.OptionalProps()[other] = obj.IsPropertyOptional(other)
+				}
+			}
+			half.Materialize()
+			half.CallSignatures = append(half.CallSigs(), obj.CallSigs()...)
+			half.Materialize()
+			half.ConstructSignatures = append(half.ConstructSigs(), obj.ConstructSigs()...)
+			half.Materialize()
+			half.IndexSignatures = append(half.IndexSigs(), obj.IndexSigs()...)
+			halves[i] = half
+		}
+		return halves
 	}
 	return nil
 }

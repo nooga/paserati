@@ -59,7 +59,9 @@ func typedArrayInstanceType(elementType types.Type) *types.ObjectType {
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any))
+		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("__COMPUTED_PROPERTY__", types.NewSimpleFunction(nil,
+			types.NewInstantiatedType(types.IterableIteratorGeneric, []types.Type{elementType})))
 }
 
 // ValidateTypedArrayByteOffset converts byteOffset to integer (calling valueOf if needed)

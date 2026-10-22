@@ -68,6 +68,8 @@ type Environment struct {
 	// --- Type narrowing support for member expressions ---
 	// Maps member expression keys (e.g., "this.value", "obj.prop") to their narrowed types
 	narrowings map[string]types.Type
+	// discriminantAliases records consts destructured from a const's property.
+	discriminantAliases map[string]discriminantAlias
 
 	// builtinNames lists names bound by the built-in initializers (global env only).
 	builtinNames map[string]bool

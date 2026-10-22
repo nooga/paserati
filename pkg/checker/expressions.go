@@ -1578,7 +1578,7 @@ func writeTypeKey(b *strings.Builder, t types.Type, depth int) {
 
 func (c *Checker) instantiateAliasReferenceUncached(ref *types.GenericTypeAliasForwardReference, resolved types.Type, found bool) types.Type {
 	if !found {
-		return nil
+		return c.awaitedReference(ref)
 	}
 	generic, ok := resolved.(*types.GenericType)
 	if !ok || len(ref.TypeArguments) > len(generic.TypeParameters) {
@@ -2080,6 +2080,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					} else {
 						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 						// resultType remains types.Never
+					}
+				case *types.UnionType:
+					// A generic whose body is a union (IteratorResult<T>): the
+					// property of each member.
+					if t := c.getPropertyTypeFromType(subst, propertyName, false); t != nil && t != types.Never {
+						resultType = t
+					} else {
+						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 					}
 				default:
 					// For other substituted types, recursively check member access
@@ -4055,6 +4063,14 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 				goto setYieldedType
 			}
 
+			// An async generator also delegates to async iterables.
+			if c.inAsyncFunction {
+				if y, ok := c.asyncIterationYieldType(valueType); ok {
+					yieldedType = y
+					goto setYieldedType
+				}
+			}
+
 			// Check if the value has Symbol.iterator method
 			// Check if the type has Symbol.iterator property
 			if checkerDebug {
@@ -4170,7 +4186,8 @@ setYieldedType:
 		resultType := yieldedType
 		if node.Value != nil {
 			switch name, args := generatorTypeArgs(node.Value.GetComputedType()); name {
-			case "Generator", "AsyncGenerator", "Iterator", "AsyncIterator":
+			case "Generator", "AsyncGenerator", "Iterator", "AsyncIterator", "Iterable", "AsyncIterable",
+				"IterableIterator", "AsyncIterableIterator", "IteratorObject", "AsyncIteratorObject":
 				if len(args) >= 2 && args[1] != nil {
 					resultType = args[1]
 				}
@@ -4281,7 +4298,7 @@ func (c *Checker) isSpreadableIterableType(t types.Type) bool {
 		}
 	}
 	if instantiatedType, ok := t.(*types.InstantiatedType); ok {
-		if instantiatedType.Generic != nil && (instantiatedType.Generic.Name == "Iterable" || instantiatedType.Generic.Name == "Iterator" || instantiatedType.Generic.Name == "Generator") {
+		if instantiatedType.Generic != nil && isLibIterationType(instantiatedType.Generic.Name) {
 			return true
 		}
 	}
@@ -4324,7 +4341,7 @@ func (c *Checker) getSpreadElementType(t types.Type) types.Type {
 	}
 	if instantiatedType, ok := t.(*types.InstantiatedType); ok {
 		if instantiatedType.Generic != nil && len(instantiatedType.TypeArguments) > 0 &&
-			(instantiatedType.Generic.Name == "Iterable" || instantiatedType.Generic.Name == "Iterator" || instantiatedType.Generic.Name == "Generator") {
+			isLibIterationType(instantiatedType.Generic.Name) {
 			return instantiatedType.TypeArguments[0]
 		}
 	}
@@ -4344,6 +4361,10 @@ func (c *Checker) getSpreadElementType(t types.Type) types.Type {
 	nextReturnType := callableReturnType(nextType)
 	if nextReturnType == nil || nextReturnType == types.Any || nextReturnType == types.Never {
 		return types.Any
+	}
+	// What an iteration step yields, not what the iterator finally returns.
+	if yielded := iterationResultValue(nextReturnType, false); yielded != nil {
+		return yielded
 	}
 	valueType := c.getPropertyTypeFromType(nextReturnType, "value", false)
 	if valueType == nil || valueType == types.Never {
@@ -4894,6 +4915,72 @@ func mentionsTypeofType(t types.Type) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// awaitedReference evaluates the lib's Awaited<T> once its argument names no
+// type parameter, with getAwaitedType's semantics (a thenable gives its
+// fulfilment value, recursively, member by member over a union). A deferred
+// Awaited<T> stays a reference. nil for any other name.
+func (c *Checker) awaitedReference(ref *types.GenericTypeAliasForwardReference) types.Type {
+	if ref.AliasName != "Awaited" || len(ref.TypeArguments) != 1 || ref.TypeArguments[0] == nil {
+		return nil
+	}
+	arg := c.settleType(ref.TypeArguments[0])
+	if c.typeContainsTypeParameter(arg) || c.reachesUnresolvedTypeof(arg, 0) || awaitedArgPending(arg) {
+		return nil
+	}
+	return c.getAwaitedType(arg)
+}
+
+// awaitedArgPending reports whether t still has a member that is not yet a
+// type (a reference or conditional waiting on its arguments): awaiting it now
+// would keep it as it is.
+func awaitedArgPending(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if awaitedArgPending(m) {
+				return true
+			}
+		}
+	case *types.GenericTypeAliasForwardReference, *types.TypeAliasForwardReference, *types.ConditionalType,
+		*types.IndexedAccessType, *types.InferType, *types.TypeofType, *types.KeyofType:
+		return true
+	}
+	return false
+}
+
+// asyncIterationYieldType is the type an async iterable t yields: the
+// `value` of the not-done results its [Symbol.asyncIterator]().next()
+// resolves to. false when t has no [Symbol.asyncIterator].
+func (c *Checker) asyncIterationYieldType(t types.Type) (types.Type, bool) {
+	method := c.getPropertyTypeFromType(t, "@@symbol:asyncIterator", false)
+	if method == nil || method == types.Never {
+		return nil, false
+	}
+	iterator := callableReturnType(method)
+	if iterator == nil || iterator == types.Any {
+		return types.Any, true
+	}
+	next := callableReturnType(c.getPropertyTypeFromType(iterator, "next", false))
+	if next == nil {
+		return types.Any, true
+	}
+	if y := iterationResultValue(c.getAwaitedType(next), false); y != nil {
+		return y, true
+	}
+	return types.Any, true
+}
+
+// isLibIterationType reports whether name is a lib generic whose first type
+// argument is what iterating a value of it yields.
+func isLibIterationType(name string) bool {
+	switch name {
+	case "Iterable", "Iterator", "Generator", "IterableIterator", "IteratorObject",
+		"ArrayIterator", "MapIterator", "SetIterator", "StringIterator":
+		return true
 	}
 	return false
 }

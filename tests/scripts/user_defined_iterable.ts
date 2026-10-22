@@ -8,7 +8,7 @@ let customIterable = {
         let data = ["apple", "banana", "cherry"];
         
         return {
-            next() {
+            next(): IteratorResult<string> {
                 if (index < data.length) {
                     return { value: data[index++], done: false };
                 } else {

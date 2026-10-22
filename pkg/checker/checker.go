@@ -4127,6 +4127,10 @@ func (c *Checker) visit(node parser.Node) {
 
 		c.visit(node.Consequence)
 		thenEnv = thenEnd(thenEnv)
+		// Again, now that calls in the branch have types: one of a function
+		// returning never ends it too.
+		consequenceTerminates = blockAlwaysTerminates(node.Consequence)
+		joinPossible = !(consequenceTerminates && node.Alternative == nil)
 
 		// Restore original environment before checking alternative
 		c.env = originalEnv
@@ -4157,6 +4161,7 @@ func (c *Checker) visit(node parser.Node) {
 
 			elseEnd := armEnd(node.Alternative)
 			c.visit(node.Alternative)
+			alternativeTerminates = blockAlwaysTerminates(node.Alternative)
 			if end := elseEnd(nil); end != nil {
 				c.env = end
 			}
@@ -5026,6 +5031,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	savedAnnotated := c.annotatedPattern
 	c.annotatedPattern = node.TypeAnnotation != nil
 	defer func() { c.annotatedPattern = savedAnnotated }()
+	defer c.recordDestructuredDiscriminants(node)
 
 	// Check if we have an initializer (required for const, optional for let/var)
 	if node.Value == nil {

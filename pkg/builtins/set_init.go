@@ -40,6 +40,7 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).    // IterableIterator<T>
 		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).  // IterableIterator<T>
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)). // IterableIterator<[T, T]>
+		WithProperty("__COMPUTED_PROPERTY__", types.NewSimpleFunction(nil, types.NewInstantiatedType(types.IterableIteratorGeneric, []types.Type{tType}))). // [Symbol.iterator]()
 		// ES2024 Set methods
 		WithProperty("union", types.NewSimpleFunction([]types.Type{setType}, setType)).
 		WithProperty("intersection", types.NewSimpleFunction([]types.Type{setType}, setType)).
@@ -65,6 +66,7 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("__COMPUTED_PROPERTY__", types.NewSimpleFunction(nil, types.NewInstantiatedType(types.IterableIteratorGeneric, []types.Type{tType}))).
 		WithProperty("union", types.NewSimpleFunction([]types.Type{setType}, setType)).
 		WithProperty("intersection", types.NewSimpleFunction([]types.Type{setType}, setType)).
 		WithProperty("difference", types.NewSimpleFunction([]types.Type{setType}, setType)).
