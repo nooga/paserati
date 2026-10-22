@@ -161,6 +161,13 @@ func (r *Relation) isAssignable(source, target Type) bool {
 		}
 	}()
 	related = r.isAssignableStep(source, target)
+	if !related && r.IndexedConstraint != nil {
+		if ia, ok := source.(*IndexedAccessType); ok {
+			if base := r.IndexedConstraint(ia); base != nil && base != source {
+				related = r.isAssignable(base, target)
+			}
+		}
+	}
 	return related
 }
 

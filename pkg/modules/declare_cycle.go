@@ -68,6 +68,8 @@ func (ml *moduleLoader) DeclareModule(record *ModuleRecord) {
 	record.declared = d
 	exposeEarlyExports(record, checker)
 	program := record.AST
+	ml.declaring++
+	defer func() { ml.declaring-- }()
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
@@ -96,4 +98,14 @@ func (d *declaredCheck) rethrow() {
 	if d.failure != nil {
 		panic(d.failure)
 	}
+}
+
+// HoldChecks makes modules first loaded until release is called declared
+// only, their checks deferred like those loaded while a module is declared
+// ahead of its turn: a checker looking an export up through a module still
+// being checked calls it, since what it loads would see that module's
+// exports half known.
+func (ml *moduleLoader) HoldChecks() (release func()) {
+	ml.declaring++
+	return func() { ml.declaring-- }
 }

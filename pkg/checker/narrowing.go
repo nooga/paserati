@@ -2509,6 +2509,11 @@ func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Typ
 	if memberType.Equals(targetType) {
 		return true
 	}
+	// tsc filters by the subtype relation, where an indexed access its
+	// constraint makes any (TRoot['ctx']) is no subtype of the guard type.
+	if c.isAnyConstrainedAccess(memberType) {
+		return false
+	}
 
 	// Check if memberType is assignable to targetType or vice versa
 	if c.rel.IsAssignable(memberType, targetType) || c.rel.IsAssignable(targetType, memberType) {

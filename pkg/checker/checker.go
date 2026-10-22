@@ -620,6 +620,8 @@ type Checker struct {
 	// expected to have, for inferring type parameters that no argument
 	// determines (`const xs: string[] = from()`).
 	returnContexts map[*parser.CallExpression]types.Type
+	// inIndexedConstraint guards indexedAccessConstraint against itself.
+	inIndexedConstraint bool
 	// optionalCallContexts is returnContexts for `f?.()` calls.
 	optionalCallContexts map[*parser.OptionalCallExpression]types.Type
 
@@ -795,6 +797,7 @@ func newCheckerInEnv(globalEnv *Environment) *Checker {
 	c.rel.ExpandMapped = c.expandIfMappedType
 	c.rel.ConditionalConstraint = func(ct *types.ConditionalType) types.Type { return c.baseConstraint(ct, 0) }
 	c.rel.ApparentMapped = c.apparentMappedType
+	c.rel.IndexedConstraint = c.indexedAccessConstraint
 	c.rel.ResolveClassRef = c.resolveParameterizedForwardReference
 	c.rel.ResolveTypeof = func(q *types.TypeofType) types.Type { return c.resolveTypeofTypeIfNeeded(q) }
 	return c

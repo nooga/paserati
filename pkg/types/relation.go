@@ -36,6 +36,10 @@ type Relation struct {
 	// tuples is related as its mapping of that constraint (or nil). The
 	// checker supplies it.
 	ApparentMapped func(*MappedType) Type
+	// IndexedConstraint is the base constraint of a generic indexed access
+	// (TRouter["_def"]["errorShape"] through TRouter's constraint), or nil:
+	// an indexed access no other rule relates is related through it.
+	IndexedConstraint func(*IndexedAccessType) Type
 
 	// ConditionalConstraint is what a deferred conditional type is known to
 	// be (tsc's default constraint of a conditional type: its branches'

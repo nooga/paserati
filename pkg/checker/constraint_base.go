@@ -282,3 +282,25 @@ func (c *Checker) withCallOuterSubstitution(sig *types.Signature, fn func()) {
 	defer func() { c.callOuterSubstitution = saved }()
 	fn()
 }
+
+// indexedAccessConstraint is the relation's IndexedConstraint: ia's base
+// constraint, worked out once at a time (computing it relates types too).
+func (c *Checker) indexedAccessConstraint(ia *types.IndexedAccessType) types.Type {
+	if c.inIndexedConstraint {
+		return nil
+	}
+	c.inIndexedConstraint = true
+	defer func() { c.inIndexedConstraint = false }()
+	return c.baseConstraint(ia, 0)
+}
+
+// suspendIndexedConstraint keeps the relation from relating indexed accesses
+// through their constraints until the returned func runs: a conditional
+// type is decided for every instantiation (tsc's restrictive instantiation),
+// so `TRoot['transformer'] extends true` stays deferred for TRoot extends
+// { transformer: any }.
+func (c *Checker) suspendIndexedConstraint() func() {
+	saved := c.inIndexedConstraint
+	c.inIndexedConstraint = true
+	return func() { c.inIndexedConstraint = saved }
+}

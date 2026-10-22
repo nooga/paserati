@@ -277,6 +277,9 @@ func (c *Checker) earlyExportFrom(specifier, name string) (types.Type, bool) {
 	key := specifier + "\x00" + name
 	c.earlyLookups[key] = true
 	defer delete(c.earlyLookups, key)
+	if h, ok := c.moduleEnv.ModuleLoader.(interface{ HoldChecks() func() }); ok {
+		defer h.HoldChecks()()
+	}
 	rec := c.moduleEnv.sourceRecord(specifier)
 	if rec == nil {
 		return nil, false

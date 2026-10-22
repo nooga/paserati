@@ -746,6 +746,16 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 	}
 
+	// An indexed access whose base constraint is any (TRoot['ctx'] of a
+	// TRoot extends { ctx: any }) is called untyped; in a union it is not.
+	if c.isAnyConstrainedAccess(funcNodeType) {
+		for _, argNode := range node.Arguments {
+			c.visit(argNode)
+		}
+		node.SetComputedType(types.Any)
+		return
+	}
+
 	// Handle union of callable types - e.g. string.includes | Uint8Array.includes
 	if unionType, isUnion := funcNodeType.(*types.UnionType); isUnion {
 		// Visit arguments
@@ -2124,6 +2134,14 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 	// instantiation of that generic argument by argument: getErrorShape's
 	// `config: RootConfig<TRoot>` against a RootConfig<any>.
 	if ref, ok := paramType.(*types.GenericTypeAliasForwardReference); ok {
+		// Two references to one alias infer argument by argument.
+		if aRef, ok := argType.(*types.GenericTypeAliasForwardReference); ok && aRef.AliasName == ref.AliasName &&
+			len(aRef.TypeArguments) == len(ref.TypeArguments) {
+			for i, pa := range ref.TypeArguments {
+				constraints = append(constraints, c.collectConstraintsFromTypeSeen(pa, aRef.TypeArguments[i], seen)...)
+			}
+			return constraints
+		}
 		if aObj, ok := argType.(*types.ObjectType); ok && aObj.Instantiates != nil && len(aObj.GenericArgs) == len(ref.TypeArguments) &&
 			c.aliasReferenceNames(ref, aObj.Instantiates) {
 			for i, pa := range ref.TypeArguments {
@@ -2428,6 +2446,12 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 	case *types.IntersectionType:
 		// Infer to every member of an intersection, as tsc does
 		// (`IntrinsicAttributes & { items: T[] }`).
+		// Infer to every member of an intersection, as tsc does
+		// (`IntrinsicAttributes & { items: T[] }`).
+		// FIXME: against an intersection argument ({ id } &
+		// TRPCResultMessage<unknown>) tsc infers from the matching member;
+		// doing so here makes partial solutions where TResponse of
+		// nodeHTTPRequestHandler's createContext callback is not inferred.
 		for _, memberType := range pType.Types {
 			constraints = append(constraints, c.collectConstraintsFromTypeSeen(memberType, argType, seen)...)
 		}
@@ -2523,6 +2547,27 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 				break
 			}
 		}
+		// References to one alias on both sides pair up (an import cycle's
+		// TRPCResponse<T, E> | TRPCResponseMessage<T, E> against the same).
+		if au, ok := argType.(*types.UnionType); ok {
+			paired := false
+			for _, a := range au.Types {
+				ar, ok := a.(*types.GenericTypeAliasForwardReference)
+				if !ok {
+					continue
+				}
+				for _, p := range pType.Types {
+					if pr, ok := p.(*types.GenericTypeAliasForwardReference); ok && pr.AliasName == ar.AliasName {
+						constraints = append(constraints, c.collectConstraintsFromTypeSeen(p, a, seen)...)
+						paired = true
+						break
+					}
+				}
+			}
+			if paired {
+				break
+			}
+		}
 		// One naked type parameter beside generic members (T | Promise<T>):
 		// each argument member is inferred to the generic members first, and
 		// the members none of them infers from go to the naked one (tsc's
@@ -2562,6 +2607,21 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 					src = types.NewUnionType(rest...)
 				}
 				constraints = append(constraints, c.collectConstraintsFromTypeSeen(naked, src, seen)...)
+			}
+			break
+		}
+		// A union argument infers member by member (tsc's
+		// inferToMultipleTypes): TRPCErrorResponse<E> | TRPCSuccessResponse<D>
+		// against TRPCErrorResponse<any> | TRPCSuccessResponse<TOutput> | ...
+		// Intersections of unions count as the unions they normalize to.
+		argMembers := []types.Type{argType}
+		if au, ok := argType.(*types.UnionType); ok {
+			argMembers = au.Types
+		}
+		if spread := distributeIntersectionMembers(&types.UnionType{Types: argMembers}); len(spread.Types) > 1 {
+			distributed := distributeIntersectionMembers(pType)
+			for _, a := range spread.Types {
+				constraints = append(constraints, c.collectConstraintsFromTypeSeen(distributed, a, seen)...)
 			}
 			break
 		}
@@ -3750,6 +3810,13 @@ func (c *Checker) strictCallApplyType(fn *types.ObjectType, name string) types.T
 		OptionalParams: []bool{false, allOptional},
 		ReturnType:     ret,
 	})
+}
+
+// isAnyConstrainedAccess reports whether t is an indexed access into a type
+// parameter that its base constraint makes any.
+func (c *Checker) isAnyConstrainedAccess(t types.Type) bool {
+	ia, ok := t.(*types.IndexedAccessType)
+	return ok && c.baseConstraint(ia, 0) == types.Any
 }
 
 // isUntypedCallTarget reports whether a value without signatures may still be

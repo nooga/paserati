@@ -74,6 +74,16 @@ type moduleLoader struct {
 	ahead     *parseAhead
 	resolveMu sync.Mutex
 
+	// loadDepth counts the loadModuleSequential calls in progress; declaring
+	// counts the modules being declared ahead of their turn (DeclareModule).
+	// A module first loaded while one is declared is only declared too, and
+	// its check finishes, in order, once the outermost load returns
+	// (deferredChecks): checked there and then, it would see the cycle's
+	// modules before any of them has declared what it exports.
+	loadDepth      int
+	declaring      int
+	deferredChecks []*ModuleRecord
+
 	// ambient answers non-relative specifiers that an ambient module
 	// declaration names (`declare module "fs" { ... }` in @types/node)
 	// before the resolvers are tried, as tsc does (SetAmbientModules).
@@ -252,6 +262,13 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		}
 	}
 
+	ml.loadDepth++
+	defer func() {
+		if ml.loadDepth--; ml.loadDepth == 0 && ml.declaring == 0 {
+			ml.finishDeferredChecks()
+		}
+	}()
+
 	// Create module record
 	record := &ModuleRecord{
 		Specifier:    specifier,
@@ -327,6 +344,34 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 
 	debugPrintf("// [ModuleLoader] Finished loading dependencies for: %s\n", specifier)
 
+	if ml.declaring > 0 && ml.checkerFactory != nil && !ml.config.SkipTypeCheck {
+		if ml.DeclareModule(record); record.declared != nil {
+			ml.deferredChecks = append(ml.deferredChecks, record)
+			return record, nil
+		}
+	}
+	// What this module imports is checked before it.
+	if ml.declaring == 0 {
+		ml.finishDeferredChecks()
+	}
+	return ml.checkAndCompile(record, specifier)
+}
+
+// finishDeferredChecks checks the modules whose check waited for the load
+// that declared them to return (see deferredChecks).
+func (ml *moduleLoader) finishDeferredChecks() {
+	for len(ml.deferredChecks) > 0 {
+		record := ml.deferredChecks[0]
+		ml.deferredChecks = ml.deferredChecks[1:]
+		ml.loadDepth++
+		_, _ = ml.checkAndCompile(record, record.Specifier)
+		ml.loadDepth--
+	}
+}
+
+// checkAndCompile type checks and compiles record, whose dependencies are
+// loaded.
+func (ml *moduleLoader) checkAndCompile(record *ModuleRecord, specifier string) (vm.ModuleRecord, error) {
 	// Add type checking and compilation to sequential loading
 	debugPrintf("// [ModuleLoader] Sequential loading checkerFactory: %v, compilerFactory: %v\n",
 		ml.checkerFactory != nil, ml.compilerFactory != nil)

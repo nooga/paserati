@@ -3063,6 +3063,7 @@ func (c *Checker) expandConcreteMapped(t types.Type) types.Type {
 // computeConditionalType computes the result of a conditional type like T extends U ? X : Y
 // Enhanced to handle infer types for type inference
 func (c *Checker) computeConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
+	defer c.suspendIndexedConstraint()()
 	if checkType == nil || extendsType == nil || trueType == nil || falseType == nil {
 		return nil // a part failed to resolve: nothing to decide
 	}
@@ -4458,6 +4459,7 @@ func waitsForTypeParameter(t types.Type, depth int) bool {
 //	("a" extends "b" ? never : "a") | ("b" extends "b" ? never : "b") | ("c" extends "b" ? never : "c")
 //	= "a" | never | "c" = "a" | "c"
 func (c *Checker) evaluateConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
+	defer c.suspendIndexedConstraint()()
 	// Handle KeyofType in checkType: expand to union of literal keys
 	if keyofType, ok := checkType.(*types.KeyofType); ok {
 		if objType, ok := keyofType.OperandType.(*types.ObjectType); ok {

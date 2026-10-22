@@ -535,3 +535,53 @@ func TestCheckFilesImportCycle(t *testing.T) {
 		t.Errorf("diagnostics:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+// A module first loaded while an import cycle's exports are looked up (t.ts,
+// reached from e.ts while m.ts answers for Resp) is checked once they are
+// known, not with them still missing (tRPC's transformer.ts against
+// rpc/envelopes.ts).
+func TestCheckFilesModuleLoadedDuringCycleDeclaration(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"main.ts": "import './m';\n",
+		"m.ts":    "import './a';\nexport * from './e';\n",
+		"a.ts":    "import type { Resp } from './m';\nexport type A = Resp<number>;\n",
+		"e.ts": "import { tv } from './t';\n" +
+			"export type Resp<T> = { value: T } | { error: string };\n" +
+			"export const ev = tv;\n",
+		"t.ts": "import type { Resp } from './m';\n" +
+			"export const tv = 1;\n" +
+			"const n: number = null as any as Resp<string>;\n",
+	}
+	for p, content := range files {
+		if err := os.WriteFile(filepath.Join(root, p), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPaserati()
+	var got []string
+	for _, r := range p.CheckFilesWithOptions([]string{"main.ts"}, DefaultCheckOptions()) {
+		if r.LoadError != nil {
+			t.Fatalf("%s: load error: %v", r.Path, r.LoadError)
+		}
+		for _, d := range r.Diagnostics {
+			got = append(got, filepath.Base(r.Path)+" "+d.Code()+" "+d.Message())
+		}
+	}
+	sort.Strings(got)
+	want := []string{
+		"t.ts TS2322 Type '{ value: string } | { error: string }' is not assignable to type 'number'.",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("diagnostics:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
