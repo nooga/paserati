@@ -385,6 +385,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 	spreadOptional := map[string]bool{}
 	seenKeys := make(map[string]bool)
 	seenProtoColon := false
+	var genericSpreads []types.Type // spread type parameters, as in checkObjectLiteral
 
 	for _, prop := range node.Properties {
 		var keyName string
@@ -404,6 +405,10 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 			argType := key.Argument.GetComputedType()
 			if argType == nil {
 				argType = types.Any
+			}
+			if isGenericSpreadOperand(argType) && c.apparentType(argType) != types.Any {
+				genericSpreads = append(genericSpreads, argType)
+				continue
 			}
 			c.mergeSpreadOperand(fields, spreadOptional, c.apparentType(c.rel.GetWidenedType(argType)))
 			continue
@@ -515,6 +520,13 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 			resultType.OptionalProperties = map[string]bool{}
 		}
 		resultType.OptionalProperties[key] = true
+	}
+	if len(genericSpreads) > 0 {
+		if len(fields) > 0 {
+			genericSpreads = append(genericSpreads, resultType)
+		}
+		node.SetComputedType(types.NewIntersectionType(genericSpreads...))
+		return
 	}
 	node.SetComputedType(resultType)
 	if checkerDebug {
@@ -701,6 +713,23 @@ func isSpreadableMember(obj *types.ObjectType, name string) bool {
 	return true
 }
 
+// isGenericSpreadOperand reports whether a spread operand is a type
+// parameter, or an intersection with one (`T & { error: unknown }` after
+// `'error' in x`): it spreads as itself rather than by its properties.
+func isGenericSpreadOperand(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.TypeParameterType:
+		return true
+	case *types.IntersectionType:
+		for _, part := range tt.Types {
+			if _, ok := part.(*types.TypeParameterType); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // checkObjectLiteral checks the type of an object literal expression.
 func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	defer c.checkSpreadOverrides(node)
@@ -708,6 +737,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	seenKeys := make(map[string]bool)
 	seenProtoColon := false // Track if we've seen __proto__: value (colon syntax)
 	spreadsAny := false     // `{ ...anyValue }` is any, as in tsc
+	var genericSpreads []types.Type
 	spreadOptional := map[string]bool{}
 
 	// --- NEW: Create preliminary object type for 'this' context ---
@@ -742,6 +772,15 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			widenedType := c.apparentType(c.rel.GetWidenedType(argType))
 			if widenedType == types.Any {
 				spreadsAny = true
+			}
+			// A type parameter spreads as itself: `{ ...item, error }` is
+			// `T & { error: ... }` (tsc's getSpreadType on a generic type).
+			if isGenericSpreadOperand(argType) && widenedType != types.Any {
+				if !c.mergeSpreadOperand(map[string]types.Type{}, map[string]bool{}, widenedType) {
+					c.addErrorWithCode(key.Argument, errors.TS2698, "Spread types may only be created from object types.")
+				}
+				genericSpreads = append(genericSpreads, argType)
+				continue
 			}
 			if !c.mergeSpreadOperand(fields, spreadOptional, widenedType) {
 				c.addErrorWithCode(key.Argument, errors.TS2698, "Spread types may only be created from object types.")
@@ -1257,6 +1296,14 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 	if spreadsAny {
 		node.SetComputedType(types.Any)
+		return
+	}
+
+	if len(genericSpreads) > 0 {
+		if len(objType.Props()) > 0 || len(objType.IndexSignatures) > 0 {
+			genericSpreads = append(genericSpreads, objType)
+		}
+		node.SetComputedType(types.NewIntersectionType(genericSpreads...))
 		return
 	}
 

@@ -55,6 +55,29 @@ func (r *Relation) WidenType(t Type) Type {
 // deeplyWidenObjectType creates a new ObjectType where literal property types are widened.
 // Returns the original type if it's not an ObjectType.
 func (r *Relation) DeeplyWidenType(t Type) Type {
+	// FIXME: `let y = x` with x: T declares T in tsc, but a type parameter
+	// widens to its constraint here (GetWidenedType's arithmetic rule).
+	// Keeping T exposes type parameters an inner generic call leaves
+	// uninferred (tRPC's source.pipe(distinctUntilChanged()), which tsc
+	// infers from pipe's parameter), so that has to be fixed first.
+	if tt, ok := t.(*IntersectionType); ok && intersectsTypeParameter(tt) {
+		// `{ ...x, q: 1 }` is T & { q: number }: each part widens. Other
+		// intersections are declared types (Nominal<'A', string>) and keep
+		// their literals.
+		parts := make([]Type, len(tt.Types))
+		changed := false
+		for i, part := range tt.Types {
+			parts[i] = part
+			if _, isTP := part.(*TypeParameterType); !isTP {
+				parts[i] = r.DeeplyWidenType(part)
+			}
+			changed = changed || parts[i] != part
+		}
+		if !changed {
+			return t
+		}
+		return NewIntersectionType(parts...)
+	}
 	// Widen top-level literals first
 	widenedT := r.GetWidenedType(t)
 
@@ -167,4 +190,15 @@ func (r *Relation) widenNested(t Type, depth int) Type {
 	cp.Materialize()
 	cp.Properties = props
 	return &cp
+}
+
+// intersectsTypeParameter reports whether one of t's parts is a type
+// parameter, as in the type of `{ ...x, q: 1 }` with x: T.
+func intersectsTypeParameter(t *IntersectionType) bool {
+	for _, part := range t.Types {
+		if _, ok := part.(*TypeParameterType); ok {
+			return true
+		}
+	}
+	return false
 }

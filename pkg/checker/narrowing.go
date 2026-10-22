@@ -912,7 +912,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 			} else if propMarker, ok := guard.NarrowedType.(*types.PropertyExistenceMarker); ok {
 				// "prop" in obj - keep only types that have the property
 				var validMembers []types.Type
-				for _, memberType := range unionType.Types {
+				for _, memberType := range distributeIntersectionMembers(unionType).Types {
 					if c.typeHasProperty(memberType, propMarker.PropertyName) {
 						validMembers = append(validMembers, memberType)
 					}
@@ -2538,6 +2538,7 @@ func (c *Checker) filterUnionByProperty(t types.Type, propertyName string, wantP
 		return nil, false
 	}
 
+	unionType = distributeIntersectionMembers(unionType)
 	var matchingMembers []types.Type
 	for _, memberType := range unionType.Types {
 		if c.typeHasProperty(memberType, propertyName) == wantPresent {
@@ -2554,6 +2555,78 @@ func (c *Checker) filterUnionByProperty(t types.Type, propertyName string, wantP
 	return types.NewUnionType(matchingMembers...), true
 }
 
+// maxDistributedMembers bounds distributeIntersectionMembers' product.
+const maxDistributedMembers = 64
+
+// distributeIntersectionMembers rewrites the members `X & (A | B)` of u as
+// `X & A` and `X & B`, as tsc normalizes intersections of unions, so `in`
+// narrowing can filter each alternative on its own.
+func distributeIntersectionMembers(u *types.UnionType) *types.UnionType {
+	var out []types.Type
+	changed := false
+	members := u.Types
+	// A generic alias instance (TRPCResponse<TData, TError>) stands for
+	// its union or intersection.
+	for i, m := range members {
+		if inst, ok := m.(*types.InstantiatedType); ok {
+			switch sub := inst.Substitute().(type) {
+			case *types.UnionType:
+				if !changed {
+					members = append([]types.Type(nil), members[:i]...)
+				}
+				members = append(members, sub.Types...)
+				changed = true
+				continue
+			case *types.IntersectionType:
+				if !changed {
+					members = append([]types.Type(nil), members[:i]...)
+				}
+				members = append(members, sub)
+				changed = true
+				continue
+			}
+		}
+		if changed {
+			members = append(members, m)
+		}
+	}
+	for _, m := range members {
+		inter, ok := m.(*types.IntersectionType)
+		if !ok {
+			out = append(out, m)
+			continue
+		}
+		products := [][]types.Type{nil}
+		for _, part := range inter.Types {
+			alts := []types.Type{part}
+			if pu, isUnion := part.(*types.UnionType); isUnion {
+				alts = pu.Types
+				changed = true
+			}
+			var next [][]types.Type
+			for _, p := range products {
+				for _, a := range alts {
+					next = append(next, append(append([]types.Type(nil), p...), a))
+				}
+			}
+			products = next
+		}
+		if len(out)+len(products) > maxDistributedMembers {
+			return u
+		}
+		for _, p := range products {
+			out = append(out, types.NewIntersectionType(p...))
+		}
+	}
+	if !changed {
+		return u
+	}
+	if nu, ok := types.NewUnionType(out...).(*types.UnionType); ok {
+		return nu
+	}
+	return u
+}
+
 // typeHasProperty checks if a type has a specific property
 // This is used for "prop in obj" narrowing
 func (c *Checker) typeHasProperty(t types.Type, propertyName string) bool {
@@ -2562,6 +2635,16 @@ func (c *Checker) typeHasProperty(t types.Type, propertyName string) bool {
 		// Check if the object type has this property
 		_, exists := typ.Props()[propertyName]
 		return exists
+	case *types.IntersectionType:
+		// `{ id } & ErrorResponse` has what any of its parts has.
+		for _, part := range typ.Types {
+			if c.typeHasProperty(part, propertyName) {
+				return true
+			}
+		}
+		return false
+	case *types.InstantiatedType:
+		return c.typeHasProperty(typ.Substitute(), propertyName)
 	case *types.ArrayType:
 		// Arrays have "length" property and some built-in methods
 		if propertyName == "length" {

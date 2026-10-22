@@ -161,6 +161,13 @@ func (c *Checker) targetObjects(target types.Type) []*types.ObjectType {
 				out = append(out, mm)
 			case *types.ArrayType, *types.TupleType, *types.TypeParameterType:
 				return nil
+			case *types.IntersectionType:
+				// `{ id } & (A | B)`: its parts' properties are known.
+				objs := c.targetObjects(mm)
+				if objs == nil {
+					return nil
+				}
+				out = append(out, objs...)
 			default:
 				if m == types.Any || m == types.Unknown || m == types.NonPrimitive {
 					return nil
@@ -172,6 +179,14 @@ func (c *Checker) targetObjects(target types.Type) []*types.ObjectType {
 		var out []*types.ObjectType
 		for _, m := range t.Types {
 			m = c.resolveStructural(m)
+			if u, isUnion := m.(*types.UnionType); isUnion {
+				objs := c.targetObjects(u)
+				if objs == nil {
+					return nil
+				}
+				out = append(out, objs...)
+				continue
+			}
 			mm, ok := m.(*types.ObjectType)
 			if !ok {
 				return nil
