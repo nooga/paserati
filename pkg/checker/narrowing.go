@@ -540,6 +540,62 @@ func typeFromTypeofString(typeString string) types.Type {
 	}
 }
 
+// isTypeofFunctionMarker reports whether t is the guard type of
+// `typeof x === "function"` (see typeFromTypeofString).
+func isTypeofFunctionMarker(t types.Type) bool {
+	obj, ok := t.(*types.ObjectType)
+	if !ok || len(obj.Properties) > 0 || len(obj.CallSignatures) != 1 || len(obj.ConstructSignatures) > 0 {
+		return false
+	}
+	sig := obj.CallSignatures[0]
+	return len(sig.ParameterTypes) == 0 && !sig.IsVariadic && sig.ReturnType == types.Any && len(sig.TypeParameters) == 0
+}
+
+// typeofFunctionNarrowed is the type `typeof x === "function"` narrows a
+// reference of type t to, as tsc computes it: callable members are kept,
+// unknown and non-callable object types become the global Function type, and
+// any stays any. nil when the guard narrows t to never or t is unknown here.
+func (c *Checker) typeofFunctionNarrowed(t types.Type) types.Type {
+	if t == nil || t == types.Any {
+		return t
+	}
+	fn, _ := c.env.ResolveType("Function")
+	var walk func(m types.Type) types.Type
+	walk = func(m types.Type) types.Type {
+		switch mt := c.resolveTypeAlias(m).(type) {
+		case *types.UnionType:
+			var kept []types.Type
+			for _, u := range mt.Types {
+				if k := walk(u); k != nil {
+					kept = append(kept, k)
+				}
+			}
+			if len(kept) == 0 {
+				return nil
+			}
+			return types.NewUnionType(kept...)
+		case *types.ObjectType:
+			if mt.IsCallable() || len(mt.ConstructSignatures) > 0 || mt.IsFunctionInterface {
+				return m
+			}
+			if types.IsEmptyObjectType(mt) && fn != nil {
+				return fn
+			}
+			return nil
+		case *types.TypeParameterType:
+			if fn != nil {
+				return types.NewIntersectionType(m, fn)
+			}
+			return nil
+		}
+		if (m == types.Unknown || isObjectMarker(m)) && fn != nil {
+			return fn
+		}
+		return nil
+	}
+	return walk(t)
+}
+
 // literalToType converts a literal expression to its corresponding literal type
 func (c *Checker) literalToType(expr parser.Expression) types.Type {
 	switch lit := expr.(type) {
@@ -708,6 +764,11 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 			}
 		} else {
 			narrowedType = guard.NarrowedType
+			if isTypeofFunctionMarker(narrowedType) {
+				if t := c.typeofFunctionNarrowed(c.memberRefType(guard.VariableName)); t != nil {
+					narrowedType = t
+				}
+			}
 			if narrowedType == nil {
 				debugPrintf("// [TypeNarrowing] Member expression narrowing has nil type for %s\n", guard.VariableName)
 				return nil
@@ -817,6 +878,15 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 	// Handle unknown types and union types
 	var canNarrow bool
 	var narrowedType types.Type
+
+	if isTypeofFunctionMarker(guard.NarrowedType) {
+		if t := c.typeofFunctionNarrowed(originalType); t != nil {
+			narrowedEnv := NewEnclosedEnvironment(c.env)
+			if narrowedEnv.Define(guard.VariableName, t, isConst) {
+				return narrowedEnv
+			}
+		}
+	}
 
 	_, originalIsUnion := originalType.(*types.UnionType)
 	if _, isPropMarker := guard.NarrowedType.(*types.PropertyExistenceMarker); isPropMarker && !originalIsUnion {

@@ -716,6 +716,14 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			callable.Materialize()
 			callable.CallSignatures = sigs
 			funcNodeType = callable
+		} else if slices.ContainsFunc(inter.Types, c.isUntypedCallTarget) {
+			// T & Function (typeof x === "function" on a type parameter):
+			// an untyped call.
+			for _, argNode := range node.Arguments {
+				c.visit(argNode)
+			}
+			node.SetComputedType(types.Any)
+			return
 		}
 	}
 
