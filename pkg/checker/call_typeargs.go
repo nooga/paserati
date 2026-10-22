@@ -114,7 +114,9 @@ func (c *Checker) instantiatedConstraint(tp *types.TypeParameter, solution map[*
 	for p, t := range solution {
 		byName[p.Name] = t
 	}
-	return c.substituteTypes(tp.Constraint, byName)
+	// A method of an instantiated generic reads its constraint with the
+	// type's arguments (`on<K extends keyof T & string>` of an Em<Ev>).
+	return c.substituteTypes(c.constraintOf(tp), byName)
 }
 
 // checkExplicitTypeArgConstraints reports TS2344 for each written type

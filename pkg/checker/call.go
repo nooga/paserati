@@ -3299,6 +3299,14 @@ func hasPrimitiveConstraint(constraint types.Type) bool {
 			}
 		}
 		return false
+	case *types.IntersectionType:
+		// `keyof T & string`, as tsc's maybeTypeOfKind looks into either.
+		for _, m := range t.Types {
+			if hasPrimitiveConstraint(m) {
+				return true
+			}
+		}
+		return false
 	}
 	return constraint == types.String || constraint == types.Number || constraint == types.Boolean ||
 		constraint == types.BigInt || constraint == types.Symbol

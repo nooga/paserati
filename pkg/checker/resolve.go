@@ -5787,9 +5787,20 @@ func mayMentionTypeParamNamesAt(t types.Type, names map[string]types.Type, visit
 					return true
 				}
 				// Not the signature's own type parameters' constraints and
-				// defaults: substitution keeps them, so counting them made
-				// every object reaching an instantiated ElementHandle<T>
-				// (`evaluate<R, Arg, O extends T = T>`) mention T forever.
+				// defaults deeper down: substitution keeps them, so counting
+				// them made every object reaching an instantiated
+				// ElementHandle<T> (`evaluate<R, Arg, O extends T = T>`)
+				// mention T forever. The method being substituted itself
+				// (`on<K extends keyof T & string>(name: K): K`) mentions T
+				// there: its copy carries the outer substitution its
+				// constraint is read through.
+				if depth == 0 && len(sig.TypeParameters) > 0 {
+					for _, tp := range sig.TypeParameters {
+						if tp != nil && mayMentionTypeParamNamesAt(tp.Constraint, sigNames, sigVisited, shadowed, depth+1) {
+							return true
+						}
+					}
+				}
 			}
 		}
 		for _, sig := range tt.IndexSigs() {
