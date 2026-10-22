@@ -130,6 +130,19 @@ func (r *Relation) GetPropertyType(objectType Type, propertyName string, isOptio
 		case *IntersectionType:
 			// Handle property access on intersection types
 			return r.GetPropertyTypeFromIntersection(obj, propertyName)
+		case *UnionType:
+			// A union member of an intersection ((A | B) & C, which tsc
+			// normalizes to (A & C) | (B & C)): the property exists when
+			// every member has it.
+			parts := make([]Type, 0, len(obj.Types))
+			for _, member := range obj.Types {
+				propType := r.GetPropertyType(member, propertyName, isOptionalChaining)
+				if propType == Never {
+					return Never
+				}
+				parts = append(parts, propType)
+			}
+			return NewUnionType(parts...)
 		case *InstantiatedType:
 			// Handle property access on instantiated generic types (e.g., Iterator<number>)
 			// Substitute the type parameters and recursively get the property

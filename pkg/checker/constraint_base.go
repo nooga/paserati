@@ -84,6 +84,9 @@ func (c *Checker) baseConstraint(t types.Type, depth int) types.Type {
 		}
 		return c.baseConstraint(types.NewIntersectionType(parts...), depth+1)
 	case *types.IndexedAccessType:
+		if r := c.indexedMappedConstraint(t); r != t {
+			return c.baseConstraint(r, depth+1)
+		}
 		obj := c.baseConstraint(tt.ObjectType, depth+1)
 		idx := c.baseConstraint(tt.IndexType, depth+1)
 		if obj == nil || idx == nil {

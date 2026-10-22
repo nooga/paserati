@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"github.com/nooga/paserati/pkg/errors"
+	"maps"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
@@ -2705,6 +2706,9 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				ReadonlyModifier: typ.ReadonlyModifier,
 				OptionalModifier: typ.OptionalModifier,
 			}
+			if typ.ModifiersType != nil {
+				substitutedMapped.ModifiersType = substitute(typ.ModifiersType)
+			}
 			// After substitution, expand the mapped type to a concrete ObjectType
 			expanded := c.expandMappedType(substitutedMapped)
 			if expanded == nil {
@@ -2726,6 +2730,29 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 		case *types.ConditionalType:
 			// `undefined extends T[k] ? never : k` in a return type: decided
 			// once T is inferred (zod's optionalKeys).
+			// Distributive over a naked type parameter solved to a union.
+			if tp, ok := typ.CheckType.(*types.TypeParameterType); ok {
+				if arg, found := solution[tp.Parameter]; found {
+					if arg == types.Never {
+						return types.Never
+					}
+					if union, ok := arg.(*types.UnionType); ok {
+						memberSolution := maps.Clone(solution)
+						results := make([]types.Type, 0, len(union.Types))
+						for _, member := range union.Types {
+							memberSolution[tp.Parameter] = member
+							r := c.substituteTypeParameters(&types.Signature{ReturnType: typ}, memberSolution).ReturnType
+							if r != types.Never {
+								results = append(results, c.expandConcreteMapped(r))
+							}
+						}
+						if len(results) == 0 {
+							return types.Never
+						}
+						return types.NewUnionType(results...)
+					}
+				}
+			}
 			check, ext := substitute(typ.CheckType), substitute(typ.ExtendsType)
 			trueT, falseT := substitute(typ.TrueType), substitute(typ.FalseType)
 			if resolved := c.computeConditionalType(check, ext, trueT, falseT); resolved != nil {

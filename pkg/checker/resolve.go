@@ -2194,12 +2194,17 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			newValueType = c.substituteTypesWithVisited(valueType, unshadowed, make(map[types.Type]types.Type))
 		}
 
+		var newModifiers types.Type
+		if typ.ModifiersType != nil {
+			newModifiers = c.substituteTypesWithVisited(typ.ModifiersType, substitution, visited)
+		}
 		return &types.MappedType{
 			TypeParameter:    keyName,
 			ConstraintType:   newConstraintType,
 			ValueType:        newValueType,
 			OptionalModifier: typ.OptionalModifier,
 			ReadonlyModifier: typ.ReadonlyModifier,
+			ModifiersType:    newModifiers,
 		}
 
 	case *types.KeyofType:
@@ -2227,6 +2232,9 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		}
 
 	case *types.ConditionalType:
+		if distributed, ok := c.distributeConditional(typ, substitution); ok {
+			return distributed
+		}
 		// Substitute check type and false type
 		newCheckType := c.substituteTypesWithVisited(typ.CheckType, substitution, visited)
 		newFalseType := c.substituteTypesWithVisited(typ.FalseType, substitution, visited)
@@ -2784,12 +2792,22 @@ func (c *Checker) resolveMappedTypeExpression(node *parser.MappedTypeExpression)
 		}
 	}
 
+	// `[k in K]` with K constrained to `keyof X` copies X's modifiers once
+	// K is substituted (Pick).
+	var modifiers types.Type
+	if tp, ok := constraintType.(*types.TypeParameterType); ok && tp.Parameter != nil {
+		if keyof, ok := tp.Parameter.Constraint.(*types.KeyofType); ok {
+			modifiers = keyof.OperandType
+		}
+	}
+
 	return &types.MappedType{
 		TypeParameter:    node.TypeParameter.Value,
 		ConstraintType:   mappedConstraint,
 		ValueType:        valueType,
 		ReadonlyModifier: node.ReadonlyModifier,
 		OptionalModifier: node.OptionalModifier,
+		ModifiersType:    modifiers,
 	}
 }
 
@@ -2897,6 +2915,74 @@ func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeE
 		TrueType:    trueType,
 		FalseType:   falseType,
 	}
+}
+
+// distributeConditional instantiates a distributive conditional type, one
+// whose check type is a naked type parameter, with that parameter bound to
+// a union or never: each member instantiates the conditional on its own and
+// the results are unioned (`{ w: A } | { w: B }` for W<A | B>), and never
+// gives never.
+func (c *Checker) distributeConditional(cond *types.ConditionalType, substitution map[string]types.Type) (types.Type, bool) {
+	tp, ok := cond.CheckType.(*types.TypeParameterType)
+	if !ok || tp.Parameter == nil {
+		return nil, false
+	}
+	arg, ok := substitution[tp.Parameter.Name]
+	if !ok {
+		return nil, false
+	}
+	if arg == types.Never {
+		return types.Never, true
+	}
+	union, ok := arg.(*types.UnionType)
+	if !ok {
+		return nil, false
+	}
+	results := make([]types.Type, 0, len(union.Types))
+	memberSubstitution := maps.Clone(substitution)
+	for _, member := range union.Types {
+		memberSubstitution[tp.Parameter.Name] = member
+		if r := c.substituteTypesWithVisited(cond, memberSubstitution, make(map[types.Type]types.Type)); r != types.Never {
+			results = append(results, c.expandConcreteMapped(r))
+		}
+	}
+	if len(results) == 0 {
+		return types.Never, true
+	}
+	return types.NewUnionType(results...), true
+}
+
+// indexedMappedConstraint is the constraint of a generic mapped type indexed
+// by its own keys, `{ [K in keyof T]: X }[keyof T]`: X with K bound to the
+// keys, and of a conditional X its branches (trpc's FilterKeys, `TObj[TKey]
+// extends TFilter ? TKey : never`, which satisfies `keyof TObj`), as tsc's
+// getConstraintOfIndexedAccess does.
+func (c *Checker) indexedMappedConstraint(t types.Type) types.Type {
+	ia, ok := t.(*types.IndexedAccessType)
+	if !ok {
+		return t
+	}
+	mt, ok := ia.ObjectType.(*types.MappedType)
+	if !ok || mt.ConstraintType == nil || !mt.ConstraintType.Equals(ia.IndexType) {
+		return t
+	}
+	value := c.substituteTypes(mt.ValueType, map[string]types.Type{mt.TypeParameter: ia.IndexType})
+	if cond, ok := value.(*types.ConditionalType); ok {
+		return types.NewUnionType(cond.TrueType, cond.FalseType)
+	}
+	return value
+}
+
+// expandConcreteMapped expands a mapped type whose keys are known by now
+// (Omit<IncomingMessage, 'socket'> as a union member), which member lookups
+// on a union do not do themselves.
+func (c *Checker) expandConcreteMapped(t types.Type) types.Type {
+	if mt, ok := t.(*types.MappedType); ok {
+		if expanded, ok := c.expandMappedType(mt).(*types.ObjectType); ok {
+			return expanded
+		}
+	}
+	return t
 }
 
 // computeConditionalType computes the result of a conditional type like T extends U ? X : Y
@@ -3386,6 +3472,12 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 			return types.NewObjectType() // keyof an object without members
 		}
 		return nil
+	}
+
+	if sourceObjectType == nil && mappedType.ModifiersType != nil {
+		if objType, ok := c.structuralObject(c.resolveStructural(mappedType.ModifiersType)); ok {
+			sourceObjectType = objType
+		}
 	}
 
 	// Create the expanded object type
@@ -4150,12 +4242,18 @@ func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams 
 	// Substitute in value type
 	substitutedValue := c.substituteInType(mappedType.ValueType, substitutions)
 
+	var substitutedModifiers types.Type
+	if mappedType.ModifiersType != nil {
+		substitutedModifiers = c.substituteInType(mappedType.ModifiersType, substitutions)
+	}
+
 	return &types.MappedType{
 		TypeParameter:    mappedType.TypeParameter,
 		ConstraintType:   substitutedConstraint,
 		ValueType:        substitutedValue,
 		ReadonlyModifier: mappedType.ReadonlyModifier,
 		OptionalModifier: mappedType.OptionalModifier,
+		ModifiersType:    substitutedModifiers,
 	}
 }
 

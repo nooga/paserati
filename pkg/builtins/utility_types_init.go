@@ -158,7 +158,7 @@ func (u *UtilityTypesInitializer) registerReadonlyType(ctx *TypeContext) {
 func (u *UtilityTypesInitializer) registerPickType(ctx *TypeContext) {
 	// Create type parameters T and K
 	tParam := types.NewTypeParameter("T", 0, nil)
-	kParam := types.NewTypeParameter("K", 1, nil)
+	kParam := types.NewTypeParameter("K", 1, &types.KeyofType{OperandType: &types.TypeParameterType{Parameter: tParam}})
 
 	// Create T[P] (indexed access)
 	indexedAccess := &types.IndexedAccessType{
@@ -173,6 +173,7 @@ func (u *UtilityTypesInitializer) registerPickType(ctx *TypeContext) {
 		ValueType:        indexedAccess,
 		OptionalModifier: "", // No optional modifier
 		ReadonlyModifier: "", // No readonly modifier
+		ModifiersType:    &types.TypeParameterType{Parameter: tParam},
 	}
 
 	// Create the generic type
@@ -273,6 +274,7 @@ func (u *UtilityTypesInitializer) registerOmitType(ctx *TypeContext) {
 		ValueType:        indexedAccess,
 		OptionalModifier: "", // No optional modifier
 		ReadonlyModifier: "", // No readonly modifier
+		ModifiersType:    &types.TypeParameterType{Parameter: tParam},
 	}
 
 	// Create the generic type

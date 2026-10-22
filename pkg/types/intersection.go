@@ -18,6 +18,10 @@ func (it *IntersectionType) String() string {
 		if i > 0 {
 			typesStr += " & "
 		}
+		if _, isUnion := t.(*UnionType); isUnion {
+			typesStr += "(" + t.String() + ")"
+			continue
+		}
 		typesStr += t.String()
 	}
 	return typesStr

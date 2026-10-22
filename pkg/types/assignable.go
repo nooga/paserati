@@ -2147,6 +2147,15 @@ func mentionsThisShallow(t Type) bool {
 	if isThis(t) {
 		return true
 	}
+	// An optional member's `(() => this) | undefined`.
+	if u, ok := t.(*UnionType); ok {
+		for _, m := range u.Types {
+			if _, isObj := m.(*ObjectType); isObj && mentionsThisShallow(m) {
+				return true
+			}
+		}
+		return false
+	}
 	o, ok := t.(*ObjectType)
 	if !ok {
 		return false

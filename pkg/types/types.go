@@ -166,6 +166,12 @@ type MappedType struct {
 	// Modifiers for the mapped type
 	ReadonlyModifier string // "+", "-", or "" (for readonly modifier)
 	OptionalModifier string // "+", "-", or "" (for optional modifier)
+
+	// ModifiersType is the object whose `?` and readonly the mapping copies
+	// when its keys are a type parameter constrained to `keyof X` rather
+	// than `keyof X` itself (Pick<T, K extends keyof T>): tsc's
+	// getModifiersTypeFromMappedType. Nil when the mapping has none.
+	ModifiersType Type
 }
 
 func (mt *MappedType) String() string {
