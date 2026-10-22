@@ -841,16 +841,17 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			c.recordDerived(extendedObjectType, bodyType)
 			c.keepClassBaseForAccess(bodyType, extendedObjectType)
 			rb := newThisRebind(extendedObjectType, bodyType)
-			for _, propName := range extendedObjectType.PropertyNames() {
-				propType := extendedObjectType.Props()[propName]
+			// A class base brings its own base's members too.
+			forEachEffectiveMember(extendedObjectType, func(owner *types.ObjectType, propName string) {
+				propType := owner.Props()[propName]
 				if _, own := properties[propName]; !own {
 					inheritedNames[propName] = true
 				}
 				bodyType.SetProperty(propName, c.rebindThisType(propType, rb))
-				if extendedObjectType.OptionalProps() != nil && extendedObjectType.OptionalProps()[propName] {
+				if owner.OptionalProps() != nil && owner.OptionalProps()[propName] {
 					optionalProperties[propName] = true
 				}
-			}
+			})
 		}
 	}
 
