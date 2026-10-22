@@ -1802,6 +1802,16 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		if ok && ns.Name != nil && !ns.AmbientModule {
 			c.pendingNamespaces[ns.Name.Value] = append(c.pendingNamespaces[ns.Name.Value], pendingNamespace{decl: ns, exported: exported})
 		}
+		if ok && ns.AmbientModule && ns.Name != nil && ns.Name.Value == "global" && ns.Body != nil {
+			// `awslambda.HttpResponseStream` in a type before this module's
+			// `declare global { namespace awslambda {...} }`: the global
+			// block is checked on demand.
+			for _, inner := range ns.Body.Statements {
+				if in, isNs := inner.(*parser.NamespaceDeclaration); isNs && in.Name != nil && !in.AmbientModule {
+					c.pendingNamespaces[in.Name.Value] = append(c.pendingNamespaces[in.Name.Value], pendingNamespace{decl: ns})
+				}
+			}
+		}
 	}
 	defer func() { c.pendingAliases, c.pendingAliasEnv, c.pendingNamespaces = nil, nil, nil }()
 	// Defer class method body checking until after Pass 2 (function hoisting)
