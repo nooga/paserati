@@ -18,7 +18,7 @@ Right now correctness wins over speed. The checker already knows the types, thou
 
 ### Wins
 
-- Test262 language suite: **98.6%**, built-ins: **91.8%**, TypeScript 6.0.3 conformance: **45.2%** exact / **67.1%** loose (details below)
+- Test262 language suite: **98.9%**, built-ins: **92.2%**, TypeScript 6.0.3 conformance: **65.9%** exact / **76.4%** loose (details below)
 - Runs TypeScript natively. No `tsc`, no TS-to-JS step.
 - Tail call optimization. Elite feature.
 - Shapes and inline caches give fast-ish property access without a JIT.
@@ -81,10 +81,10 @@ go test ./tests/...
 
 | Suite | Passed | Failed | Skipped | Timeouts | Pass rate |
 | :-- | --: | --: | --: | --: | --: |
-| Test262 language | 23,186/23,523 | 337 | 0 | 0 | 98.6% |
-| Test262 built-ins | 21,394/23,294 | 1,900 | 0 | 0 | 91.8% |
-| TypeScript 6.0.3 conformance (exact) | 3,223/7,127 | 2,496 | 1,408 | 0 | 45.2% |
-| TypeScript 6.0.3 conformance (loose) | 4,779/7,127 | 940 | 1,408 | 0 | 67.1% |
+| Test262 language | 23,261/23,523 | 262 | 0 | 0 | 98.9% |
+| Test262 built-ins | 21,477/23,294 | 1,817 | 0 | 0 | 92.2% |
+| TypeScript 6.0.3 conformance (exact) | 4,700/7,127 | 1,019 | 1,408 | 0 | 65.9% |
+| TypeScript 6.0.3 conformance (loose) | 5,442/7,127 | 277 | 1,408 | 0 | 76.4% |
 <!-- compliance:end -->
 
 The TypeScript numbers cover every test in TypeScript 6.0.3's `tests/cases/conformance`. A test that declares several compiler-option variants counts once per variant. A test passes `exact` when Paserati reports the same error codes on the same lines as `tsc`, with nothing missing and nothing extra. `loose` only asks that we raised some error where `tsc` raised one, so it flatters us. The runner can't do multi-file or `.tsx` tests yet, and those skips count as failures. Exact is the number to trust.
