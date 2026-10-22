@@ -246,6 +246,10 @@ func requiredParameterCount(sig *types.Signature) int {
 			}
 		}
 	}
+	// Trailing parameters that accept void may be omitted (tsc getMinArgumentCount).
+	for count > 0 && types.AcceptsVoid(sig.ParameterTypes[count-1]) {
+		count--
+	}
 
 	return count
 }

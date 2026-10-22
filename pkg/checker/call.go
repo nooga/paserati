@@ -446,6 +446,10 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 						}
 					}
 				}
+				// Trailing parameters that accept void may be omitted.
+				for minExpectedArgs > 0 && types.AcceptsVoid(constructorSig.ParameterTypes[minExpectedArgs-1]) {
+					minExpectedArgs--
+				}
 
 				if !skipArityCheck && actualArgCount < minExpectedArgs {
 					c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minExpectedArgs, actualArgCount))
@@ -512,6 +516,10 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 							break
 						}
 					}
+				}
+				// Trailing parameters that accept void may be omitted.
+				for minRequiredArgs > 0 && types.AcceptsVoid(constructorSig.ParameterTypes[minRequiredArgs-1]) {
+					minRequiredArgs--
 				}
 
 				if !skipArityCheck && actualArgCount < minRequiredArgs {
@@ -870,6 +878,10 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 				}
 			}
 		}
+		// Trailing parameters that accept void may be omitted.
+		for minExpectedArgs > 0 && types.AcceptsVoid(funcSignature.ParameterTypes[minExpectedArgs-1]) {
+			minExpectedArgs--
+		}
 
 		if !skipArityCheck && actualArgCount < minExpectedArgs {
 			c.addErrorWithCode(node, errors.TS2555, fmt.Sprintf("Expected at least %d arguments, but got %d.", minExpectedArgs, actualArgCount))
@@ -962,6 +974,10 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 					break // Stop at first required parameter from the end
 				}
 			}
+		}
+		// Trailing parameters that accept void may be omitted.
+		for minRequiredArgs > 0 && types.AcceptsVoid(funcSignature.ParameterTypes[minRequiredArgs-1]) {
+			minRequiredArgs--
 		}
 
 		if params := iifeParameters(node.Function); params != nil && len(params) == expectedArgCount {

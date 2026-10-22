@@ -3275,6 +3275,10 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 							}
 						}
 					}
+					// Trailing parameters that accept void may be omitted.
+					for minExpectedArgs > 0 && types.AcceptsVoid(constructorSig.ParameterTypes[minExpectedArgs-1]) {
+						minExpectedArgs--
+					}
 
 					if !skipArityCheck && actualArgCount < minExpectedArgs {
 						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minExpectedArgs, actualArgCount))
@@ -3349,6 +3353,10 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 								break
 							}
 						}
+					}
+					// Trailing parameters that accept void may be omitted.
+					for minRequiredArgs > 0 && types.AcceptsVoid(constructorSig.ParameterTypes[minRequiredArgs-1]) {
+						minRequiredArgs--
 					}
 
 					if !skipArityCheck && actualArgCount < minRequiredArgs {
@@ -4589,12 +4597,7 @@ func (c *Checker) reportConstructArity(node *parser.NewExpression, sig *types.Si
 		return
 	}
 	max := len(sig.ParameterTypes)
-	min := max
-	if len(sig.OptionalParams) == max {
-		for min > 0 && sig.OptionalParams[min-1] {
-			min--
-		}
-	}
+	min := requiredParameterCount(sig)
 	if actual < min || actual > max {
 		c.addErrorWithCode(node, errors.TS2554, formatArityError(min, max, actual))
 	}

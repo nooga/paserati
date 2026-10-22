@@ -1186,7 +1186,10 @@ func (r *Relation) signatureRelated(source, target *Signature, tolerateVoidSourc
 
 // acceptsVoid reports whether a parameter type admits `void` (void itself or a
 // union containing it), which makes a trailing parameter omittable.
-func acceptsVoid(t Type) bool {
+func acceptsVoid(t Type) bool { return AcceptsVoid(t) }
+
+// AcceptsVoid is the exported form of acceptsVoid.
+func AcceptsVoid(t Type) bool {
 	if t == Void {
 		return true
 	}
