@@ -106,6 +106,9 @@ func (c *Checker) settleTypeDepth(t types.Type, depth int) types.Type {
 			}
 		}
 	case *types.GenericTypeAliasForwardReference:
+		if awaitsInference(tt) {
+			return t
+		}
 		if inst := c.instantiateAliasReference(tt); inst != nil {
 			return c.settleTypeDepth(inst, depth+1)
 		}
@@ -689,6 +692,13 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				// A conditional's pattern ([infer H, ...infer T]): T takes
 				// the rest of the matched tuple (tryInferTuple).
 				restElementType = rt
+			case *types.TypeParameterType:
+				// [...T] is T (a variadic rest parameter's `...l: [...T]`).
+				if len(elementTypes) == 0 {
+					node.SetComputedType(rt)
+					return rt
+				}
+				restElementType = &types.ArrayType{ElementType: types.Any}
 			default:
 				// Variadic tuple elements (a type parameter, a generic
 				// alias) are not modelled; they widen to any[]. tsc only
@@ -2332,6 +2342,11 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		// Substitute check type and false type
 		newCheckType := c.substituteTypesWithVisited(typ.CheckType, substitution, visited)
 		newFalseType := c.substituteTypesWithVisited(typ.FalseType, substitution, visited)
+		// Its own `infer X` shadows an enclosing conditional's X being
+		// substituted (a recursive alias expanded in a true branch).
+		if shadowed := shadowOwnInfers(typ.ExtendsType, substitution); shadowed != nil {
+			substitution, visited = shadowed, make(map[types.Type]types.Type)
+		}
 
 		// For extends type, don't substitute infer types - they should remain as inference placeholders
 		newExtendsType := c.substituteTypesPreservingInferVisited(typ.ExtendsType, substitution, visited)
@@ -3168,6 +3183,11 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 	// `ZodType extends T ? unknown : ...`, decided only once T is known.
 	for _, side := range []types.Type{checkType, extendsType} {
 		if _, isParam := side.(*types.TypeParameterType); isParam {
+			return nil
+		}
+		// An enclosing conditional's `infer X` not inferred yet (a
+		// recursive alias in its true branch) is a type parameter too.
+		if _, isInfer := side.(*types.InferType); isInfer && side == checkType {
 			return nil
 		}
 		// keyof T is not known until T is, and neither is a conditional
@@ -4479,6 +4499,52 @@ func (c *Checker) substituteInferredTypes(targetType types.Type, inferences map[
 		keyed[inferKey(name)] = t
 	}
 	return c.substituteTypes(targetType, keyed)
+}
+
+// awaitsInference reports whether ref's arguments mention an enclosing
+// conditional's `infer` placeholders: a true branch's Recs<Tl, H['r'] & Acc>
+// waits for Tl and H, since expanded now its own `infer H` would capture
+// the enclosing one.
+func awaitsInference(ref *types.GenericTypeAliasForwardReference) bool {
+	var names []string
+	for _, arg := range ref.TypeArguments {
+		collectInferTypeNames(arg, &names, map[types.Type]bool{})
+		if len(names) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// shadowOwnInfers is substitution without the inferred values of the infer
+// names extendsType declares, or nil when it substitutes none of them.
+func shadowOwnInfers(extendsType types.Type, substitution map[string]types.Type) map[string]types.Type {
+	var names []string
+	for key := range substitution {
+		if strings.HasPrefix(key, "infer:") {
+			names = append(names, key)
+			break
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	names = names[:0]
+	collectInferTypeNames(extendsType, &names, map[types.Type]bool{})
+	var shadowed map[string]types.Type
+	for _, name := range names {
+		if _, ok := substitution[inferKey(name)]; !ok {
+			continue
+		}
+		if shadowed == nil {
+			shadowed = make(map[string]types.Type, len(substitution))
+			for k, v := range substitution {
+				shadowed[k] = v
+			}
+		}
+		delete(shadowed, inferKey(name))
+	}
+	return shadowed
 }
 
 // inferKey is the substitution key that replaces `infer name` (a type

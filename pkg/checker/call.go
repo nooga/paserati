@@ -1555,6 +1555,10 @@ func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, ar
 	}
 
 	if sig.RestParameterType != nil {
+		if tuple := c.restArgsTuple(sig, argTypes); tuple != nil {
+			// `...l: T`: T is the arguments' tuple (tsc's [R<1>, R<2>]).
+			return append(constraints, c.collectConstraintsFromType(sig.RestParameterType, tuple)...)
+		}
 		for i := len(sig.ParameterTypes); i < len(argTypes); i++ {
 			if argTypes[i] == nil {
 				continue
@@ -1564,6 +1568,26 @@ func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, ar
 	}
 
 	return constraints
+}
+
+// restArgsTuple is the tuple of the arguments bound to sig's rest parameter
+// when that parameter is typed by a bare type parameter and none of them is
+// a spread, else nil.
+func (c *Checker) restArgsTuple(sig *types.Signature, argTypes []types.Type) *types.TupleType {
+	if _, ok := sig.RestParameterType.(*types.TypeParameterType); !ok {
+		return nil
+	}
+	var elems []types.Type
+	for i := len(sig.ParameterTypes); i < len(argTypes); i++ {
+		if argTypes[i] == nil {
+			return nil
+		}
+		if spread, known := c.inferSpreadArgs[i]; !known || spread {
+			return nil
+		}
+		elems = append(elems, c.rel.GetWidenedType(argTypes[i]))
+	}
+	return &types.TupleType{ElementTypes: elems}
 }
 
 // collectRestArgConstraints infers from an argument bound to the rest
@@ -1981,6 +2005,10 @@ func (c *Checker) collectTypeParameterConstraints(sig *types.Signature, argTypes
 	}
 
 	if sig.RestParameterType != nil {
+		if tuple := c.restArgsTuple(sig, argTypes); tuple != nil {
+			// `...l: T`: T is the arguments' tuple (tsc's [R<1>, R<2>]).
+			return append(constraints, c.collectConstraintsFromType(sig.RestParameterType, tuple)...)
+		}
 		for i := len(sig.ParameterTypes); i < len(argTypes); i++ {
 			if argTypes[i] == nil {
 				continue
@@ -3016,6 +3044,9 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				args[i] = substitute(a)
 			}
 			ref := &types.GenericTypeAliasForwardReference{AliasName: typ.AliasName, TypeArguments: args, Scope: typ.Scope}
+			if awaitsInference(ref) {
+				return ref
+			}
 			if inst := c.instantiateAliasReference(ref); inst != nil {
 				return inst
 			}
