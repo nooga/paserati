@@ -285,6 +285,10 @@ type Checker struct {
 	// literal type only when the type parameter is a top-level return type.
 	inferTopParam types.Type
 	inferSig      *types.Signature
+	// inferMentions caches, per signature being inferred, whether a
+	// parameter-side type can mention its type parameters (tsc's
+	// couldContainTypeVariables): inference skips one that cannot.
+	inferMentions map[*types.Signature]map[types.Type]bool
 	// builtinEnv is the global environment the checker started from.
 	builtinEnv *Environment
 

@@ -1997,6 +1997,33 @@ func (c *Checker) aliasReferenceNames(ref *types.GenericTypeAliasForwardReferenc
 	return ok && t == types.Type(generic)
 }
 
+// inferMayMention reports whether t may mention a type parameter of the
+// signature being inferred; true when no signature is known.
+func (c *Checker) inferMayMention(t types.Type) bool {
+	sig := c.inferSig
+	if sig == nil || len(sig.TypeParameters) == 0 {
+		return true
+	}
+	if c.inferMentions == nil {
+		c.inferMentions = map[*types.Signature]map[types.Type]bool{}
+	}
+	cache := c.inferMentions[sig]
+	if cache == nil {
+		cache = map[types.Type]bool{}
+		c.inferMentions[sig] = cache
+	}
+	if m, ok := cache[t]; ok {
+		return m
+	}
+	names := make(map[string]types.Type, len(sig.TypeParameters))
+	for _, tp := range sig.TypeParameters {
+		names[tp.Name] = &types.TypeParameterType{Parameter: tp}
+	}
+	m, _ := c.objectMayMention(t, names)
+	cache[t] = m
+	return m
+}
+
 func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, seen map[constraintTypePair]bool) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
 	if paramType == nil || argType == nil {
@@ -2007,6 +2034,13 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		return constraints
 	}
 	seen[pair] = true
+	// Nothing to infer from a parameter type that cannot mention the
+	// signature's type parameters (tsc's couldContainTypeVariables): walking
+	// it against a large argument (fastify's request types) only
+	// materializes their instantiations.
+	if _, isObj := paramType.(*types.ObjectType); isObj && !c.inferMayMention(paramType) {
+		return constraints
+	}
 	// Recursive generics lead the walk to ever deeper instantiations
 	// (Grow<A>'s next(): Grow<Wrap<A>> against an argument's). Like tsc's
 	// isDeeplyNestedType, stop once one generic's instantiations nest several

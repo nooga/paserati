@@ -28,5 +28,14 @@ function readDerived(): number {
   return spread.a + spread.b.length;
 }
 
+type HandlerOptions<TReq> = { create?: (o: { req: TReq; info: string }) => number } & {
+  req: TReq;
+  path: string;
+};
+function handle<TReq>(opts: HandlerOptions<TReq>): number {
+  const inner = { info: "i" };
+  return opts.create?.({ ...opts, ...inner }) ?? opts.path.length;
+}
+
 const picked = pickAll<{ n: number }>({ n: 1 }, 1);
-transform({ error: "x" }) + picked.key + 1;
+transform({ error: "x" }) + picked.key + handle({ req: 1, path: "" }) + 1;

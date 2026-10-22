@@ -606,25 +606,10 @@ func (c *Checker) mergeSpread(fields map[string]types.Type, optional map[string]
 		return true
 	case *types.IntersectionType:
 		// `T & { error: unknown }` (an `in`-narrowed type parameter) is
-		// spreadable when every member is; its object members contribute
-		// their properties. FIXME: tsc's spread of a generic intersection
-		// stays generic; merging generic members here (tRPC's
-		// `{ ...opts }` of HTTPBaseHandlerOptions<TRouter, TRequest> & {...})
-		// made inference blow up, so members mentioning type parameters add
-		// nothing.
+		// spreadable when every member is, and each contributes its
+		// properties. FIXME: tsc keeps the spread of a generic intersection
+		// generic; its members' properties are merged here instead.
 		for _, member := range spreadType.Types {
-			switch m := member.(type) {
-			case *types.ObjectType:
-				if !m.IsInterface && m.DisplayName == "" && c.typeContainsTypeParameter(m) {
-					continue
-				}
-			case *types.TypeParameterType, *types.IndexedAccessType, *types.ConditionalType, *types.MappedType:
-				continue
-			default:
-				if c.typeContainsTypeParameter(member) {
-					continue
-				}
-			}
 			if !c.mergeSpread(fields, optional, c.apparentType(c.rel.GetWidenedType(member)), mayLack) {
 				return false
 			}
