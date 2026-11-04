@@ -26,6 +26,9 @@ func (c *Checker) checkTypeRefDefined(node parser.Expression) {
 	}
 	switch n := node.(type) {
 	case *parser.Identifier:
+		if n.Value == c.typeRefSelfName {
+			return
+		}
 		// Skip built-in primitive names and type parameters
 		if _, found := c.env.ResolveTypeParameter(n.Value); found {
 			return
