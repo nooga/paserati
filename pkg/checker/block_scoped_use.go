@@ -170,6 +170,10 @@ func (c *Checker) isTypeOnlyName(name string) bool {
 	switch name {
 	case "string", "number", "boolean", "symbol", "bigint", "object", "void", "never", "unknown", "any":
 		return true
+	case "null":
+		// A keyword type, not a symbol: tsc's isPrimitiveTypeName leaves it
+		// out, so an unresolved `null` name is plain TS2304.
+		return false
 	}
 	if _, ok := c.env.ResolveTypeParameter(name); ok {
 		return true
