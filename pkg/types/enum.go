@@ -56,10 +56,8 @@ func (e *EnumType) UnionOfMembers() Type {
 
 // String returns the string representation of the enum type
 func (e *EnumType) String() string {
-	if e.IsConst {
-		return fmt.Sprintf("const enum %s", e.Name)
-	}
-	return fmt.Sprintf("enum %s", e.Name)
+	// The enum object, as tsc prints it.
+	return fmt.Sprintf("typeof %s", e.Name)
 }
 
 // TypeString returns the type string representation

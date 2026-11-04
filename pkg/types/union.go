@@ -24,14 +24,54 @@ func (ut *UnionType) String() string {
 		return ut.Origin.String()
 	}
 	members := displayUnionMembers(ut.Types)
+	// A union holding every member of an enum prints as the enum, as tsc's
+	// formatUnionTypes folds it.
+	var whole map[*EnumType]bool
+	for _, t := range members {
+		if em, ok := t.(*EnumMemberType); ok && em.Parent != nil && len(em.Parent.Members) > 1 && whole[em.Parent] == false {
+			if whole == nil {
+				whole = make(map[*EnumType]bool)
+			}
+			whole[em.Parent] = enumFullyPresent(em.Parent, members)
+		}
+	}
 	var b strings.Builder
-	for i, t := range members {
-		if i > 0 {
+	printed := map[*EnumType]bool{}
+	first := true
+	for _, t := range members {
+		text := ""
+		if em, ok := t.(*EnumMemberType); ok && em.Parent != nil && whole[em.Parent] {
+			if printed[em.Parent] {
+				continue
+			}
+			printed[em.Parent] = true
+			text = em.EnumName
+		} else {
+			text = unionMemberString(t)
+		}
+		if !first {
 			b.WriteString(" | ")
 		}
-		b.WriteString(unionMemberString(t))
+		first = false
+		b.WriteString(text)
 	}
 	return b.String()
+}
+
+// enumFullyPresent reports whether every member of e is among members.
+func enumFullyPresent(e *EnumType, members []Type) bool {
+	present := make(map[string]bool, len(e.Members))
+	for _, t := range members {
+		if em, ok := t.(*EnumMemberType); ok && em.Parent == e {
+			present[em.MemberName] = true
+		}
+	}
+	for name := range e.Members {
+		if !present[name] {
+			return false
+		}
+	}
+	return true
 }
 
 // intrinsicOrder ranks the intrinsic types tsc creates first, in creation
