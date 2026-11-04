@@ -1579,7 +1579,12 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 	// Visit the iterable first to determine its type
 	if node.Iterable != nil {
 		endTDZ := c.beginLoopHeadTDZ(node.Variable)
-		c.visit(node.Iterable)
+		// tsc checks the iterable through the head's declaration
+		// (checkRightHandSideOfForOf), so with an empty declaration list
+		// (`for (var of X)`, TS1123) it is never checked.
+		if vs, ok := node.Variable.(*parser.VarStatement); !ok || vs.Name != nil || len(vs.Declarations) > 0 {
+			c.visit(node.Iterable)
+		}
 		endTDZ()
 		iterableType := node.Iterable.GetComputedType()
 		if iterableType == nil {

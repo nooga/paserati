@@ -769,7 +769,11 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		typeParam := typeParams[i]
 
 		if param.Constraint != nil {
+			// The class itself is in scope in its type parameters'
+			// constraints (`class C<T extends C<T>>`).
+			c.typeRefSelfName = node.Name.Value
 			c.checkTypeRefDefined(param.Constraint)
+			c.typeRefSelfName = ""
 			if constraintType := c.resolveTypeAnnotation(param.Constraint); constraintType != nil {
 				typeParam.Constraint = constraintType
 			}

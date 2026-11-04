@@ -404,6 +404,10 @@ type Checker struct {
 	// last, for tsc's "Did you mean the static/instance member" hints.
 	memberFrames []classMemberFrame
 
+	// typeRefSelfName is the generic class whose type parameter constraints
+	// checkTypeRefDefined is checking: its own name is in scope there.
+	typeRefSelfName string
+
 	// Set by the namespace pre-pass: the nested namespace declaration about to
 	// be checked is exported.
 	nsDeclExported bool
@@ -1749,12 +1753,29 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.programHoistedNames[name] = true
 	}
 	for _, stmt := range program.Statements {
-		// `declare var x: T` is ambient, so it exists from the start too.
-		if v, ok := stmt.(*parser.VarStatement); ok && v.Declare {
-			for _, d := range v.Declarations {
-				if d != nil && d.Name != nil {
-					c.programHoistedNames[d.Name.Value] = true
-				}
+		if e, ok := stmt.(*parser.ExportNamedDeclaration); ok && e != nil && e.Declaration != nil {
+			stmt = e.Declaration
+		}
+		// `declare var/let/const x: T` is ambient, so it exists from the
+		// start too.
+		var decls []*parser.VarDeclarator
+		switch v := stmt.(type) {
+		case *parser.VarStatement:
+			if v.Declare {
+				decls = v.Declarations
+			}
+		case *parser.LetStatement:
+			if v.Declare {
+				decls = v.Declarations
+			}
+		case *parser.ConstStatement:
+			if v.Declare {
+				decls = v.Declarations
+			}
+		}
+		for _, d := range decls {
+			if d != nil && d.Name != nil {
+				c.programHoistedNames[d.Name.Value] = true
 			}
 		}
 	}
