@@ -2197,6 +2197,11 @@ func (c *Checker) checkWithStatement(node *parser.WithStatement) {
 	if node == nil {
 		return
 	}
+	// tsc does not model `with` scoping and says so, unless the file already
+	// has parse errors. Paserati does model it, so this is tsc-mode only.
+	if c.tscCompat && (c.program == nil || !c.program.HasParseDiagnostics) {
+		c.addErrorWithCode(node, "TS2410", "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.")
+	}
 
 	// Check the expression (object to extend scope with)
 	var withObj WithObject

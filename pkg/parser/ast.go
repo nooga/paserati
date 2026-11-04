@@ -86,6 +86,10 @@ type Program struct {
 	// error-recovered partial one, fit for type checking (tsc checks such
 	// files too) but not for code generation.
 	HasParseErrors bool
+	// HasParseDiagnostics is tsc's hasParseDiagnostics: a parse error proper,
+	// not one of the grammar or binder diagnostics tsc reports from its
+	// checker or binder (which the parser here reports early).
+	HasParseDiagnostics bool
 }
 
 func (p *Program) TokenLiteral() string {
