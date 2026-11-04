@@ -27,7 +27,11 @@ type blockScopedInfo struct {
 	kind         blockScopedKind
 	fnDepth      int // functionNestingDepth where the name is declared
 	initializing bool
-	constInit    parser.Expression // initializer of a `const`, for constant evaluation (enum members)
+	// inPattern is set while the let/const destructuring declaration that
+	// binds the name is checked: a use of it there that is not bound yet
+	// (a later element, or the element's own default) precedes it.
+	inPattern bool
+	constInit parser.Expression // initializer of a `const`, for constant evaluation (enum members)
 }
 
 // declareBlockScoped records where a let/const/class name is declared.
@@ -75,6 +79,14 @@ func (c *Checker) blockScopedInfoFor(name string) *blockScopedInfo {
 func (c *Checker) preRegisterBlockScoped(stmts []parser.Statement) {
 	for _, s := range stmts {
 		switch n := s.(type) {
+		case *parser.DeclarationGroup:
+			if n != nil {
+				c.preRegisterBlockScoped(n.Declarations)
+			}
+		case *parser.ObjectDestructuringDeclaration, *parser.ArrayDestructuringDeclaration:
+			for _, id := range blockScopedPatternNames(n) {
+				c.declareBlockScoped(c.env, id.Value, id.Token, bsVariable)
+			}
 		case *parser.LetStatement:
 			if !n.Declare {
 				for _, d := range n.Declarations {
@@ -132,7 +144,7 @@ func (c *Checker) reportUnresolvedOrTDZ(node *parser.Identifier) {
 		if c.functionNestingDepth > info.fnDepth || c.deferredContextDepth > 0 {
 			return // used inside a function that runs later: the declaration will be there
 		}
-		if node.Token.StartPos < info.pos || info.initializing {
+		if node.Token.StartPos < info.pos || info.initializing || info.inPattern {
 			c.reportBlockScopedUse(node, info)
 			return
 		}
@@ -309,4 +321,58 @@ func (c *Checker) checkNamespaceUsedAsValue(node *parser.Identifier, valueType t
 	}
 	c.addErrorWithCode(node, "TS2708", fmt.Sprintf("Cannot use namespace '%s' as a value.", node.Value))
 	return valueType
+}
+
+// blockScopedPatternNames lists the identifiers a let/const destructuring
+// declaration binds directly (nested patterns are not followed).
+func blockScopedPatternNames(stmt parser.Statement) []*parser.Identifier {
+	var ids []*parser.Identifier
+	add := func(e parser.Expression) {
+		if id, ok := e.(*parser.Identifier); ok && id.Token != nil {
+			ids = append(ids, id)
+		}
+	}
+	switch n := stmt.(type) {
+	case *parser.ObjectDestructuringDeclaration:
+		if n == nil || n.Token == nil || (n.Token.Literal != "let" && n.Token.Literal != "const") {
+			return nil
+		}
+		for _, p := range n.Properties {
+			if p != nil {
+				add(p.Target)
+			}
+		}
+		if n.RestProperty != nil {
+			add(n.RestProperty.Target)
+		}
+	case *parser.ArrayDestructuringDeclaration:
+		if n == nil || n.Token == nil || (n.Token.Literal != "let" && n.Token.Literal != "const") {
+			return nil
+		}
+		for _, e := range n.Elements {
+			if e != nil {
+				add(e.Target)
+			}
+		}
+	}
+	return ids
+}
+
+// beginPatternTDZ marks the names a let/const destructuring declaration binds
+// as being checked; the returned func ends it.
+func (c *Checker) beginPatternTDZ(stmt parser.Statement) func() {
+	var infos []*blockScopedInfo
+	if m := c.blockScoped[c.env]; m != nil {
+		for _, id := range blockScopedPatternNames(stmt) {
+			if info := m[id.Value]; info != nil && info.pos == id.Token.StartPos && !info.inPattern {
+				info.inPattern = true
+				infos = append(infos, info)
+			}
+		}
+	}
+	return func() {
+		for _, info := range infos {
+			info.inPattern = false
+		}
+	}
 }

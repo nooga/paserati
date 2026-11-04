@@ -3474,10 +3474,14 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 	case *parser.ArrayDestructuringDeclaration:
+		end := c.beginPatternTDZ(node)
 		c.checkArrayDestructuringDeclaration(node)
+		end()
 
 	case *parser.ObjectDestructuringDeclaration:
+		end := c.beginPatternTDZ(node)
 		c.checkObjectDestructuringDeclaration(node)
+		end()
 
 	case *parser.DeclarationGroup:
 		// A single let/const/var clause mixing plain bindings with destructuring
