@@ -1964,12 +1964,8 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 
 		// Validate that the object type is enumerable
 		// In JavaScript/TypeScript, most object types are enumerable
-		switch objectType {
-		case types.Null, types.Undefined:
-			c.addError(node.Object, fmt.Sprintf("cannot iterate over '%s'", objectType.String()))
-		default:
-			// Most types are enumerable in for...in (objects, arrays, etc.)
-			// Even primitives like numbers and strings are allowed (though they may have no enumerable properties)
+		if bad, shown := c.forInRightHandSideInvalid(objectType); bad {
+			c.addErrorWithCode(node.Object, errors.TS2407, fmt.Sprintf("The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type '%s'.", shown.String()))
 		}
 
 		// Handle the variable declaration/assignment
@@ -2036,6 +2032,61 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 	// Restore the outer environment
 	c.env = originalEnv
 	debugPrintf("// [Checker ForInStmt] Restored outer scope %p (from %p)\n", originalEnv, loopEnv)
+}
+
+// forInRightHandSideInvalid is tsc's checkForInStatement rule: once null and
+// undefined are removed (getNonNullableTypeIfNeeded), the object of a for-in
+// must be any, a type parameter or assignable to object. It also returns the
+// type the diagnostic shows.
+func (c *Checker) forInRightHandSideInvalid(t types.Type) (bool, types.Type) {
+	if t == nil {
+		return false, nil
+	}
+	if c.strictNullChecks {
+		switch t {
+		case types.Null, types.Undefined:
+			t = types.Never
+		default:
+			if u, ok := t.(*types.UnionType); ok {
+				var kept []types.Type
+				for _, m := range u.Types {
+					if m != types.Null && m != types.Undefined {
+						kept = append(kept, m)
+					}
+				}
+				if len(kept) != len(u.Types) {
+					t = types.NewUnionType(kept...)
+				}
+			}
+		}
+	} else if t == types.Null || t == types.Undefined {
+		return false, nil // assignable to object without strictNullChecks
+	}
+	switch tt := t.(type) {
+	case *types.TypeParameterType:
+		return false, nil
+	case *types.EnumMemberType:
+		return true, t
+	case *types.Primitive:
+		switch tt {
+		case types.Any:
+			return false, nil
+		case types.Never, types.Unknown:
+			return true, t
+		}
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if m == types.Any {
+				return false, nil // the union is any
+			}
+		}
+		for _, m := range tt.Types {
+			if _, isEnumMember := m.(*types.EnumMemberType); isEnumMember {
+				return true, t
+			}
+		}
+	}
+	return !c.rel.IsAssignable(t, types.NonPrimitive), t
 }
 
 // extractConstantPropertyName tries to extract a constant property name from a computed property expression
