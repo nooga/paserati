@@ -4854,7 +4854,7 @@ func (c *Checker) checkConstructorVisibility(node *parser.NewExpression, ctor ty
 	if !ok || obj.ClassMeta == nil || !obj.ClassMeta.IsClassConstructor || obj.ClassMeta.ConstructorAccess == types.AccessPublic {
 		return
 	}
-	name := obj.ClassMeta.ClassName
+	name := obj.ClassMeta.DisplayName()
 	var instance *types.ObjectType
 	if sigs := obj.ConstructSigs(); len(sigs) > 0 {
 		instance, _ = sigs[0].ReturnType.(*types.ObjectType)

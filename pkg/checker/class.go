@@ -899,6 +899,18 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 			instanceType.GenericArgs = append(instanceType.GenericArgs, &types.TypeParameterType{Parameter: tp})
 		}
 	}
+	if len(typeParams) > 0 {
+		names := make([]string, len(typeParams))
+		for i, tp := range typeParams {
+			names[i] = tp.Name
+		}
+		text := node.Name.Value + "<" + strings.Join(names, ", ") + ">"
+		for _, meta := range []*types.ClassMetadata{instanceType.ClassMeta, constructorType.ClassMeta} {
+			if meta != nil {
+				meta.DisplayText = text
+			}
+		}
+	}
 	constructorType.DisplayName = "typeof " + node.Name.Value
 	c.inheritStaticMembers(constructorType, instanceType)
 
