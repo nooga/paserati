@@ -2157,9 +2157,17 @@ func (c *Checker) checkWithStatement(node *parser.WithStatement) {
 		c.env.PushWithObject(withObj)
 	}
 
-	// Check the body with the with object in scope
+	// tsc does not check a with body: every name in it may come from the
+	// object, so it reports TS2410 instead. Paserati runs with statements,
+	// so only the tsc-compatible mode does that; the body is still visited
+	// for its types, with its diagnostics discarded.
 	if node.Body != nil {
-		c.visit(node.Body)
+		if c.tscCompat {
+			c.addErrorWithCode(node, errors.TS2410, "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.")
+			c.speculate(func() { c.visit(node.Body) })
+		} else {
+			c.visit(node.Body)
+		}
 	}
 
 	// Pop the with object when done

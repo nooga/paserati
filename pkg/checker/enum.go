@@ -124,7 +124,10 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 				check := func() {
 					savedEnv := c.env
 					c.env = memberEnv
+					savedThis, savedInEnum := c.currentThisType, c.inEnumInitializer
+					c.currentThisType, c.inEnumInitializer = nil, true
 					c.visit(initializer)
+					c.currentThisType, c.inEnumInitializer = savedThis, savedInEnum
 					c.env = savedEnv
 					if isConstEnum {
 						c.addErrorWithCode(initializer, "TS2474", "const enum member initializers must be constant expressions.")
