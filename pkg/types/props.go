@@ -25,8 +25,10 @@ type GetMethodType func(objectType string, methodName string) Type
 func (r *Relation) GetPropertyType(objectType Type, propertyName string, isOptionalChaining bool) Type {
 	// Widen the object type for checks
 	widenedObjectType := r.GetWidenedType(objectType)
-	propsDebugPrintf("GetPropertyType: objectType=%T (%s), propertyName=%s, widened=%T (%s)\n",
-		objectType, objectType.String(), propertyName, widenedObjectType, widenedObjectType.String())
+	if propsDebug {
+		propsDebugPrintf("GetPropertyType: objectType=%T (%s), propertyName=%s, widened=%T (%s)\n",
+			objectType, objectType.String(), propertyName, widenedObjectType, widenedObjectType.String())
+	}
 
 	if widenedObjectType == Any {
 		return Any // Property access on 'any' results in 'any'
