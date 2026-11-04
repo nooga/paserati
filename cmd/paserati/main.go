@@ -358,7 +358,7 @@ func runCheck(files []string, nodeModules bool) int {
 // unsupportedOptions are compiler options that make tsc report errors
 // Paserati does not check for yet.
 var unsupportedOptions = []string{
-	"noUncheckedIndexedAccess", "exactOptionalPropertyTypes", "noPropertyAccessFromIndexSignature",
+	"noUncheckedIndexedAccess", "exactOptionalPropertyTypes",
 	"noUnusedLocals", "noUnusedParameters", "noImplicitReturns", "noFallthroughCasesInSwitch",
 }
 
@@ -379,6 +379,7 @@ func projectCheckOptions(cfg *tsconfig.Config) driver.CheckOptions {
 	opts.NoImplicitOverride, _ = cfg.Bool("noImplicitOverride")
 	opts.AllowUnreachableCode, _ = cfg.Bool("allowUnreachableCode")
 	opts.ExperimentalDecorators, _ = cfg.Bool("experimentalDecorators")
+	opts.NoPropertyAccessFromIndexSignature, _ = cfg.Bool("noPropertyAccessFromIndexSignature")
 	opts.SkipLibCheck, _ = cfg.Bool("skipLibCheck")
 	opts.Module, _ = cfg.String("module")
 	if v, set := cfg.Bool("useDefineForClassFields"); set {

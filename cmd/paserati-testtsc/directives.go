@@ -423,7 +423,7 @@ var supportedOptions = map[string]bool{
 	"strict": true, "strictnullchecks": true, "strictpropertyinitialization": true,
 	"alwaysstrict": true, "strictfunctiontypes": true, "strictbindcallapply": true,
 	"noimplicitany": true, "noimplicitthis": true, "useunknownincatchvariables": true,
-	"noimplicitoverride": true, "allowunreachablecode": true,
+	"noimplicitoverride": true, "allowunreachablecode": true, "nopropertyaccessfromindexsignature": true,
 	"experimentaldecorators": true, "usedefineforclassfields": true,
 	"target": true, "module": true,
 }
@@ -435,8 +435,7 @@ var unmodeledOptions = map[string]bool{
 	"noimplicitreturns":           true,
 	"strictbuiltiniteratorreturn": true,
 	"exactoptionalpropertytypes":  true, "nouncheckedindexedaccess": true,
-	"nopropertyaccessfromindexsignature": true,
-	"nolib":                              true, "lib": true, "moduleresolution": true,
+	"nolib": true, "lib": true, "moduleresolution": true,
 	"moduledetection": true, "jsx": true, "jsxfactory": true, "jsxfragmentfactory": true,
 	"jsximportsource": true, "reactnamespace": true, "emitdecoratormetadata": true,
 	"allowjs": true, "checkjs": true, "maxnodemodulejsdepth": true,

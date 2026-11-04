@@ -629,6 +629,9 @@ type Checker struct {
 	// useUnknownInCatchVariables mirrors --useUnknownInCatchVariables: an
 	// unannotated catch variable is unknown instead of any.
 	useUnknownInCatchVariables bool
+	// noPropertyAccessFromIndexSignature: see
+	// SetNoPropertyAccessFromIndexSignature.
+	noPropertyAccessFromIndexSignature bool
 	// contextualThisBodies: see hasContextualThis.
 	contextualThisBodies  map[parser.Node]bool
 	contextualThisProgram *parser.Program
@@ -4575,6 +4578,7 @@ func (c *Checker) visit(node parser.Node) {
 	// --- NEW: Member Expression Type Checking ---
 	case *parser.MemberExpression:
 		c.checkMemberExpression(node)
+		c.checkPropertyAccessFromIndexSignature(node.Object, node.Property)
 		// `this` in the member's declared type is the receiver's type.
 		if t := node.GetComputedType(); t != nil && node.Object != nil {
 			if recv, ok := node.Object.GetComputedType().(*types.ObjectType); ok && recv.ClassMeta != nil && recv.ClassMeta.IsClassInstance &&
@@ -4594,6 +4598,7 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.OptionalChainingExpression:
 		c.checkOptionalChainingExpression(node)
+		c.checkPropertyAccessFromIndexSignature(node.Object, node.Property)
 
 	case *parser.OptionalIndexExpression:
 		c.checkOptionalIndexExpression(node)

@@ -226,6 +226,8 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	pas.SetNoImplicitAny(opts.strictFamily("noimplicitany"))
 	pas.SetNoImplicitThis(opts.strictFamily("noimplicitthis"))
 	pas.SetUseUnknownInCatchVariables(opts.strictFamily("useunknownincatchvariables"))
+	noPropIndex, _ := opts.boolOpt("nopropertyaccessfromindexsignature")
+	pas.SetNoPropertyAccessFromIndexSignature(noPropIndex)
 	pas.SetTopLevelAwaitDisallowed(topLevelAwaitDisallowed(opts))
 	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(opts))
 	pas.SetTscCompatibleDiagnostics(true)

@@ -54,3 +54,25 @@ func TestCheckFilesStrictFamilyDefaults(t *testing.T) {
 		t.Errorf("strict off: diagnostics = %q, want none", got)
 	}
 }
+
+// noPropertyAccessFromIndexSignature: a property only an index signature
+// provides must be read with brackets (TS4111); declared properties, Object's
+// members and Paserati's permissive Error signature are exempt.
+func TestCheckFilesNoPropertyAccessFromIndexSignature(t *testing.T) {
+	src := "declare const r: { [k: string]: string; foo: string };\n" +
+		"r.foo; r['bar']; r.toString(); r.constructor;\n" +
+		"r.bar;\n" +
+		"declare const u: { [k: string]: number } | undefined;\n" +
+		"u?.baz;\n" +
+		"declare const e: Error;\n" +
+		"e.message;\n" +
+		"export {};\n"
+	opts := DefaultCheckOptions()
+	opts.NoPropertyAccessFromIndexSignature = true
+	if got, want := checkSource(t, src, opts), "3 TS4111, 5 TS4111"; got != want {
+		t.Errorf("diagnostics = %q, want %q", got, want)
+	}
+	if got := checkSource(t, src, DefaultCheckOptions()); got != "" {
+		t.Errorf("option off: diagnostics = %q, want none", got)
+	}
+}
