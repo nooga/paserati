@@ -324,6 +324,9 @@ func (c *Checker) checkNestedArrayTarget(arrayTarget *parser.ArrayLiteral, expec
 
 // checkNestedObjectTarget handles type checking for nested object destructuring targets
 func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, expectedType types.Type, context interface{}) {
+	// A mapped type (Pick<T, K>), an intersection or an alias instance is
+	// destructured through its resolved members, as at the top level.
+	expectedType = c.destructurableObject(expectedType)
 	// Validate that expectedType is object-like
 	widenedType := c.rel.GetWidenedType(expectedType)
 
@@ -544,6 +547,9 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 
 // checkNestedObjectTargetForDeclaration handles type checking for nested object destructuring in declarations
 func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.ObjectLiteral, expectedType types.Type, isConst bool, isVar bool) {
+	// A mapped type (Pick<T, K>), an intersection or an alias instance is
+	// destructured through its resolved members, as at the top level.
+	expectedType = c.destructurableObject(expectedType)
 	// Validate that expectedType is object-like
 	widenedType := c.rel.GetWidenedType(expectedType)
 
@@ -678,6 +684,9 @@ func (c *Checker) checkNestedArrayParameterPattern(pattern *parser.ArrayParamete
 
 // checkNestedObjectParameterPattern handles type checking for nested object parameter patterns
 func (c *Checker) checkNestedObjectParameterPattern(pattern *parser.ObjectParameterPattern, expectedType types.Type, context interface{}) {
+	// A mapped type (Pick<T, K>), an intersection or an alias instance is
+	// destructured through its resolved members, as at the top level.
+	expectedType = c.destructurableObject(expectedType)
 	// ObjectParameterPattern has Properties field with DestructuringProperty items
 	widenedType := c.rel.GetWidenedType(expectedType)
 
@@ -746,6 +755,9 @@ func (c *Checker) checkNestedArrayParameterPatternForDeclaration(pattern *parser
 
 // checkNestedObjectParameterPatternForDeclaration handles type checking for nested object parameter patterns in declarations
 func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parser.ObjectParameterPattern, expectedType types.Type, isConst bool, isVar bool) {
+	// A mapped type (Pick<T, K>), an intersection or an alias instance is
+	// destructured through its resolved members, as at the top level.
+	expectedType = c.destructurableObject(expectedType)
 	widenedType := c.rel.GetWidenedType(expectedType)
 
 	if widenedType != types.Any {
