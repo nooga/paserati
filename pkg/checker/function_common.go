@@ -911,6 +911,104 @@ func dropThisParam(sig *types.Signature, params []*parser.Parameter) {
 type implicitAnyParam struct {
 	name *parser.Identifier
 	rest bool
+	// bindings are the binding elements of a destructuring parameter that
+	// get no type from the pattern or its initializer (TS7031).
+	bindings []*parser.Identifier
+}
+
+// implicitAnyBindingElements lists the binding elements of an unannotated
+// destructuring parameter whose type falls back to any, as tsc's
+// getTypeFromBindingElement (no initializer, no type, so any) and
+// padTupleType (an array literal initializer shorter than the pattern) do.
+// paramPattern is the destructuring pattern a parameter was written with,
+// before or after the parser lowered it, or nil.
+func paramPattern(param *parser.Parameter) parser.Expression {
+	if param == nil {
+		return nil
+	}
+	if param.Pattern != nil {
+		return param.Pattern
+	}
+	return param.SourcePattern
+}
+
+func implicitAnyBindingElements(pattern, init parser.Expression) []*parser.Identifier {
+	var out []*parser.Identifier
+	var walk func(target parser.Expression)
+	walk = func(target parser.Expression) {
+		switch p := target.(type) {
+		case *parser.Identifier:
+			out = append(out, p)
+		case *parser.ArrayParameterPattern:
+			for _, e := range p.Elements {
+				if e != nil && e.Target != nil && e.Default == nil {
+					walk(e.Target)
+				}
+			}
+		case *parser.ObjectParameterPattern:
+			for _, prop := range p.Properties {
+				if prop == nil || prop.Default != nil {
+					continue
+				}
+				if prop.Target != nil {
+					walk(prop.Target)
+				} else {
+					walk(prop.Key)
+				}
+			}
+		// Nested patterns are kept as literals: a default is an
+		// AssignmentExpression, an object rest has a SpreadElement key.
+		case *parser.ArrayLiteral:
+			for i, el := range p.Elements {
+				if i < len(p.Elisions) && p.Elisions[i] {
+					continue
+				}
+				switch e := el.(type) {
+				case *parser.SpreadElement:
+					walk(e.Argument)
+				case *parser.AssignmentExpression:
+				default:
+					walk(e)
+				}
+			}
+		case *parser.ObjectLiteral:
+			for _, prop := range p.Properties {
+				if prop == nil {
+					continue
+				}
+				if _, rest := prop.Key.(*parser.SpreadElement); rest {
+					continue
+				}
+				if _, hasDefault := prop.Value.(*parser.AssignmentExpression); !hasDefault {
+					walk(prop.Value)
+				}
+			}
+		}
+	}
+	if init == nil {
+		walk(pattern)
+		return out
+	}
+	arr, ok := pattern.(*parser.ArrayParameterPattern)
+	lit, isLit := init.(*parser.ArrayLiteral)
+	if !ok || !isLit {
+		return nil
+	}
+	for _, el := range lit.Elements {
+		if _, spread := el.(*parser.SpreadElement); spread {
+			return nil
+		}
+	}
+	for i := len(lit.Elements); i < len(arr.Elements); i++ {
+		e := arr.Elements[i]
+		if e == nil || e.Target == nil || e.Default != nil || (e.IsRest && i == len(arr.Elements)-1) {
+			continue
+		}
+		if id, isIdent := e.Target.(*parser.Identifier); isIdent {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // noteImplicitAnyParameters records the parameters of a function being checked
@@ -926,6 +1024,16 @@ func (c *Checker) noteImplicitAnyParameters(ctx *FunctionCheckContext) {
 		c.implicitAnyParams = make(map[parser.Node]implicitAnyParam)
 	}
 	for i, param := range ctx.Parameters {
+		if pattern := paramPattern(param); pattern != nil && param.TypeAnnotation == nil {
+			if (i < len(ctx.ContextualParameterTypes) && ctx.ContextualParameterTypes[i] != nil) || c.contextualParams[param] {
+				delete(c.implicitAnyParams, param)
+				continue
+			}
+			if bindings := implicitAnyBindingElements(pattern, param.DefaultValue); len(bindings) > 0 {
+				c.implicitAnyParams[param] = implicitAnyParam{bindings: bindings}
+			}
+			continue
+		}
 		if param == nil || param.IsThis || param.Name == nil || param.TypeAnnotation != nil || param.DefaultValue != nil ||
 			param.Pattern != nil || param.IsDestructuring || strings.HasPrefix(param.Name.Value, "__destructured_param_") {
 			continue
@@ -950,13 +1058,21 @@ func (c *Checker) noteImplicitAnyParameters(ctx *FunctionCheckContext) {
 func (c *Checker) reportImplicitAnyParameters() {
 	pending := make([]implicitAnyParam, 0, len(c.implicitAnyParams))
 	for _, p := range c.implicitAnyParams {
+		if p.bindings != nil {
+			for _, b := range p.bindings {
+				pending = append(pending, implicitAnyParam{name: b, bindings: []*parser.Identifier{b}})
+			}
+			continue
+		}
 		pending = append(pending, p)
 	}
 	sort.Slice(pending, func(i, j int) bool {
 		return parser.GetTokenFromNode(pending[i].name).StartPos < parser.GetTokenFromNode(pending[j].name).StartPos
 	})
 	for _, p := range pending {
-		if p.rest {
+		if p.bindings != nil {
+			c.addErrorWithCode(p.name, errors.TS7031, fmt.Sprintf("Binding element '%s' implicitly has an 'any' type.", p.name.Value))
+		} else if p.rest {
 			c.addErrorWithCode(p.name, errors.TS7019, fmt.Sprintf("Rest parameter '%s' implicitly has an 'any[]' type.", p.name.Value))
 		} else {
 			c.addErrorWithCode(p.name, errors.TS7006, fmt.Sprintf("Parameter '%s' implicitly has an 'any' type.", p.name.Value))
