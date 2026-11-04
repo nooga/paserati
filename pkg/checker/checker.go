@@ -613,6 +613,11 @@ type Checker struct {
 	// a function whose this is any only for want of any context (TS2683).
 	noImplicitThis  bool
 	implicitAnyThis bool
+	// computedKeyOwnTypeParams are the type parameters of the class whose
+	// body is being checked; forbiddenTypeParams those of the class whose
+	// member key is being checked (TS2467).
+	computedKeyOwnTypeParams []*types.TypeParameter
+	forbiddenTypeParams      []*types.TypeParameter
 	// inEnumInitializer: an enum member initializer is being checked, whose
 	// `this` (outside any nested function) is TS2332.
 	inEnumInitializer bool
@@ -736,8 +741,11 @@ type Checker struct {
 }
 
 type deferredComputedKeyCheck struct {
-	expr parser.Expression
-	env  *Environment
+	// ownTypeParams are the type parameters of the class whose member key
+	// this is, which the key may not reference (TS2467).
+	ownTypeParams []*types.TypeParameter
+	expr          parser.Expression
+	env           *Environment
 	// classCtx sees the private names of the class whose member key this
 	// is, and of the classes around it.
 	classCtx *types.AccessContext
@@ -2626,7 +2634,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			if check.typeContext {
 				c.deferredContextDepth++
 			}
+			c.forbiddenTypeParams = check.ownTypeParams
 			c.visit(check.expr)
+			c.forbiddenTypeParams = nil
 			if check.typeContext {
 				c.deferredContextDepth--
 			}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 var typeParameterListType = reflect.TypeOf([]*parser.TypeParameter(nil))
@@ -98,4 +99,13 @@ func (c *Checker) reportCircularConstraints(params []*parser.TypeParameter) {
 			c.addErrorWithCode(p.Constraint, errors.TS2313, fmt.Sprintf("Type parameter '%s' has a circular constraint.", p.Name.Value))
 		}
 	}
+}
+
+// withComputedKeyOwnTypeParams runs fn, which checks a class body, with the
+// class's own type parameters recorded for its member keys (TS2467).
+func (c *Checker) withComputedKeyOwnTypeParams(params []*types.TypeParameter, fn func() *types.ObjectType) *types.ObjectType {
+	saved := c.computedKeyOwnTypeParams
+	c.computedKeyOwnTypeParams = params
+	defer func() { c.computedKeyOwnTypeParams = saved }()
+	return fn()
 }

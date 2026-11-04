@@ -432,6 +432,14 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 		// --- NEW: Check if this is a type parameter first ---
 		if typeParam, found := c.env.ResolveTypeParameter(node.Value); found {
 			debugPrintf("// [Checker resolveTypeAnno Ident] Resolved '%s' as type parameter\n", node.Value)
+			for _, own := range c.forbiddenTypeParams {
+				if own == typeParam {
+					// tsc's resolveName: a class's member key is outside the
+					// scope of the class's type parameters.
+					c.addErrorWithCode(node, errors.TS2467, "A computed property name cannot reference a type parameter from its containing type.")
+					return types.Any
+				}
+			}
 			return &types.TypeParameterType{Parameter: typeParam}
 		}
 
