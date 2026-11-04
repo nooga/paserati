@@ -45,6 +45,24 @@ func (p *Parser) redeclarationError(n scopedName) {
 	}
 }
 
+// varShadowError is redeclarationError for a `var` that hoists out of the
+// scope of a let/const of the same name. tsc's binder keeps the two apart
+// (different scopes); its checker reports TS2481 at the var
+// (checkVarDeclaredNamesNotShadowed), unless the binder already reported the
+// clash (finishBinding relabels those first).
+func (p *Parser) varShadowError(v scopedName) {
+	before := len(p.errors)
+	p.redeclarationError(v)
+	if len(p.errors) > before {
+		if se, ok := p.errors[len(p.errors)-1].(*errors.SyntaxError); ok {
+			if p.varShadowErrors == nil {
+				p.varShadowErrors = map[*errors.SyntaxError]string{}
+			}
+			p.varShadowErrors[se] = v.name
+		}
+	}
+}
+
 // isStrictContext reports whether the code being parsed is strict: a "use
 // strict" directive is in effect, or we are inside a class body.
 func (p *Parser) isStrictContext() bool {
@@ -366,7 +384,7 @@ func (p *Parser) checkLexicalNames(lex, vars []scopedName, allowDuplicateFunctio
 	}
 	for _, v := range vars {
 		if _, clash := seen[v.name]; clash {
-			p.redeclarationError(v)
+			p.varShadowError(v)
 		}
 	}
 }
@@ -499,11 +517,17 @@ func (p *Parser) checkCatchScope(clause *CatchClause) {
 	lex, vars := statementListNames(clause.Body.Statements, false)
 	for _, n := range lex {
 		if params[n.name] {
+			if p.tscDiagnostics {
+				// checkCatchClause: only a block-scoped redeclaration is
+				// reported, as a grammar error.
+				p.addGrammarErrorWithCode(n.tok, "TS2492", "Cannot redeclare identifier '"+n.name+"' in catch clause.")
+				continue
+			}
 			p.redeclarationError(n)
 		}
 	}
 	for _, v := range vars {
-		if params[v.name] && (!simpleParam || v.forOfVar) {
+		if params[v.name] && (!simpleParam || v.forOfVar) && !p.tscDiagnostics {
 			p.redeclarationError(v)
 		}
 	}
@@ -562,7 +586,7 @@ func (p *Parser) checkForScope(stmt Statement) {
 	}
 	for _, v := range vars {
 		if seen[v.name] {
-			p.redeclarationError(v)
+			p.varShadowError(v)
 		}
 	}
 }

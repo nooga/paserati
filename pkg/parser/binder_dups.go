@@ -1219,6 +1219,9 @@ func (b *binder) bindExportDefault(n *ExportDefaultDeclaration, sc *bindScope) {
 // program.BindErrors for the type checker to report.
 func (p *Parser) finishBinding(program *Program) {
 	diags := bindDeclarations(program)
+	if p.tscDiagnostics {
+		defer p.relabelVarShadowErrors()
+	}
 	if len(diags) == 0 {
 		return
 	}
@@ -1258,6 +1261,19 @@ func (p *Parser) finishBinding(program *Program) {
 			Msg:       d.msg,
 			ErrorCode: d.code,
 		})
+	}
+}
+
+// relabelVarShadowErrors gives the var-versus-lexical early errors the binder
+// did not account for tsc's checker diagnostic, TS2481 (a semantic error).
+func (p *Parser) relabelVarShadowErrors() {
+	for se, name := range p.varShadowErrors {
+		if se.ErrorCode != "" && se.ErrorCode != errors.PS1003 {
+			continue // relabelled from a binder diagnostic
+		}
+		se.ErrorCode = "TS2481"
+		se.Msg = "Cannot initialize outer scoped variable '" + name + "' in the same scope as block scoped declaration '" + name + "'."
+		se.Semantic = true
 	}
 }
 
