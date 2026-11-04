@@ -185,6 +185,16 @@ func (p *Parser) badDeclarationListStart(kw *lexer.Token, name string) Statement
 		return nil
 	}
 	p.addErrorWithCode(p.curToken, "TS1134", "Variable declaration expected.")
+	// tsc keeps the (empty) declaration list as a variable statement: a label
+	// on it is still TS1344, for one. The bad token is left for the caller.
+	switch name {
+	case "var":
+		return &VarStatement{Token: kw}
+	case "let":
+		return &LetStatement{Token: kw}
+	case "const":
+		return &ConstStatement{Token: kw}
+	}
 	return nil
 }
 
