@@ -389,8 +389,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 				paramType := matchedOverload.ParameterTypes[i]
 				if !c.rel.IsAssignable(argType, paramType) {
 					argNode := node.Arguments[i]
-					c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.",
-						argType.String(), paramType.String()))
+					c.addErrorWithCode(argNode, errors.TS2345, c.argumentNotAssignableMessage(argType, paramType))
 				}
 			}
 		}
@@ -406,8 +405,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 				argType := argTypes[i]
 				if !c.rel.IsAssignable(argType, elementType) {
 					argNode := node.Arguments[i]
-					c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.",
-						argType.String(), elementType.String()))
+					c.addErrorWithCode(argNode, errors.TS2345, c.argumentNotAssignableMessage(argType, elementType))
 				}
 			}
 		}
@@ -424,8 +422,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 			if !c.rel.IsAssignable(argType, paramType) {
 				// This shouldn't happen if overload matching worked correctly
 				argNode := node.Arguments[i]
-				c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.",
-					argType.String(), paramType.String()))
+				c.addErrorWithCode(argNode, errors.TS2345, c.argumentNotAssignableMessage(argType, paramType))
 			}
 		}
 	}

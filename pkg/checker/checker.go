@@ -6932,25 +6932,7 @@ func (c *Checker) getAssignmentErrorTypes(sourceType, targetType types.Type) (st
 	// For most cases, use literal types for source to match TypeScript behavior
 	sourceTypeStr = sourceType.String()
 
-	// For target type, handle enum types specially
-	if enumType, ok := targetType.(*types.UnionType); ok {
-		// Check if this is an enum union type
-		if len(enumType.Types) > 0 {
-			if types.IsEnumMemberType(enumType.Types[0]) {
-				if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
-					targetTypeStr = memberType.EnumName
-				} else {
-					targetTypeStr = targetType.String()
-				}
-			} else {
-				targetTypeStr = targetType.String()
-			}
-		} else {
-			targetTypeStr = targetType.String()
-		}
-	} else {
-		targetTypeStr = targetType.String()
-	}
+	targetTypeStr = targetType.String()
 
 	return sourceTypeStr, targetTypeStr
 }

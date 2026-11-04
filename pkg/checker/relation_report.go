@@ -659,18 +659,102 @@ func (c *Checker) reportNotAssignable(errNode parser.Node, expr parser.Expressio
 // its base type unless the target could itself hold a literal ("1" is not
 // assignable to number is reported as 'number', not '1').
 func (c *Checker) generalizedSource(source, target types.Type) types.Type {
-	if _, ok := source.(*types.LiteralType); !ok {
+	if target == types.Never || !isLiteralTypeForReport(source) || c.couldHaveTopLevelSingletonTypes(target, 0) {
 		return source
 	}
-	switch c.resolveStructural(target).(type) {
+	return c.baseTypeOfLiteralForReport(source)
+}
+
+// isLiteralTypeForReport is tsc's isLiteralType: a unit type (a literal, an
+// enum member, null or undefined), boolean, or a union of unit types.
+func isLiteralTypeForReport(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.LiteralType, *types.EnumMemberType:
+		return true
+	case *types.Primitive:
+		return tt == types.Boolean || tt == types.Null || tt == types.Undefined
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			switch m.(type) {
+			case *types.LiteralType, *types.EnumMemberType:
+				continue
+			}
+			if m == types.Null || m == types.Undefined || m == types.Boolean {
+				continue
+			}
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// baseTypeOfLiteralForReport is tsc's getBaseTypeOfLiteralType: a literal's
+// primitive, an enum member's enum, mapped over a union.
+func (c *Checker) baseTypeOfLiteralForReport(t types.Type) types.Type {
+	switch tt := t.(type) {
+	case *types.LiteralType:
+		return c.rel.GetWidenedType(tt)
+	case *types.EnumMemberType:
+		if tt.Parent != nil && len(tt.Parent.Members) > 1 {
+			return tt.Parent.UnionOfMembers()
+		}
+		return tt
+	case *types.UnionType:
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = c.baseTypeOfLiteralForReport(m)
+		}
+		return types.NewUnionType(members...)
+	}
+	return t
+}
+
+// couldHaveTopLevelSingletonTypes is tsc's typeCouldHaveTopLevelSingletonTypes:
+// whether the target could itself hold a literal, so that a literal source
+// is shown as written.
+func (c *Checker) couldHaveTopLevelSingletonTypes(t types.Type, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.Primitive:
+		return tt == types.Null || tt == types.Undefined
+	case *types.LiteralType, *types.EnumMemberType, *types.TemplateLiteralType, *types.StringMappingType:
+		return true
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if c.couldHaveTopLevelSingletonTypes(m, depth+1) {
+				return true
+			}
+		}
+		return false
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if c.couldHaveTopLevelSingletonTypes(m, depth+1) {
+				return true
+			}
+		}
+		return false
+	case *types.TypeParameterType:
+		if tt.Parameter != nil && tt.Parameter.Constraint != nil && tt.Parameter.Constraint != types.Any && tt.Parameter.Constraint != types.Unknown {
+			return c.couldHaveTopLevelSingletonTypes(tt.Parameter.Constraint, depth+1)
+		}
+		return false
 	case *types.ObjectType, *types.ArrayType, *types.TupleType:
-		return c.rel.GetWidenedType(source)
+		return false
 	}
-	switch target {
-	case types.String, types.Number, types.BigInt, types.Symbol:
-		return c.rel.GetWidenedType(source)
+	if r := c.resolveStructural(t); r != nil && r != t {
+		return c.couldHaveTopLevelSingletonTypes(r, depth+1)
 	}
-	return source
+	return false
+}
+
+// argumentNotAssignableMessage is TS2345's message, with the argument type
+// generalized as reportRelationError does.
+func (c *Checker) argumentNotAssignableMessage(arg, param types.Type) string {
+	return fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.",
+		c.generalizedSource(arg, param).String(), param.String())
 }
 
 // didYouMeanToCall reports whether the source is a callable whose call result
