@@ -1110,6 +1110,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			}
 		}
 
+		accessorSetterLevel := accessLevel
 		if setter != nil {
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 
@@ -1123,11 +1124,11 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 					if propType == nil {
 						propType = setterType
 					}
-					// Use the more restrictive access level
 					setterAccessLevel := c.getAccessLevel(setter.IsPublic, setter.IsPrivate, setter.IsProtected)
-					if accessLevel == types.AccessPublic {
+					if getter == nil {
 						accessLevel = setterAccessLevel
 					}
+					accessorSetterLevel = setterAccessLevel
 					if checkerDebug {
 						debugPrintf("// [Checker Class] Found setter for property '%s': %s (%s)\n",
 							propName, setterType.String(), setterAccessLevel.String())
@@ -1143,8 +1144,10 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			// Add specific getter/setter metadata
 			if instanceType.ClassMeta != nil {
 				if getter != nil && setter != nil {
+					// Reads go through the getter's accessibility, writes
+					// through the setter's.
 					instanceType.ClassMeta.AddGetterMember(propName, accessLevel, false)
-					instanceType.ClassMeta.AddSetterMember(propName, accessLevel, false)
+					instanceType.ClassMeta.AddSetterMember(propName, accessorSetterLevel, false)
 				} else if getter != nil {
 					// Only getter: a read-only property.
 					instanceType.ClassMeta.AddGetterMember(propName, accessLevel, false)

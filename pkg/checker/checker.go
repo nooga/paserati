@@ -1254,6 +1254,26 @@ func (c *Checker) validateMemberAccess(objectType types.Type, memberName string,
 	}
 }
 
+// validateMemberWrite reports an assignment to a get/set pair whose setter
+// is less accessible than its getter (which validateMemberAccess checked)
+// from where the write happens.
+func (c *Checker) validateMemberWrite(objectType types.Type, memberName string, node parser.Node) {
+	objType, ok := objectType.(*types.ObjectType)
+	if !ok || objType.ClassMeta == nil || !objType.IsClassInstance() {
+		return
+	}
+	info := objType.ClassMeta.GetMemberAccess(memberName)
+	if info == nil || !info.HasSetterAccess || objType.ClassMeta.IsWritableFrom(memberName, c.currentClassContext) {
+		return
+	}
+	className := objType.GetClassName()
+	if info.SetterAccessLevel == types.AccessProtected {
+		c.addErrorWithCode(node, errors.TS2445, fmt.Sprintf("Property '%s' is protected and only accessible within class '%s' and its subclasses.", memberName, className))
+		return
+	}
+	c.addErrorWithCode(node, errors.TS2341, fmt.Sprintf("Property '%s' is private and only accessible within class '%s'.", memberName, className))
+}
+
 // checkPrivateNameShadowed reports TS18014 when a #name of an outer class is
 // read inside a nested class that declares the same #name: the name then
 // means the inner class's member, which the outer type does not have.
