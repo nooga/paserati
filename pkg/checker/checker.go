@@ -555,6 +555,7 @@ type Checker struct {
 	deferredRelationChecks      []deferredRelationCheck
 	overloadStrictAny           bool                                  // first overload pass: an `any` argument only fits any/unknown parameters
 	inAmbientNamespace          bool                                  // checking the body of a `declare namespace`: members are implicitly exported
+	typeOnlyUseAllowed          bool                                  // a type-only import may be named here (export default X)
 	ambientClassBody            *parser.ClassBody                     // body of the `declare class` being checked: its method signatures are its members
 	aliasInstantiationDepth     int                                   // nesting of instantiateAliasReference, capped for recursive aliases
 	aliasInstCache              map[aliasInstKey]types.Type           // instantiateAliasReference results
@@ -723,6 +724,9 @@ type deferredComputedKeyCheck struct {
 	className    string
 	instanceThis types.Type
 	static       bool
+	// typeOnlyOK: the key of an abstract or ambient member may name a
+	// type-only import (tsc's isValidTypeOnlyAliasUseSite).
+	typeOnlyOK bool
 }
 
 // thisType is the type tsc gives `this` in the key.
@@ -2499,7 +2503,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			if t := check.thisType(); t != nil {
 				c.currentThisType = t
 			}
+			savedTypeOnly := c.typeOnlyUseAllowed
+			c.typeOnlyUseAllowed = check.typeOnlyOK
 			c.visit(check.expr)
+			c.typeOnlyUseAllowed = savedTypeOnly
 			c.currentThisType = savedThis
 			c.validateComputedPropertyNameType(check.expr, check.expr)
 			if check.propertyKey != nil {
@@ -3775,6 +3782,7 @@ func (c *Checker) visit(node parser.Node) {
 		if found {
 			c.checkBlockScopedUse(node)
 			typ = c.checkNamespaceUsedAsValue(node, typ)
+			c.checkTypeOnlyImportUse(node)
 		}
 
 		// If not found as a regular variable, try with object resolution
@@ -6446,8 +6454,16 @@ func (c *Checker) checkExportDefaultDeclaration(node *parser.ExportDefaultDeclar
 
 	debugPrintf("// [Checker] Processing default export\n")
 
-	// Type check the default export expression
-	c.visit(node.Declaration)
+	// Type check the default export expression. `export default X`
+	// re-exports X, which may be a type-only import.
+	if _, isIdent := node.Declaration.(*parser.Identifier); isIdent {
+		saved := c.typeOnlyUseAllowed
+		c.typeOnlyUseAllowed = true
+		c.visit(node.Declaration)
+		c.typeOnlyUseAllowed = saved
+	} else {
+		c.visit(node.Declaration)
+	}
 
 	// Register the default export
 	if c.IsModuleMode() {

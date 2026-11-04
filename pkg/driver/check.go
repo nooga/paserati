@@ -10,8 +10,8 @@ import (
 
 	"github.com/nooga/paserati/pkg/checker"
 	"github.com/nooga/paserati/pkg/errors"
-	"github.com/nooga/paserati/pkg/modules"
 	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/modules"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/source"
 )
