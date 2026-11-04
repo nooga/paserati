@@ -157,12 +157,24 @@ func runMultiJob(conformanceDir string, req workerReq, source string, resp *work
 		}
 	}
 	var files []string
+	allowJS, _ := opts.boolOpt("allowjs")
+	if v, _ := opts.boolOpt("checkjs"); v {
+		allowJS = true
+	}
 	for _, i := range selectRoots(units, opts) {
-		if isCodeUnit(units[i].Name) {
+		if isCodeUnit(units[i].Name) || allowJS && isJSUnit(units[i].Name) {
 			files = append(files, disk(vfsPath(units[i].Name)))
 		}
 	}
 	keys := unitKeySet(units)
+	// FIXME: JavaScript files are checked as TypeScript (no JSDoc types);
+	// an unchecked one (no checkJs) reports only its syntax errors.
+	syntaxOnly := map[string]bool{}
+	for _, u := range units {
+		if isJSUnit(u.Name) && !jsChecked(u, opts) {
+			syntaxOnly[fileKey(u.Name)] = true
+		}
+	}
 
 	pas := driver.NewPaseratiWithInitializersAndBaseDir(tscInitializers(), disk("/.src"))
 	defer pas.Cleanup()
@@ -191,7 +203,7 @@ func runMultiJob(conformanceDir string, req workerReq, source string, resp *work
 				phase = "parse"
 				resp.ParseErrors++
 			}
-			if e.Kind() == "Compile" {
+			if e.Kind() == "Compile" || syntaxOnly[key] && phase != "parse" {
 				continue
 			}
 			d := toDiag(e, phase)

@@ -122,29 +122,29 @@ func isJSUnit(name string) bool {
 	return false
 }
 
+// jsChecked reports whether tsc type-checks a JavaScript unit (checkJs, or
+// a `// @ts-check` comment) rather than reporting only its syntax errors.
+func jsChecked(u testUnit, settings Options) bool {
+	if strings.Contains(u.Content, "@ts-nocheck") {
+		return false
+	}
+	if v, _ := settings.boolOpt("checkjs"); v {
+		return true
+	}
+	return strings.Contains(u.Content, "@ts-check")
+}
+
 // multiSkipReason says why a multi-file test cannot be run (empty: it can).
 // The categories keep the remaining denominator visible.
 func multiSkipReason(units []testUnit, settings Options, hasLinks bool) string {
-	var js, tsconfig bool
+	var tsconfig bool
 	for _, u := range units {
 		b := baseNameLower(u.Name)
-		switch {
-		case b == "tsconfig.json" || b == "jsconfig.json":
+		if b == "tsconfig.json" || b == "jsconfig.json" {
 			tsconfig = true
-		case isJSUnit(b):
-			js = true
-		}
-	}
-	for _, k := range []string{"allowjs", "checkjs"} {
-		if v, ok := settings.boolOpt(k); ok && v {
-			js = true
 		}
 	}
 	switch {
-	case js:
-		// FIXME: JavaScript units need checkJs/JSDoc semantics (and plain
-		// allowJs files report only syntax errors).
-		return "js-unsupported"
 	case tsconfig:
 		// FIXME: a tsconfig.json unit selects the root files and options.
 		return "tsconfig-unit"
