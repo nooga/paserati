@@ -4107,7 +4107,13 @@ func (c *Checker) visit(node parser.Node) {
 						resultType = types.Number
 					}
 				} else if widenedRightType == types.BigInt {
-					resultType = types.BigInt
+					// -1n has the literal type -1n, as -1 has -1.
+					lit, isLitType := rightType.(*types.LiteralType)
+					if _, isLit := node.Right.(*parser.BigIntLiteral); isLit && isLitType && lit.Value.Type() == vm.TypeBigInt {
+						resultType = &types.LiteralType{Value: vm.NewBigInt(new(big.Int).Neg(lit.Value.AsBigInt()))}
+					} else {
+						resultType = types.BigInt
+					}
 				} else {
 					// TypeScript only rejects symbol operands here; every other
 					// type is coerced to a number.

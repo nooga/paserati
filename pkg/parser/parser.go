@@ -3193,6 +3193,13 @@ func (p *Parser) parseBigIntLiteral() Expression {
 func (p *Parser) parseNegativeLiteralType() Expression {
 	minusToken := p.curToken
 	p.nextToken()
+	if p.curToken.Type == lexer.BIGINT {
+		// `-1n`: a negative bigint literal type.
+		if big, ok := p.parseBigIntLiteral().(*BigIntLiteral); ok && big != nil {
+			return &PrefixExpression{Token: minusToken, Operator: "-", Right: big}
+		}
+		return nil
+	}
 	if p.curToken.Type != lexer.NUMBER {
 		p.addError(p.curToken, fmt.Sprintf("expected number after '-' in type, got %s", p.curToken.Type))
 		return nil

@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"maps"
+	"math/big"
 	"slices"
 	"sort"
 	"strings"
@@ -757,6 +758,12 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 		return &types.LiteralType{Value: vm.String(node.Value)}
 	case *parser.NumberLiteral:
 		return &types.LiteralType{Value: vm.Number(node.Value)}
+	case *parser.BigIntLiteral:
+		// A bigint literal type: `1n`.
+		if v, ok := new(big.Int).SetString(node.Value, 0); ok {
+			return &types.LiteralType{Value: vm.NewBigInt(v)}
+		}
+		return types.BigInt
 	case *parser.BooleanLiteral:
 		return &types.LiteralType{Value: vm.BooleanValue(node.Value)}
 	case *parser.NullLiteral:
@@ -768,6 +775,11 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 		if node.Operator == "-" {
 			if numLit, ok := node.Right.(*parser.NumberLiteral); ok {
 				return &types.LiteralType{Value: vm.Number(-numLit.Value)}
+			}
+			if bigLit, ok := node.Right.(*parser.BigIntLiteral); ok {
+				if v, ok := new(big.Int).SetString(bigLit.Value, 0); ok {
+					return &types.LiteralType{Value: vm.NewBigInt(v.Neg(v))}
+				}
 			}
 		}
 		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))

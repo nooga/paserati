@@ -68,6 +68,10 @@ func (lt *LiteralType) String() string {
 	if lt.Value.Type() == vm.TypeString {
 		return strconv.Quote(lt.Value.ToString())
 	}
+	// Bigint literal types print with their suffix: 1n, -2n.
+	if lt.Value.Type() == vm.TypeBigInt {
+		return lt.Value.AsBigInt().String() + "n"
+	}
 	return lt.Value.ToString()
 }
 func (lt *LiteralType) typeNode()      {}
