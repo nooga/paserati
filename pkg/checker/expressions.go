@@ -1943,12 +1943,25 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				fieldType, exists := obj.EffectiveProperty(propertyName)
 				if exists {
 					// Property found - check access control for class types
-					c.validateMemberAccess(objectType, propertyName, node.Property)
-					if _, isSuper := node.Object.(*parser.SuperExpression); isSuper && c.target() < 2015 {
-						// Before ES2015 super reaches only the base's methods.
-						if info := obj.GetMemberAccessInfo(propertyName); info != nil && !info.IsMethod {
-							c.addErrorWithCode(node.Property, "TS2340", "Only public and protected methods of the base class are accessible via the 'super' keyword.")
+					// tsc's checkPropertyAccessibilityAtLocation: a super access
+					// failing these is not checked for accessibility as well.
+					superDenied := false
+					if _, isSuper := node.Object.(*parser.SuperExpression); isSuper {
+						info := obj.GetMemberAccessInfo(propertyName)
+						if c.target() < 2015 {
+							// Before ES2015 super reaches only the base's methods.
+							if info != nil && !info.IsMethod {
+								c.addErrorWithCode(node.Property, "TS2340", "Only public and protected methods of the base class are accessible via the 'super' keyword.")
+								superDenied = true
+							}
+						} else if info != nil && info.IsField && !info.IsStatic {
+							// A field lives on the instance, not the base prototype.
+							c.addErrorWithCode(node.Property, errors.TS2855, fmt.Sprintf("Class field '%s' defined by the parent class is not accessible in the child class via super.", propertyName))
+							superDenied = true
 						}
+					}
+					if !superDenied {
+						c.validateMemberAccess(objectType, propertyName, node.Property)
 					}
 
 					if fieldType == nil { // Should ideally not happen if checker populates correctly

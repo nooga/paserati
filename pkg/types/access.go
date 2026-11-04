@@ -36,6 +36,10 @@ type MemberAccessInfo struct {
 	// writes the setter's (tsc's getDeclarationModifierFlagsFromSymbol).
 	SetterAccessLevel AccessModifier
 	HasSetterAccess   bool
+	// IsField: a property declaration of the class body (not an auto
+	// accessor, parameter property or merged interface member), which lives
+	// on the instance and so is not reachable through super (TS2855).
+	IsField bool
 }
 
 // ClassMetadata contains class-specific type information for access control

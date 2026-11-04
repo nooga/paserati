@@ -1286,6 +1286,9 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				// Add property with access control metadata
 				propName := c.extractPropertyName(prop.Key)
 				instanceType.WithClassMember(propName, propType, accessLevel, false, prop.Readonly)
+				if info := instanceType.GetMemberAccessInfo(propName); info != nil && !prop.IsAccessor && !c.parameterProperties[prop] {
+					info.IsField = true
+				}
 
 				// Handle optional properties for class instance type
 				if prop.Optional {
