@@ -479,7 +479,9 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 		// not the Object constructor. The constructor is callable returning 'any', but in type
 		// position we want an empty object type so assignment checking works correctly.
 		if node.Value == "Object" {
-			return types.NewObjectType()
+			obj := types.NewObjectType()
+			obj.LibName = "Object"
+			return obj
 		}
 
 		// --- Check if this is a forward reference or constructor defined as a regular value ---

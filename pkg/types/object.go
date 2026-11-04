@@ -365,6 +365,11 @@ type ObjectType struct {
 	// by substitution do not carry it, so instantiations print structurally.
 	DisplayName string
 
+	// LibName is the name of the lib interface a builtin type stands for
+	// (`Date`, `SymbolConstructor`), which it prints as when it has no
+	// DisplayName. Unlike DisplayName it means nothing but its printing.
+	LibName string
+
 	// IsFunctionInterface marks the global Function interface, to which
 	// every function type is assignable.
 	IsFunctionInterface bool
@@ -425,6 +430,9 @@ func (ot *ObjectType) String() string {
 			args[i] = a.String()
 		}
 		return ot.GenericName + "<" + strings.Join(args, ", ") + ">"
+	}
+	if ot.LibName != "" {
+		return ot.LibName
 	}
 
 	// A lone call or construct signature prints as a function or
