@@ -91,6 +91,17 @@ func (c *Checker) getAwaitedType(t types.Type) types.Type {
 		return t
 	}
 
+	// An intersection is awaited through its `then` member, which is the
+	// first thenable constituent's (`Promise<T> & { tag }` awaits to T).
+	if inter, ok := t.(*types.IntersectionType); ok {
+		for _, m := range inter.Types {
+			if a := c.getAwaitedType(m); a != types.GetEffectiveType(m) {
+				return a
+			}
+		}
+		return t
+	}
+
 	if instType, ok := t.(*types.InstantiatedType); ok {
 		if instType.Generic != nil && instType.Generic.Name == "Promise" && len(instType.TypeArguments) > 0 {
 			return c.getAwaitedType(instType.TypeArguments[0])

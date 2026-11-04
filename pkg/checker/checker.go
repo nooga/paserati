@@ -693,6 +693,11 @@ type Checker struct {
 	// Computed key expressions in class/interface bodies are checked after Pass 3
 	// so that const/let declarations earlier in the file are already in scope.
 	deferredComputedKeyChecks []deferredComputedKeyCheck
+	// computedKeysChecked is set once Pass 3.5 has run: a type literal's
+	// computed key resolved before then (a top-level alias in Pass 1) is
+	// checked with the deferred keys, after the value declarations are in
+	// scope.
+	computedKeysChecked bool
 	// deferredHeritages are interface bases in namespaces not declared yet
 	// (see deferred_heritage.go); resolvingDeferredHeritage is set while
 	// they are resolved.
@@ -720,6 +725,13 @@ type deferredComputedKeyCheck struct {
 	classCtx *types.AccessContext
 	// propertyKey is set for a class property's key, which TS1166 limits.
 	propertyKey *parser.ComputedPropertyName
+	// typeLiteral marks a type literal member's key, which is only resolved
+	// (its TS1170 is reported where the literal is checked).
+	typeLiteral bool
+	// typeContext marks a key in an interface or type literal: a use there
+	// is never in a block-scoped name's dead zone (tsc's
+	// isInAmbientOrTypeNode).
+	typeContext bool
 	// A class member key's `this` (an error, TS2465) is typed as the
 	// member's own class: the constructor for a static member, else the
 	// instance type.
@@ -1685,6 +1697,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		defer func() { c.env = realGlobal }()
 	}
 	c.fileScope = globalEnv
+	c.computedKeysChecked = false
 
 	// Snapshot the globals that exist before any of this program's declarations
 	// are processed, for definite assignment analysis (see Pass 6).
@@ -2555,9 +2568,18 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 			savedTypeOnly := c.typeOnlyUseAllowed
 			c.typeOnlyUseAllowed = check.typeOnlyOK
+			if check.typeContext {
+				c.deferredContextDepth++
+			}
 			c.visit(check.expr)
+			if check.typeContext {
+				c.deferredContextDepth--
+			}
 			c.typeOnlyUseAllowed = savedTypeOnly
 			c.currentThisType = savedThis
+			if check.typeLiteral {
+				continue
+			}
 			c.validateComputedPropertyNameType(check.expr, check.expr)
 			if check.propertyKey != nil {
 				c.checkClassPropertyComputedName(check.propertyKey)
@@ -2568,6 +2590,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.env = savedEnv
 		c.deferredComputedKeyChecks = nil
 	}
+	c.computedKeysChecked = true
 
 	// --- Pass 4: Resolve forward references ---
 	debugPrintf("\n// --- Checker - Pass 4: Resolve Forward References ---\n")

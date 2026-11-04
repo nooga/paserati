@@ -1408,12 +1408,17 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 		} else if prop.IsComputedProperty {
 			// This is a computed property: [expr]: Type
 			if prop.ComputedName != nil {
-				// Check for undefined identifiers in the computed key. A
-				// type member's key may name a type-only import.
-				savedTypeOnly := c.typeOnlyUseAllowed
-				c.typeOnlyUseAllowed = true
-				c.visit(prop.ComputedName)
-				c.typeOnlyUseAllowed = savedTypeOnly
+				// check for undefined identifiers in computed key; before
+				// the declarations are hoisted (a top-level alias), later.
+				// A type member's key may name a type-only import.
+				if c.computedKeysChecked {
+					savedTypeOnly := c.typeOnlyUseAllowed
+					c.typeOnlyUseAllowed = true
+					c.visit(prop.ComputedName)
+					c.typeOnlyUseAllowed = savedTypeOnly
+				} else {
+					c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: prop.ComputedName, env: c.env, typeLiteral: true, typeContext: true, typeOnlyOK: true})
+				}
 			}
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
