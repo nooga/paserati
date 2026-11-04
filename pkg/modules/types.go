@@ -84,10 +84,15 @@ type ModuleRecord struct {
 	// parseDiagnostics are the parse errors of a module checked despite
 	// them (LoaderConfig.CheckAfterParseErrors).
 	parseDiagnostics []errors.PaseratiError
-	ExportValues     map[string]vm.Value // Exported runtime values
-	ExportIndices    map[string]uint16   // Export name to global heap index mapping (for dynamic import)
-	ReExports        map[string]vm.ModuleReExport
-	Namespace        vm.Value // Module namespace object
+	// TypeOnlyExports are the exports that only name a type because of a
+	// type-only declaration: "export" for `export type { A }` (or one
+	// re-exported from such an export), "import" for the export of an
+	// `import type` binding (see TypeOnlyExportsProvider).
+	TypeOnlyExports map[string]string
+	ExportValues    map[string]vm.Value // Exported runtime values
+	ExportIndices   map[string]uint16   // Export name to global heap index mapping (for dynamic import)
+	ReExports       map[string]vm.ModuleReExport
+	Namespace       vm.Value // Module namespace object
 
 	// Compilation results
 	CompiledChunk *vm.Chunk // Compiled bytecode chunk for execution
