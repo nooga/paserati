@@ -20,9 +20,11 @@ func (c *Checker) checkClassMembersAgainstBase(className string, body *parser.Cl
 	if !ok || baseObj.ClassMeta == nil {
 		return
 	}
-	baseName := baseObj.ClassMeta.ClassName
-	if baseName == "" {
-		baseName = baseObj.String()
+	// tsc names the derived class's declared type and the base type as
+	// the extends clause instantiates it (`D<T, U>`, `C3<T>`).
+	baseName := instanceType.Bases()[0].String()
+	if instanceType.ClassMeta != nil {
+		className = instanceType.ClassMeta.DisplayName()
 	}
 	baseProps := baseObj.GetEffectiveProperties()
 

@@ -65,6 +65,10 @@ type ClassMetadata struct {
 	DeclFile           string
 	DeclStart, DeclEnd int
 
+	// DisplayText is how the class's declared type prints (`D<T>` for a
+	// generic class); empty means ClassName.
+	DisplayText string
+
 	// DeclPos is where the class was declared (file and offset), recorded
 	// on its instance type: unions print classes in declaration order.
 	DeclPosFile string
@@ -345,4 +349,16 @@ func privateNameAccess(memberName string, accessLevel AccessModifier) AccessModi
 		return AccessPrivate
 	}
 	return accessLevel
+}
+
+// DisplayName is the class's declared type as diagnostics name it: `D<T>`
+// for a generic class, else its name.
+func (cm *ClassMetadata) DisplayName() string {
+	if cm == nil {
+		return ""
+	}
+	if cm.DisplayText != "" {
+		return cm.DisplayText
+	}
+	return cm.ClassName
 }

@@ -1379,7 +1379,11 @@ func (c *Checker) classDeclaresMember(className, memberName string) bool {
 // createAccessError creates a TypeScript-style access control error
 func (c *Checker) createAccessError(objType *types.ObjectType, memberName string, node parser.Node) {
 	memberInfo := objType.GetMemberAccessInfo(memberName)
+	// tsc names the class that declares the member, as its declared type.
 	className := objType.GetClassName()
+	if decl := memberDeclaringClass(objType, memberName, 0); decl != nil && decl.ClassMeta != nil {
+		className = decl.ClassMeta.DisplayName()
+	}
 
 	var errorMsg string
 	var code string
@@ -1390,6 +1394,10 @@ func (c *Checker) createAccessError(objType *types.ObjectType, memberName string
 			// `protected` keyword modifiers (TS2341/TS2445), which keep their
 			// existing generic wording below.
 			code = errors.TS18013
+			// tsc names the class symbol here, not its declared type.
+			if decl := memberDeclaringClass(objType, memberName, 0); decl != nil && decl.ClassMeta != nil {
+				className = decl.ClassMeta.ClassName
+			}
 			errorMsg = fmt.Sprintf("Property '%s' is not accessible outside class '%s' because it has a private identifier.", memberName, className)
 		} else {
 			if memberInfo.AccessLevel == types.AccessProtected {
@@ -7145,4 +7153,23 @@ func tupleCandidatesByArity(lit *parser.ArrayLiteral, candidates []types.Type) [
 		return candidates
 	}
 	return kept
+}
+
+// memberDeclaringClass is the class in obj's chain whose own members include
+// memberName, as GetMemberAccessInfo finds it.
+func memberDeclaringClass(obj *types.ObjectType, memberName string, depth int) *types.ObjectType {
+	if obj == nil || obj.ClassMeta == nil || depth > 16 {
+		return nil
+	}
+	if obj.ClassMeta.GetMemberAccess(memberName) != nil {
+		return obj
+	}
+	for _, baseType := range obj.Bases() {
+		if baseObj, ok := baseType.(*types.ObjectType); ok {
+			if d := memberDeclaringClass(baseObj, memberName, depth+1); d != nil {
+				return d
+			}
+		}
+	}
+	return nil
 }
