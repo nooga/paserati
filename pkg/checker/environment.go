@@ -194,9 +194,13 @@ func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environme
 			if !env.Define(name, typ, true) {
 				return fmt.Errorf("global %s already defined", name)
 			}
+			nameLibGlobal(name, typ)
 			return nil
 		},
 		DefineTypeAlias: func(name string, typ types.Type) error {
+			if obj, ok := typ.(*types.ObjectType); ok && libInterfaceNames[name] {
+				nameLibType(obj, name)
+			}
 			if !env.DefineTypeAlias(name, typ) {
 				return fmt.Errorf("type alias %s already defined", name)
 			}
@@ -853,4 +857,71 @@ func (e *Environment) ResolveRequireAlias(name string) string {
 		}
 	}
 	return ""
+}
+
+// libGlobalInterfaces maps a lib global value to the interface lib.d.ts
+// declares it with (`declare var Date: DateConstructor`), which its type
+// prints as; the ones whose instances are a non-generic interface of the
+// global's own name (`new Date()` is a `Date`) are marked true.
+var libGlobalInterfaces = map[string]struct {
+	iface    string
+	instance bool
+}{
+	"Object": {"ObjectConstructor", false}, "Function": {"FunctionConstructor", false},
+	"String": {"StringConstructor", true}, "Number": {"NumberConstructor", true},
+	"Boolean": {"BooleanConstructor", true}, "Symbol": {"SymbolConstructor", false},
+	"BigInt": {"BigIntConstructor", false}, "Date": {"DateConstructor", true},
+	"RegExp": {"RegExpConstructor", true}, "Error": {"ErrorConstructor", true},
+	"EvalError": {"EvalErrorConstructor", true}, "RangeError": {"RangeErrorConstructor", true},
+	"ReferenceError": {"ReferenceErrorConstructor", true}, "SyntaxError": {"SyntaxErrorConstructor", true},
+	"TypeError": {"TypeErrorConstructor", true}, "URIError": {"URIErrorConstructor", true},
+	"Array": {"ArrayConstructor", false}, "Promise": {"PromiseConstructor", false},
+	"Map": {"MapConstructor", false}, "Set": {"SetConstructor", false},
+	"WeakMap": {"WeakMapConstructor", false}, "WeakSet": {"WeakSetConstructor", false},
+	"Proxy": {"ProxyConstructor", false}, "ArrayBuffer": {"ArrayBufferConstructor", true},
+	"Math": {"Math", false}, "JSON": {"JSON", false},
+}
+
+// libInterfaceNames are lib interfaces the builtins declare as type names
+// whose types print by that name.
+var libInterfaceNames = map[string]bool{
+	"IArguments": true, "TemplateStringsArray": true, "PropertyDescriptor": true,
+	"RegExpMatchArray": true, "RegExpExecArray": true,
+}
+
+// nameLibGlobal names the type of a lib global value (and, for a
+// constructor of a named instance interface, its instances) as lib.d.ts does.
+func nameLibGlobal(name string, typ types.Type) {
+	if name == "IArguments" {
+		if obj, ok := typ.(*types.ObjectType); ok {
+			nameLibType(obj, name)
+		}
+		return
+	}
+	lib, ok := libGlobalInterfaces[name]
+	if !ok {
+		return
+	}
+	obj, ok := typ.(*types.ObjectType)
+	if !ok {
+		return
+	}
+	nameLibType(obj, lib.iface)
+	if !lib.instance {
+		return
+	}
+	for _, sigs := range [][]*types.Signature{obj.ConstructSigs(), obj.CallSigs()} {
+		for _, sig := range sigs {
+			if inst, ok := sig.ReturnType.(*types.ObjectType); ok && len(inst.Props()) > 0 {
+				nameLibType(inst, name)
+				return
+			}
+		}
+	}
+}
+
+func nameLibType(obj *types.ObjectType, name string) {
+	if obj.LibName == "" && obj.DisplayName == "" && obj.GenericName == "" {
+		obj.LibName = name
+	}
 }
