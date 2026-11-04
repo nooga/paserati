@@ -5007,6 +5007,12 @@ func (p *Parser) parseStatementListBlock() *BlockStatement {
 	if !p.curTokenIs(lexer.RBRACE) {
 		// If we exited the loop because of EOF, RBRACE is missing
 		p.peekError(lexer.RBRACE) // Report missing RBRACE error
+		if p.tscDiagnostics && p.canRecover() {
+			// tsc's parseExpected: the block ends at the end of the file
+			// with what it holds, which still gets checked.
+			block.EndPos = p.curToken.EndPos
+			return block
+		}
 		return nil
 	}
 
@@ -5186,6 +5192,11 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 
 	if !p.curTokenIs(lexer.RBRACE) {
 		p.peekError(lexer.RBRACE)
+		if p.tscDiagnostics && p.canRecover() {
+			// As in parseStatementListBlock: the body ends at EOF.
+			block.EndPos = p.curToken.EndPos
+			return block
+		}
 		return nil
 	}
 
