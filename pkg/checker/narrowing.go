@@ -1732,9 +1732,33 @@ func (c *Checker) checkImpossibleComparison(leftType, rightType types.Type, oper
 	}
 
 	// Check if the types have any overlap
-	if !c.typesHaveOverlap(leftType, rightType) {
+	if !c.typesHaveOverlap(genericKeysConstrained(leftType), genericKeysConstrained(rightType)) {
 		c.addErrorAtStart(node, errors.TS2367, fmt.Sprintf("This comparison appears to be unintentional because the types '%s' and '%s' have no overlap.", leftType.String(), rightType.String()))
 	}
+}
+
+// genericKeysConstrained replaces keyof T of a generic T (also as an
+// intersection member: keyof T & string) by its constraint string | number |
+// symbol, which is what tsc's comparable relation relates it through.
+func genericKeysConstrained(t types.Type) types.Type {
+	switch tt := t.(type) {
+	case *types.KeyofType:
+		switch tt.OperandType.(type) {
+		case *types.TypeParameterType, *types.IndexedAccessType:
+			return types.NewUnionType(types.String, types.Number, types.Symbol)
+		}
+	case *types.IntersectionType:
+		changed := false
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = genericKeysConstrained(m)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewIntersectionType(members...)
+		}
+	}
+	return t
 }
 
 // typesHaveOverlap checks if two types have any possible overlap
