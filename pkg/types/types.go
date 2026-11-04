@@ -366,6 +366,11 @@ func (iat *IndexedAccessType) String() string {
 	objectStr := "unknown"
 	if iat.ObjectType != nil {
 		objectStr = iat.ObjectType.String()
+		switch iat.ObjectType.(type) {
+		case *UnionType, *IntersectionType, *ConditionalType, *KeyofType:
+			// The indexed type is a postfix operand: (A | B)[K].
+			objectStr = "(" + objectStr + ")"
+		}
 	}
 	indexStr := "unknown"
 	if iat.IndexType != nil {
