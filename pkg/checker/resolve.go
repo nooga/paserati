@@ -3235,12 +3235,8 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		if sm, ok := side.(*types.StringMappingType); ok && types.IsGenericStringType(sm.Type) {
 			return nil
 		}
-		if ia, ok := side.(*types.IndexedAccessType); ok {
-			_, objIsParam := ia.ObjectType.(*types.TypeParameterType)
-			_, idxIsParam := ia.IndexType.(*types.TypeParameterType)
-			if objIsParam || idxIsParam {
-				return nil
-			}
+		if ia, ok := side.(*types.IndexedAccessType); ok && indexedAccessWaits(ia) {
+			return nil
 		}
 	}
 
@@ -4840,6 +4836,26 @@ func genericParamsOf(sides ...types.Type) map[string]bool {
 		walk(side, 0)
 	}
 	return params
+}
+
+// indexedAccessWaits reports whether T[K] is not known yet: its object or
+// index is a type parameter, or an `infer` variable not inferred yet, possibly
+// through further indexed accesses (`$Value['_def']['type']`).
+func indexedAccessWaits(ia *types.IndexedAccessType) bool {
+	for depth := 0; ia != nil && depth < 16; depth++ {
+		if _, idxIsParam := ia.IndexType.(*types.TypeParameterType); idxIsParam {
+			return true
+		}
+		switch obj := ia.ObjectType.(type) {
+		case *types.TypeParameterType, *types.InferType:
+			return true
+		case *types.IndexedAccessType:
+			ia = obj
+			continue
+		}
+		return false
+	}
+	return false
 }
 
 func waitsForTypeParameter(t types.Type, depth int) bool {

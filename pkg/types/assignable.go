@@ -211,6 +211,20 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 	if related, decided := homomorphicMappedRelated(source, target); decided {
 		return related
 	}
+	// Two generic mapped types with the same modifiers relate when the
+	// target's keys are among the source's and the templates relate (tsc's
+	// mappedTypeRelatedTo).
+	// FIXME: templates naming their key parameter differently are not
+	// unified; such pairs fall through to the rules below.
+	if sm, ok := source.(*MappedType); ok {
+		if tm, ok := target.(*MappedType); ok && sm.TypeParameter == tm.TypeParameter &&
+			sm.OptionalModifier == tm.OptionalModifier && sm.ReadonlyModifier == tm.ReadonlyModifier &&
+			sm.ConstraintType != nil && tm.ConstraintType != nil && sm.ValueType != nil && tm.ValueType != nil &&
+			(tm.ConstraintType.Equals(sm.ConstraintType) || r.isAssignable(tm.ConstraintType, sm.ConstraintType)) &&
+			r.isAssignable(sm.ValueType, tm.ValueType) {
+			return true
+		}
+	}
 	if related, decided := r.stringMappingRelated(source, target); decided {
 		return related
 	}
@@ -307,6 +321,18 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 	// Basic rules:
 	if target == Any || source == Any {
 		return true
+	}
+	// Two deferred conditional types with identical extends types and
+	// mutually related check types relate branch by branch (tsc's
+	// structuredTypeRelatedTo), so one built by substitution relates to the
+	// same one written out, whatever form their branches took.
+	if sc, ok := source.(*ConditionalType); ok {
+		if tc, ok := target.(*ConditionalType); ok && sc.ExtendsType != nil && tc.ExtendsType != nil &&
+			sc.ExtendsType.Equals(tc.ExtendsType) &&
+			(sc.CheckType.Equals(tc.CheckType) || r.isAssignable(sc.CheckType, tc.CheckType) && r.isAssignable(tc.CheckType, sc.CheckType)) &&
+			r.isAssignable(sc.TrueType, tc.TrueType) && r.isAssignable(sc.FalseType, tc.FalseType) {
+			return true
+		}
 	}
 	// A deferred conditional type relates through its branches'
 	// constraints (`undefined extends O['f'] ? false : true` to boolean).
