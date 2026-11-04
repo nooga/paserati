@@ -37,6 +37,9 @@ type ImportBinding struct {
 	// had then; the binding is resolved again once they are all in place.
 	Early      bool
 	IsTypeOnly bool
+	// TypeOnlyVia is how a plain import's source export is type-only
+	// ("export" or "import", see modules.ModuleRecord.TypeOnlyExports).
+	TypeOnlyVia string
 }
 
 // ExportBinding represents an exported name's binding information

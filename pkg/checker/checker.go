@@ -556,6 +556,7 @@ type Checker struct {
 	overloadStrictAny           bool                                  // first overload pass: an `any` argument only fits any/unknown parameters
 	inAmbientNamespace          bool                                  // checking the body of a `declare namespace`: members are implicitly exported
 	typeOnlyUseAllowed          bool                                  // a type-only import may be named here (export default X)
+	defaultExportName           string                                // X of `export default X`
 	ambientClassBody            *parser.ClassBody                     // body of the `declare class` being checked: its method signatures are its members
 	aliasInstantiationDepth     int                                   // nesting of instantiateAliasReference, capped for recursive aliases
 	aliasInstCache              map[aliasInstKey]types.Type           // instantiateAliasReference results
@@ -6230,6 +6231,9 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 	if c.IsModuleMode() {
 		c.moduleEnv.DefineImport(localName, sourceModule, sourceName, importType)
 		c.moduleEnv.ImportedNames[localName].IsTypeOnly = isTypeOnly
+		if !isTypeOnly {
+			c.moduleEnv.ImportedNames[localName].TypeOnlyVia = c.sourceExportTypeOnly(sourceModule, sourceName)
+		}
 		c.bindImport(localName, importType, isTypeOnly)
 	} else {
 		// Fallback: bind to 'any' type in regular environment
@@ -6432,6 +6436,9 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 						// Register the export in module environment
 						if c.IsModuleMode() {
 							c.moduleEnv.DefineExport(localName, exportName, localType, nil)
+							if b := c.moduleEnv.ExportedNames[exportName]; b != nil && (node.IsTypeOnly || exportSpec.IsTypeOnly) {
+								b.IsTypeOnly = true
+							}
 						}
 						if checkerDebug {
 							debugPrintf("// [Checker] Exported: %s as %s (type: %s)\n", localName, exportName, localType.String())
@@ -6456,7 +6463,8 @@ func (c *Checker) checkExportDefaultDeclaration(node *parser.ExportDefaultDeclar
 
 	// Type check the default export expression. `export default X`
 	// re-exports X, which may be a type-only import.
-	if _, isIdent := node.Declaration.(*parser.Identifier); isIdent {
+	if ident, isIdent := node.Declaration.(*parser.Identifier); isIdent {
+		c.defaultExportName = ident.Value
 		saved := c.typeOnlyUseAllowed
 		c.typeOnlyUseAllowed = true
 		c.visit(node.Declaration)
@@ -6541,6 +6549,9 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 
 				// Create individual re-export bindings for each named export
 				for _, exportName := range exportNames {
+					if prev := c.moduleEnv.ExportedNames[exportName]; prev != nil && !prev.IsReExport {
+						continue // a local export shadows the star export
+					}
 					if exportName != "default" { // Skip default export in export *
 						debugPrintf("// [Checker] Re-exporting '%s' from '%s'\n", exportName, sourceModule)
 						c.moduleEnv.DefineReExport(exportName, sourceModule, exportName, node.IsTypeOnly)

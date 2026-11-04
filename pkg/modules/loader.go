@@ -364,6 +364,14 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	return ml.checkAndCompile(record, specifier)
 }
 
+// typeOnlyExports asks a checker which exports are type-only.
+func typeOnlyExports(c TypeChecker) map[string]string {
+	if p, ok := c.(TypeOnlyExportsProvider); ok {
+		return p.TypeOnlyExports()
+	}
+	return nil
+}
+
 // check type-checks a module. The checker may not cope with the partial AST
 // of a module checked despite syntax errors; its parse errors are then all
 // that is reported.
@@ -423,6 +431,7 @@ func (ml *moduleLoader) checkAndCompile(record *ModuleRecord, specifier string) 
 			record.Error = paseratiErrors.NewPositionedError("parsing failed", parseErrs[0])
 			if moduleChecker.IsModuleMode() && !record.isNative {
 				record.Exports = moduleChecker.GetModuleExports()
+				record.TypeOnlyExports = typeOnlyExports(moduleChecker)
 			}
 			return record, nil
 		}
@@ -435,6 +444,7 @@ func (ml *moduleLoader) checkAndCompile(record *ModuleRecord, specifier string) 
 			// Skip type extraction for native modules - they already have their exports set
 			if !record.isNative {
 				record.Exports = moduleChecker.GetModuleExports()
+				record.TypeOnlyExports = typeOnlyExports(moduleChecker)
 				for name, typ := range record.Exports {
 					if moduleLoaderDebug {
 						debugPrintf("// [ModuleLoader]   Export '%s': %s\n", name, typ.String())

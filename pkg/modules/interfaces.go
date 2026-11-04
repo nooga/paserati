@@ -177,6 +177,12 @@ type TypeChecker interface {
 	GetModuleExports() map[string]types.Type
 }
 
+// TypeOnlyExportsProvider is a TypeChecker that says which of a module's
+// exports are type-only (ModuleRecord.TypeOnlyExports).
+type TypeOnlyExportsProvider interface {
+	TypeOnlyExports() map[string]string
+}
+
 // Compiler interface for compiling modules
 type Compiler interface {
 	EnableModuleMode(modulePath string, loader ModuleLoader)
