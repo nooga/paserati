@@ -2381,7 +2381,10 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 					c.deferredHeritageChecks = append(c.deferredHeritageChecks, deferredHeritageCheck{expr: ident, env: c.env})
 					return
 				}
-				if typeOnly, found := c.env.ResolveType(ident.Value); found {
+				// tsc: a class's own type parameters are not in scope in its
+				// base class expression, so naming one is plain TS2304.
+				_, ownTypeParam := c.env.typeParameters[ident.Value]
+				if typeOnly, found := c.env.ResolveType(ident.Value); found && !ownTypeParam {
 					// A type-only name (interface or alias) used where a value is needed.
 					if _, isObj := types.GetEffectiveType(typeOnly).(*types.ObjectType); isObj {
 						c.addErrorWithCode(superClassExpr, errors.TS2689, fmt.Sprintf("Cannot extend an interface '%s'. Did you mean 'implements'?", ident.Value))

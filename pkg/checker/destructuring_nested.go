@@ -576,10 +576,12 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 
 				if objType == nil {
 					c.reportBadObjectDestructure(objectTarget, expectedType)
+					c.bindObjectPatternAsAny(objectTarget, isConst, isVar)
 					return
 				}
 			} else {
 				c.reportBadObjectDestructure(objectTarget, expectedType)
+				c.bindObjectPatternAsAny(objectTarget, isConst, isVar)
 				return
 			}
 		}
@@ -831,5 +833,23 @@ func (c *Checker) visitPatternDefault(def parser.Expression, declared types.Type
 	}
 	if t := def.GetComputedType(); t != nil && !c.isAssignableWithExpansion(t, declared) {
 		c.reportNotAssignable(def, def, t, declared, headAssign)
+	}
+}
+
+// bindObjectPatternAsAny declares the names of a nested object pattern whose
+// source cannot be destructured: tsc binds them all the same.
+func (c *Checker) bindObjectPatternAsAny(objectTarget *parser.ObjectLiteral, isConst bool, isVar bool) {
+	for _, prop := range objectTarget.Properties {
+		if prop == nil {
+			continue
+		}
+		target := prop.Value
+		if target == nil {
+			target = prop.Key
+		}
+		if ck, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+			c.visit(ck.Expr)
+		}
+		c.checkDestructuringTargetForDeclaration(target, types.Any, isConst, isVar)
 	}
 }
