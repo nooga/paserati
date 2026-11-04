@@ -39,6 +39,9 @@ type CheckOptions struct {
 	AlwaysStrict                 bool
 	AllowUnreachableCode         bool
 	ExperimentalDecorators       bool
+	// NoPropertyAccessFromIndexSignature makes `obj.name` that only an
+	// index signature provides TS4111.
+	NoPropertyAccessFromIndexSignature bool
 	// Target is --target as a year (3 and 5 for ES3 and ES5, 2015 for ES6,
 	// 9999 for ESNext); 0 is tsc's default, ES2025.
 	Target int
@@ -121,6 +124,7 @@ func (o CheckOptions) apply(c *checker.Checker) {
 	c.SetAlwaysStrict(o.AlwaysStrict)
 	c.SetAllowUnreachableCode(o.AllowUnreachableCode)
 	c.SetExperimentalDecorators(o.ExperimentalDecorators)
+	c.SetNoPropertyAccessFromIndexSignature(o.NoPropertyAccessFromIndexSignature)
 	c.SetTarget(o.target())
 	c.SetModuleKind(o.Module)
 	c.SetLegacyModuleFormat(LegacyModuleFormat(o.Module))

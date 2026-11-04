@@ -266,6 +266,11 @@ type IndexSignature struct {
 	// Synthetic marks a signature the checker invents for a dynamic computed
 	// property name; it is not a declared index signature.
 	Synthetic bool
+
+	// Permissive marks a signature Paserati's lib adds where tsc's lib
+	// declares none (Error's `[key: string]: any`, so `err.code` checks).
+	// Diagnostics tsc would key off a declared index signature skip it.
+	Permissive bool
 }
 
 func (is *IndexSignature) String() string {

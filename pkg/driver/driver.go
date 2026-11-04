@@ -210,6 +210,12 @@ func (p *Paserati) SetUseUnknownInCatchVariables(enabled bool) {
 	p.checker.SetUseUnknownInCatchVariables(enabled)
 }
 
+// SetNoPropertyAccessFromIndexSignature mirrors
+// --noPropertyAccessFromIndexSignature (TS4111).
+func (p *Paserati) SetNoPropertyAccessFromIndexSignature(enabled bool) {
+	p.checker.SetNoPropertyAccessFromIndexSignature(enabled)
+}
+
 // SetAllowTopLevelReturn controls whether script/eval style top-level returns
 // are accepted by the type checker.
 func (p *Paserati) SetAllowTopLevelReturn(allow bool) {
