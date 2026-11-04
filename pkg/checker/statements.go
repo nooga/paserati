@@ -895,6 +895,12 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			}
 		} else if prop.IsComputedProperty {
 			// [expr]: Type, as in the non-generic path.
+			if prop.ComputedName != nil {
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{ownTypeParams: typeParams, expr: prop.ComputedName, env: c.env})
+				if isNonBindableDynamicName(prop.ComputedName) {
+					c.addErrorAtStart(prop.ComputedName, errors.TS1169, "A computed property name in an interface must refer to an expression whose type is a literal type or a 'unique symbol' type.")
+				}
+			}
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
 				propType = types.Any
