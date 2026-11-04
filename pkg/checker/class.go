@@ -1586,6 +1586,8 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 
 	// Check the function literal
 	c.markVoidOnly(fn)
+	c.pushMemberFrame(savedClassContext, savedThisType, savedInstanceType)
+	defer c.popMemberFrame()
 	c.checkFunctionLiteral(fn)
 }
 

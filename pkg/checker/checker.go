@@ -400,6 +400,10 @@ type Checker struct {
 	// properties (`{ x }`): an unresolved one is TS18004, not TS2304.
 	shorthandRefs map[*parser.Identifier]bool
 
+	// memberFrames holds the class member bodies being checked, innermost
+	// last, for tsc's "Did you mean the static/instance member" hints.
+	memberFrames []classMemberFrame
+
 	// Set by the namespace pre-pass: the nested namespace declaration about to
 	// be checked is exported.
 	nsDeclExported bool
