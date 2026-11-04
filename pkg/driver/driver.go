@@ -153,6 +153,11 @@ func (p *Paserati) SetTarget(year int) {
 	p.checker.SetTarget(year)
 }
 
+// SetDownlevelIteration mirrors --downlevelIteration.
+func (p *Paserati) SetDownlevelIteration(on bool) {
+	p.checker.SetDownlevelIteration(on)
+}
+
 // SetEmitStandardClassFields mirrors tsc's emitStandardClassFields
 // (useDefineForClassFields with a target of ES2022 or later).
 func (p *Paserati) SetEmitStandardClassFields(on bool) {

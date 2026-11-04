@@ -71,6 +71,10 @@ const (
 	TS2323  = "TS2323"  // Cannot redeclare exported variable 'x'
 	TS2467  = "TS2467"  // A computed property name cannot reference a type parameter from its containing type
 	TS2855  = "TS2855"  // Class field 'x' defined by the parent class is not accessible in the child class via super
+	TS2495  = "TS2495"  // Type 'X' is not an array type or a string type
+	TS2802  = "TS2802"  // Type 'X' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher
+	TS2548  = "TS2548"  // Type 'X' is not an array type or does not have a '[Symbol.iterator]()' method that returns an iterator
+	TS2549  = "TS2549"  // Type 'X' is not an array type or a string type or does not have a '[Symbol.iterator]()' method that returns an iterator
 	TS2610  = "TS2610"  // 'X' is defined as an accessor in class 'Y', but is overridden here in 'Z' as an instance property
 	TS2611  = "TS2611"  // 'X' is defined as a property in class 'Y', but is overridden here in 'Z' as an accessor
 	TS2678  = "TS2678"  // Type 'X' is not comparable to type 'Y'

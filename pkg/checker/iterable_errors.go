@@ -69,7 +69,27 @@ func (c *Checker) isDefinitelyNotIterable(t types.Type) bool {
 
 // reportNotIterable reports TS2488 when t certainly cannot be iterated.
 func (c *Checker) reportNotIterable(node parser.Node, t types.Type) {
+	c.reportNotIterableFor(node, t, false)
+}
+
+// reportNotIterableFor is reportNotIterable for a use that iterates strings
+// too (for-of) or not (array destructuring), which picks the message below
+// ES2015.
+func (c *Checker) reportNotIterableFor(node parser.Node, t types.Type, allowStrings bool) {
+	if c.downlevelArrayIteration() {
+		c.reportDownlevelIteration(node, t, allowStrings)
+		return
+	}
 	if !c.isDefinitelyNotIterable(t) {
+		return
+	}
+	if c.target() < 2015 && !c.isArrayLikeForIteration(t, 0) {
+		// --downlevelIteration: neither the protocol nor an array.
+		if allowStrings {
+			c.addErrorWithCode(node, errors.TS2549, fmt.Sprintf("Type '%s' is not an array type or a string type or does not have a '[Symbol.iterator]()' method that returns an iterator.", t.String()))
+		} else {
+			c.addErrorWithCode(node, errors.TS2548, fmt.Sprintf("Type '%s' is not an array type or does not have a '[Symbol.iterator]()' method that returns an iterator.", t.String()))
+		}
 		return
 	}
 	c.addErrorWithCode(node, errors.TS2488, fmt.Sprintf("Type '%s' must have a '[Symbol.iterator]()' method that returns an iterator.", t.String()))

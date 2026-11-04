@@ -1622,11 +1622,22 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 			}
 		} else {
 			// Regular for...of (synchronous iteration)
-			if iterableType == types.Any {
+			if c.reportDownlevelIteration(node.Iterable, iterableType, true) {
+				elementType = types.Any
+			} else if iterableType == types.Any {
 				// Before the string test below, which `any` would pass (#636).
 				elementType = types.Any
 			} else if arrayType, ok := iterableType.(*types.ArrayType); ok {
 				elementType = arrayType.ElementType
+			} else if tuple, ok := iterableType.(*types.TupleType); ok && len(tuple.ElementTypes) > 0 {
+				// A tuple yields the union of its element types.
+				members := append([]types.Type(nil), tuple.ElementTypes...)
+				if rest, isArr := tuple.RestElementType.(*types.ArrayType); isArr {
+					members = append(members, rest.ElementType) // ...T[]
+				} else if tuple.RestElementType != nil {
+					members = append(members, types.Any)
+				}
+				elementType = types.NewUnionType(members...)
 			} else if unionType, ok := iterableType.(*types.UnionType); ok {
 				// Handle union types like T[] | undefined (common after optional property access)
 				var elemTypes []types.Type
@@ -1645,7 +1656,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 				} else {
 					elementType = types.Any
 				}
-				c.reportNotIterable(node.Iterable, iterableType)
+				c.reportNotIterableFor(node.Iterable, iterableType, true)
 			} else if iterableType == types.String || c.rel.IsAssignable(iterableType, types.String) {
 				// String iteration yields individual characters (strings)
 				// This handles both the general string type and string literal types
@@ -1681,17 +1692,17 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 							elementType = types.Any
 						} else {
 							// Not iterable
-							c.reportNotIterable(node.Iterable, iterableType)
+							c.reportNotIterableFor(node.Iterable, iterableType, true)
 							elementType = types.Any
 						}
 					} else {
 						// Iterable type exists but isn't a generic - something's wrong
-						c.reportNotIterable(node.Iterable, iterableType)
+						c.reportNotIterableFor(node.Iterable, iterableType, true)
 						elementType = types.Any
 					}
 				} else {
 					// No Iterable type found - fallback to old behavior
-					c.reportNotIterable(node.Iterable, iterableType)
+					c.reportNotIterableFor(node.Iterable, iterableType, true)
 					elementType = types.Any
 				}
 			}
@@ -1939,6 +1950,10 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 	switch node.Variable.(type) {
 	case *parser.ArrayDestructuringDeclaration, *parser.ObjectDestructuringDeclaration:
 		c.addErrorWithCode(node.Variable, "TS2491", "The left-hand side of a 'for...in' statement cannot be a destructuring pattern.")
+	}
+	if arr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
+		// The pattern still destructures the string key.
+		c.reportDownlevelIteration(arr, types.String, false)
 	}
 
 	originalEnv := c.env
@@ -2409,6 +2424,7 @@ func (c *Checker) checkForOfAssignmentPattern(pattern parser.Expression, sourceT
 	src := c.rel.GetWidenedType(sourceType)
 	switch p := pattern.(type) {
 	case *parser.ArrayLiteral:
+		c.reportNotIterable(p, src)
 		for i, el := range p.Elements {
 			if el == nil {
 				continue
