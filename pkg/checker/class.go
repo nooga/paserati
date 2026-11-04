@@ -640,7 +640,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	c.checkClassInitializationOrder(node.Name.Value, node.Body, instanceType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
-	instanceType.DisplayName, constructorType.DisplayName = node.Name.Value, "typeof "+node.Name.Value
+	instanceType.DisplayName, constructorType.DisplayName = classDisplayName(node.Name.Value), "typeof "+classDisplayName(node.Name.Value)
 	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 6. Update the constructor function in the environment (replacing forward reference)
@@ -904,14 +904,14 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		for i, tp := range typeParams {
 			names[i] = tp.Name
 		}
-		text := node.Name.Value + "<" + strings.Join(names, ", ") + ">"
+		text := classDisplayName(node.Name.Value) + "<" + strings.Join(names, ", ") + ">"
 		for _, meta := range []*types.ClassMetadata{instanceType.ClassMeta, constructorType.ClassMeta} {
 			if meta != nil {
 				meta.DisplayText = text
 			}
 		}
 	}
-	constructorType.DisplayName = "typeof " + node.Name.Value
+	constructorType.DisplayName = "typeof " + classDisplayName(node.Name.Value)
 	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 8. Create the GenericType for the class
@@ -3554,4 +3554,13 @@ func (c *Checker) defaultGenericInstance(name *parser.Identifier) *types.ObjectT
 	}
 	inst, _ := c.instantiateGenericType(g, args, nil).(*types.ObjectType)
 	return inst
+}
+
+// classDisplayName is how a class's name prints: a class expression without
+// a name (named __AnonymousClass_N internally) is tsc's `(Anonymous class)`.
+func classDisplayName(name string) string {
+	if strings.HasPrefix(name, "__AnonymousClass_") {
+		return "(Anonymous class)"
+	}
+	return name
 }
