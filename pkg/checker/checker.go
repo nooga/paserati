@@ -910,6 +910,7 @@ func (c *Checker) beyondTsc() bool { return !c.tscCompat }
 func (c *Checker) SetStrictNullChecks(strict bool) {
 	c.strictNullChecks = strict
 	c.rel.StrictNullChecks = strict
+	types.SetPrintOptionalUndefined(strict)
 }
 
 // SetStrictFunctionTypes mirrors the `--strictFunctionTypes` compiler option:
