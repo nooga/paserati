@@ -3698,8 +3698,11 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	}
 
 	if sourceObjectType == nil && mappedType.ModifiersType != nil {
-		if objType, ok := c.structuralObject(c.resolveStructural(mappedType.ModifiersType)); ok {
+		modifiers := c.resolveStructural(mappedType.ModifiersType)
+		if objType, ok := c.structuralObject(modifiers); ok {
 			sourceObjectType = objType
+		} else if u, ok := modifiers.(*types.UnionType); ok {
+			sourceObjectType = c.unionModifiersObject(u)
 		}
 	}
 
@@ -3774,6 +3777,37 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 		CallSignatures:     []*types.Signature{}, // Mapped types don't create call signatures
 		IndexSignatures:    c.mappedIndexSignatures(mappedType, sourceObjectType),
 	}
+}
+
+// unionModifiersObject is the modifiers of a union's properties, for a
+// mapped type that copies them (Pick<A | B, K>, Omit over a union): a
+// property is optional, or readonly, when it is so in some member, as tsc's
+// union properties are. nil when a member is not an object type.
+func (c *Checker) unionModifiersObject(u *types.UnionType) *types.ObjectType {
+	result := types.NewObjectType()
+	optional := map[string]bool{}
+	readonly := map[string]bool{}
+	for _, m := range u.Types {
+		obj, ok := c.structuralObject(c.resolveStructural(m))
+		if !ok {
+			return nil
+		}
+		for _, name := range obj.PropertyNames() {
+			if _, seen := result.Props()[name]; !seen {
+				result.SetProperty(name, types.Any)
+			}
+			if obj.IsPropertyOptional(name) {
+				optional[name] = true
+			}
+			if obj.ReadOnlyProps()[name] {
+				readonly[name] = true
+			}
+		}
+	}
+	result.Materialize()
+	result.OptionalProperties = optional
+	result.ReadOnlyProperties = readonly
+	return result
 }
 
 // mappedIndexSignatures maps the index signatures of a homomorphic mapped
