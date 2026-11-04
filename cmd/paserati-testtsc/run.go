@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -26,14 +27,10 @@ type workerReq struct {
 type workerResp struct {
 	Actual      []Diag `json:"actual"`
 	ParseErrors int    `json:"parseErrors"`
-	// CheckRan is true when the checker ran. After parse errors it is false only
-	// if the checker panicked on the partial AST (the "parse-only" category).
-	CheckRan   bool   `json:"checkRan"`
-	CheckPanic string `json:"checkPanic,omitempty"`
-	Panic      string `json:"panic,omitempty"` // panic outside the parse-error recovery path: the test is a failure
-	Err        string `json:"err,omitempty"`   // harness-level error (unreadable file, ...)
-	Ready      bool   `json:"ready,omitempty"` // handshake sent once by a freshly started worker, before any job
-	DurNs      int64  `json:"durNs"`
+	Panic       string `json:"panic,omitempty"` // parser or checker panic (with or without parse errors): the test is a failure
+	Err         string `json:"err,omitempty"`   // harness-level error (unreadable file, ...)
+	Ready       bool   `json:"ready,omitempty"` // handshake sent once by a freshly started worker, before any job
+	DurNs       int64  `json:"durNs"`
 }
 
 // toDiag converts one of our diagnostics. Columns: Paserati's Position.Column is
@@ -78,7 +75,7 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				resp.Panic = fmt.Sprintf("panic: %v", r)
+				resp.Panic = fmt.Sprintf("panic: %v%s", r, panicSite())
 			}
 		}()
 		lx := lexer.NewLexer(st.Source)
@@ -104,23 +101,10 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 		}
 
 		// tsc type-checks files with syntax errors and reports both kinds, so we
-		// run the checker on the (error-recovered) AST as well. If the checker
-		// cannot cope with a partial AST we keep just the parse errors and say so.
-		var checkErrs []errorsPkg.PaseratiError
-		checkOK := func() (ok bool) {
-			defer func() {
-				if r := recover(); r != nil {
-					if len(parseErrs) == 0 {
-						panic(r) // a plain checker panic is a test failure, not a category
-					}
-					resp.CheckPanic = fmt.Sprintf("%v", r)
-					ok = false
-				}
-			}()
-			_, checkErrs = pas.CompileProgram(prog)
-			return true
-		}()
-		resp.CheckRan = checkOK
+		// run the checker on the (error-recovered) AST as well. The checker must
+		// cope with any partial AST: a panic here is a test failure (status
+		// panic, via the recover above) like any other.
+		_, checkErrs := pas.CompileProgram(prog)
 		for _, e := range checkErrs {
 			phase := "check"
 			if e.Kind() == "Compile" {
@@ -141,6 +125,45 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 		resp.Actual = dedupeDiags(resp.Actual)
 	}()
 	return
+}
+
+// panicSite names the innermost Paserati frame of a panic being recovered (call
+// it from the deferred recover), so a "checker panicked" record says where.
+func panicSite() string {
+	pcs := make([]uintptr, 64)
+	n := runtime.Callers(3, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	var all []runtime.Frame
+	for {
+		f, more := frames.Next()
+		all = append(all, f)
+		if !more {
+			break
+		}
+	}
+	// A recover that re-panics (the compiler's does) stacks a second gopanic on
+	// top: the faulting frame is the first Paserati frame below the outermost
+	// (last listed) runtime.gopanic.
+	start := 0
+	for i, f := range all {
+		if f.Function == "runtime.gopanic" {
+			start = i + 1
+		}
+	}
+	// The faulting frame and two callers, which usually name the bad node.
+	var site []string
+	for _, f := range all[start:] {
+		if strings.Contains(f.Function, "github.com/nooga/paserati/pkg/") {
+			site = append(site, fmt.Sprintf("%s (%s:%d)", f.Function[strings.LastIndex(f.Function, "/")+1:], filepath.Base(f.File), f.Line))
+			if len(site) == 3 {
+				break
+			}
+		}
+	}
+	if len(site) == 0 {
+		return ""
+	}
+	return " at " + strings.Join(site, " < ")
 }
 
 // dedupeDiags drops diagnostics identical to an earlier one (same position,
