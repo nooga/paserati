@@ -86,6 +86,7 @@ func (c *Checker) checkParamInitializers(params []*parser.Parameter, body []pars
 			parser.CollectPatternNames(p.Pattern, map[string]bool{}, &paramNames[i])
 		}
 	}
+	bindingPos := paramBindingPositions(params)
 	for i, p := range params {
 		if p == nil || p.IsThis {
 			continue
@@ -118,7 +119,105 @@ func (c *Checker) checkParamInitializers(params []*parser.Parameter, body []pars
 			forEachInitializerReference(p.DefaultValue, report)
 		}
 		if p.Pattern != nil {
-			forEachPatternInitializerReference(p.Pattern, report)
+			forEachPatternElementInitializer(p.Pattern, func(target parser.Expression, init parser.Expression) {
+				elem, ok := target.(*parser.Identifier)
+				if !ok || elem.Token == nil {
+					forEachInitializerReference(init, report)
+					return
+				}
+				// tsc associates a reference in a binding element's default
+				// with that element: its own name is TS2372, and so is TS2373
+				// any binding declared after it, in this parameter or later.
+				forEachInitializerReference(init, func(id *parser.Identifier) {
+					pos, isParam := bindingPos[id.Value]
+					switch {
+					case id.Value == elem.Value:
+						c.addErrorWithCode(id, errors.TS2372, fmt.Sprintf("Parameter '%s' cannot reference itself.", id.Value))
+					case isParam && pos > elem.Token.StartPos,
+						!isParam && later[id.Value],
+						!isParam && bodyNames[id.Value]:
+						c.addErrorWithCode(id, errors.TS2373, fmt.Sprintf("Parameter '%s' cannot reference identifier '%s' declared after it.", elem.Value, id.Value))
+					}
+				})
+			})
+		}
+	}
+}
+
+// paramBindingPositions maps the names params bind through simple names and
+// the identifier elements of their patterns to where they are declared.
+func paramBindingPositions(params []*parser.Parameter) map[string]int {
+	pos := map[string]int{}
+	note := func(id *parser.Identifier) {
+		if id == nil || id.Token == nil {
+			return
+		}
+		if _, seen := pos[id.Value]; !seen {
+			pos[id.Value] = id.Token.StartPos
+		}
+	}
+	var walk func(e parser.Expression)
+	walk = func(e parser.Expression) {
+		switch t := e.(type) {
+		case *parser.Identifier:
+			note(t)
+		case *parser.ObjectParameterPattern:
+			for _, prop := range t.Properties {
+				if prop != nil {
+					walk(prop.Target)
+				}
+			}
+			if t.RestProperty != nil {
+				walk(t.RestProperty.Target)
+			}
+		case *parser.ArrayParameterPattern:
+			for _, el := range t.Elements {
+				if el != nil {
+					walk(el.Target)
+				}
+			}
+		}
+	}
+	for _, p := range params {
+		if p == nil {
+			continue
+		}
+		if p.Name != nil {
+			note(p.Name)
+		} else if p.Pattern != nil {
+			walk(p.Pattern)
+		}
+	}
+	return pos
+}
+
+// forEachPatternElementInitializer calls fn for every expression a parameter
+// pattern evaluates: each element's default with the element's target, and
+// computed keys with a nil target.
+func forEachPatternElementInitializer(pattern parser.Expression, fn func(target, init parser.Expression)) {
+	switch pt := pattern.(type) {
+	case *parser.ObjectParameterPattern:
+		for _, prop := range pt.Properties {
+			if prop == nil {
+				continue
+			}
+			if ck, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+				fn(nil, ck.Expr)
+			}
+			if prop.Default != nil {
+				fn(prop.Target, prop.Default)
+			}
+			forEachPatternElementInitializer(prop.Target, fn)
+		}
+	case *parser.ArrayParameterPattern:
+		for _, el := range pt.Elements {
+			if el == nil {
+				continue
+			}
+			if el.Default != nil {
+				fn(el.Target, el.Default)
+			}
+			forEachPatternElementInitializer(el.Target, fn)
 		}
 	}
 }
@@ -203,36 +302,6 @@ func earlierParam(names [][]string, name string) bool {
 		}
 	}
 	return false
-}
-
-// forEachPatternInitializerReference visits the computed keys and defaults
-// of a destructuring parameter pattern.
-func forEachPatternInitializerReference(pattern parser.Expression, fn func(*parser.Identifier)) {
-	switch pt := pattern.(type) {
-	case *parser.ObjectParameterPattern:
-		for _, prop := range pt.Properties {
-			if prop == nil {
-				continue
-			}
-			if ck, ok := prop.Key.(*parser.ComputedPropertyName); ok {
-				forEachInitializerReference(ck.Expr, fn)
-			}
-			if prop.Default != nil {
-				forEachInitializerReference(prop.Default, fn)
-			}
-			forEachPatternInitializerReference(prop.Target, fn)
-		}
-	case *parser.ArrayParameterPattern:
-		for _, el := range pt.Elements {
-			if el == nil {
-				continue
-			}
-			if el.Default != nil {
-				forEachInitializerReference(el.Default, fn)
-			}
-			forEachPatternInitializerReference(el.Target, fn)
-		}
-	}
 }
 
 // forEachInitializerReference calls fn for each identifier an expression
