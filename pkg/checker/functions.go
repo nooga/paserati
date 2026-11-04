@@ -12,7 +12,8 @@ import (
 // and checking their types.
 func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 	if node.Name == nil {
-		c.addError(node, "function signature must have a name")
+		// Only reachable after a parse error (TS1003 at the missing name),
+		// which is all tsc reports.
 		return
 	}
 	if node.ReturnTypeAnnotation == nil && !node.HasBody {

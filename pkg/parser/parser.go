@@ -993,7 +993,9 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	program.UnresolvedPrivateNames = p.unresolvedPrivateNames
 	program.UsesImportMeta = p.usesImportMeta
 
-	return program, p.dropSuppressedGrammarErrors()
+	errs := p.dropSuppressedGrammarErrors()
+	program.HasParseErrors = len(errs) > 0
+	return program, errs
 }
 
 // --- Statement Parsing ---
@@ -1001,12 +1003,27 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 func (p *Parser) parseStatement() Statement {
 	start := p.curToken.StartPos
 	stmt := p.parseStatementNoDoc()
+	// A statement parser that gave up returns a nil *XStatement, which as a
+	// Statement interface is not == nil; callers append it to statement lists
+	// and the checker then trips over it. Make the failure an untyped nil.
+	if isTypedNilNode(stmt) {
+		return nil
+	}
 	if stmt != nil {
 		if doc := p.l.DocBefore(start); doc != "" {
 			attachDeclarationDoc(stmt, doc)
 		}
 	}
 	return stmt
+}
+
+// isTypedNilNode reports whether n is a non-nil interface holding a nil pointer.
+func isTypedNilNode(n Node) bool {
+	if n == nil {
+		return false
+	}
+	v := reflect.ValueOf(n)
+	return v.Kind() == reflect.Ptr && v.IsNil()
 }
 
 // attachDeclarationDoc stores a JSDoc comment on the declaration a statement

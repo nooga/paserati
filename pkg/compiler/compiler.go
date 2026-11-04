@@ -1038,6 +1038,15 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 	// No need to re-assign c.typeChecker here, it was already set or created.
 	// --- End Type Checking Step ---
 
+	// A program with syntax errors may be an error-recovered partial tree: it
+	// can be type-checked (as above, like tsc) but never compiled.
+	if program.HasParseErrors {
+		return nil, []errors.PaseratiError{&errors.CompileError{
+			Position: errors.Position{Line: 1, Column: 1},
+			Msg:      "compiler error: program has syntax errors",
+		}}
+	}
+
 	// Module code has early errors of its own, which must be reported before
 	// any import is loaded (a parse-phase SyntaxError, not a link failure).
 	moduleGoal := c.isModuleGoal()
