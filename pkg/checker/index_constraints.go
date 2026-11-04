@@ -102,6 +102,10 @@ func (c *Checker) checkInterfaceExtends(node *parser.InterfaceDeclaration, own *
 		return
 	}
 	name := interfaceDisplayName(node)
+	if !c.checkInheritedPropertiesAreIdentical(node, own, extended) {
+		// tsc checks assignability to the bases only once they agree.
+		return
+	}
 	for i, ext := range extended {
 		if ext == nil || (!redeclaresNonPublicMember(node, ext) && c.isAssignableWithExpansion(membersView(own), membersView(ext))) {
 			continue
@@ -119,6 +123,111 @@ func (c *Checker) checkInterfaceExtends(node *parser.InterfaceDeclaration, own *
 		c.addErrorAtStart(node.Name, errors.TS2430, fmt.Sprintf(
 			"Interface '%s' incorrectly extends interface '%s'.", name, baseName))
 	}
+}
+
+// interfaceMerge accumulates the declarations of one interface: tsc checks
+// the bases of all of them together at the first one.
+type interfaceMerge struct {
+	first *parser.InterfaceDeclaration
+	bases []*types.ObjectType
+	names []string
+	own   map[string]bool
+}
+
+// checkInheritedPropertiesAreIdentical is tsc's check of the same name
+// inherited from two bases: unless the interface declares the member itself,
+// the inherited members must be identical (TS2320). The bases of the
+// declarations of a merged interface checked so far count together.
+// FIXME: members a later declaration declares are not yet known here.
+func (c *Checker) checkInheritedPropertiesAreIdentical(node *parser.InterfaceDeclaration, own *types.ObjectType, extended []*types.ObjectType) bool {
+	if c.interfaceMerges == nil {
+		c.interfaceMerges = map[*types.ObjectType]*interfaceMerge{}
+	}
+	rec := c.interfaceMerges[own]
+	if rec == nil {
+		rec = &interfaceMerge{first: node, own: map[string]bool{}}
+		c.interfaceMerges[own] = rec
+	}
+	for _, p := range node.Properties {
+		if p != nil && p.Name != nil && !p.IsComputedProperty {
+			rec.own[p.Name.Value] = true
+		}
+	}
+	for i, ext := range extended {
+		if ext == nil {
+			continue
+		}
+		name := ext.String()
+		if len(extended) == len(node.Extends) && node.Extends[i] != nil {
+			name = node.Extends[i].String()
+		}
+		rec.bases = append(rec.bases, ext)
+		rec.names = append(rec.names, name)
+	}
+	if len(rec.bases) < 2 || len(extended) == 0 {
+		return true
+	}
+	type seenProp struct {
+		base int
+		typ  types.Type
+	}
+	seen := map[string]seenProp{}
+	ok := true
+	for i, ext := range rec.bases {
+		for _, propName := range ext.EffectivePropertyNames() {
+			if rec.own[propName] {
+				continue
+			}
+			propType, found := ext.EffectiveProperty(propName)
+			if !found {
+				continue
+			}
+			prev, exists := seen[propName]
+			if !exists {
+				seen[propName] = seenProp{base: i, typ: propType}
+				continue
+			}
+			if c.inheritedPropertiesIdentical(rec.bases[prev.base], ext, propName, prev.typ, propType) {
+				continue
+			}
+			ok = false
+			first, second := rec.names[prev.base], rec.names[i]
+			c.addErrorAtStart(rec.first.Name, errors.TS2320, fmt.Sprintf(
+				"Interface '%s' cannot simultaneously extend types '%s' and '%s'.\n  Named property '%s' of types '%s' and '%s' are not identical.",
+				interfaceDisplayName(rec.first), first, second, propName, first, second))
+		}
+	}
+	return ok
+}
+
+// inheritedPropertiesIdentical is tsc's compareProperties under the identity
+// relation for a member name inherited from bases a and b.
+func (c *Checker) inheritedPropertiesIdentical(a, b *types.ObjectType, name string, ta, tb types.Type) bool {
+	ownerA, nonPublicA := types.NonPublicMemberOwner(a, name)
+	ownerB, nonPublicB := types.NonPublicMemberOwner(b, name)
+	if nonPublicA != nonPublicB || ownerA != ownerB {
+		return false
+	}
+	if !nonPublicA && a.IsPropertyOptional(name) != b.IsPropertyOptional(name) {
+		return false
+	}
+	if isReadonlyMember(a, name) != isReadonlyMember(b, name) {
+		return false
+	}
+	return ta == tb || c.rel.IsIdenticalType(ta, tb)
+}
+
+// isReadonlyMember reports whether name is readonly on obj or a base it
+// inherits the member from.
+func isReadonlyMember(obj *types.ObjectType, name string) bool {
+	readonly, found := false, false
+	forEachEffectiveMember(obj, func(owner *types.ObjectType, propName string) {
+		if propName == name {
+			// Later owners (obj itself last) override earlier bases.
+			readonly, found = owner.ReadOnlyProps()[name], true
+		}
+	})
+	return found && readonly
 }
 
 // redeclaresNonPublicMember reports whether the interface declares a member

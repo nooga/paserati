@@ -565,25 +565,28 @@ type Checker struct {
 	// same position more than once (see addErrorAtStart).
 	reportedRelationDiagnostics map[string]bool
 	indexConstraintsReported    map[string]bool // TS2411 already reported per (type, property, index key)
-	deferredRelationChecks      []deferredRelationCheck
-	overloadStrictAny           bool                                  // first overload pass: an `any` argument only fits any/unknown parameters
-	inAmbientNamespace          bool                                  // checking the body of a `declare namespace`: members are implicitly exported
-	typeOnlyUseAllowed          bool                                  // a type-only import may be named here (export default X)
-	defaultExportName           string                                // X of `export default X`
-	ambientClassBody            *parser.ClassBody                     // body of the `declare class` being checked: its method signatures are its members
-	aliasInstantiationDepth     int                                   // nesting of instantiateAliasReference, capped for recursive aliases
-	aliasInstCache              map[aliasInstKey]types.Type           // instantiateAliasReference results
-	instCache                   *instantiationCache                   // instantiateGenericType results; shared by a program's checkers
-	pendingAliases              map[string]*parser.TypeAliasStatement // top-level aliases Pass 1 has not resolved yet
-	pendingAliasEnv             *Environment                          // the environment they resolve in
-	classPlaceholders           map[*types.ObjectType]bool            // Pass 0 class types not filled in yet
-	checkedParameterDefaults    map[*parser.Parameter]bool
-	namespaceBodyDepth          int          // > 0 while checking a namespace body
-	fileScope                   *Environment // the program's top-level scope (module scope in a module)
-	declaredHook                func()       // called once declarations are in place (see SetDeclaredHook)
-	earlyExports                map[string]earlyExport
-	earlyLookups                map[string]bool // early export lookups in progress (re-export cycles)
-	isModule                    bool            // Source is a module, so strict mode comes from the module (TS1214)
+	// interfaceMerges: the bases and members of every declaration of an
+	// interface checked so far, keyed by its merged type (TS2320).
+	interfaceMerges          map[*types.ObjectType]*interfaceMerge
+	deferredRelationChecks   []deferredRelationCheck
+	overloadStrictAny        bool                                  // first overload pass: an `any` argument only fits any/unknown parameters
+	inAmbientNamespace       bool                                  // checking the body of a `declare namespace`: members are implicitly exported
+	typeOnlyUseAllowed       bool                                  // a type-only import may be named here (export default X)
+	defaultExportName        string                                // X of `export default X`
+	ambientClassBody         *parser.ClassBody                     // body of the `declare class` being checked: its method signatures are its members
+	aliasInstantiationDepth  int                                   // nesting of instantiateAliasReference, capped for recursive aliases
+	aliasInstCache           map[aliasInstKey]types.Type           // instantiateAliasReference results
+	instCache                *instantiationCache                   // instantiateGenericType results; shared by a program's checkers
+	pendingAliases           map[string]*parser.TypeAliasStatement // top-level aliases Pass 1 has not resolved yet
+	pendingAliasEnv          *Environment                          // the environment they resolve in
+	classPlaceholders        map[*types.ObjectType]bool            // Pass 0 class types not filled in yet
+	checkedParameterDefaults map[*parser.Parameter]bool
+	namespaceBodyDepth       int          // > 0 while checking a namespace body
+	fileScope                *Environment // the program's top-level scope (module scope in a module)
+	declaredHook             func()       // called once declarations are in place (see SetDeclaredHook)
+	earlyExports             map[string]earlyExport
+	earlyLookups             map[string]bool // early export lookups in progress (re-export cycles)
+	isModule                 bool            // Source is a module, so strict mode comes from the module (TS1214)
 	// topLevelAwaitDisallowed: see SetTopLevelAwaitDisallowed.
 	topLevelAwaitDisallowed bool
 	// Identifiers already reported as strict-mode reserved words, so narrowing

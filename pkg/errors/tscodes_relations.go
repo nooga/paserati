@@ -10,6 +10,7 @@ const (
 	TS2417 = "TS2417" // static side incorrectly extends base static side
 	TS2416 = "TS2416" // Property 'X' in type 'A' is not assignable to the same property in base type 'B'
 	TS2430 = "TS2430" // Interface 'X' incorrectly extends interface 'Y'
+	TS2320 = "TS2320" // Interface 'X' cannot simultaneously extend types 'A' and 'B'
 	TS2559 = "TS2559" // Type 'X' has no properties in common with type 'Y'
 	TS2739 = "TS2739" // Type 'X' is missing the following properties from type 'Y': a, b
 	TS2740 = "TS2740" // Type 'X' is missing the following properties from type 'Y': a, b, c, d, and N more
