@@ -2778,6 +2778,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.checkParameterReferences(program)
 	c.checkSyntacticTruthiness(program)
 
+	c.checkCircularTypeParameterConstraints(program)
 	c.reportImplicitAnyParameters()
 
 	c.applyModuleAugmentations()
