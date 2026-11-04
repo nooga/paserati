@@ -7883,7 +7883,7 @@ func (p *Parser) parseForStatement() Statement {
 		p.nextToken() // Advance to 'using'
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
-	if p.peekTokenIs(lexer.AWAIT) && p.startsUsingDeclarationAt(1) {
+	if p.peekTokenIs(lexer.AWAIT) && (p.startsUsingDeclarationAt(1) || p.tscAwaitUsingOfAt(0)) {
 		p.nextToken() // Advance to 'await'
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
@@ -11197,12 +11197,20 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				return nil
 			}
 		}
-	} else if p.startsUsingDeclarationForLoop() || p.startsAwaitUsingDeclaration() {
+	} else if p.tscAwaitUsingOfAt(-1) && p.lookAheadIsNameThenRParen(2) {
+		// tsc's parseVariableDeclarationList: in `for (await using of x)` the
+		// `of` is the loop's and the list is empty (TS1123, a grammar error).
+		usingToken := p.curToken
+		p.nextToken() // Move to 'using'
+		kw := p.curToken
+		p.addGrammarErrorWithCode(&lexer.Token{Line: kw.Line, Column: kw.Column + len(kw.Literal), StartPos: kw.EndPos, EndPos: kw.EndPos}, "TS1123", "Variable declaration list cannot be empty.")
+		varStmt = &LetStatement{Token: usingToken, IsUsing: true, IsAwaitUsing: true}
+	} else if p.startsUsingDeclarationForLoop() || p.startsAwaitUsingDeclaration() || p.tscAwaitUsingOfAt(-1) {
 		// `for (using d of xs)` disposes each iteration; `for (using d = e;;)`
 		// disposes when the loop completes. Only a plain binding name is
 		// allowed — no destructuring patterns.
 		usingToken := p.curToken
-		isAwaitUsing := p.startsAwaitUsingDeclaration()
+		isAwaitUsing := p.startsAwaitUsingDeclaration() || p.tscAwaitUsingOfAt(-1)
 		if isAwaitUsing {
 			p.nextToken() // Move to 'using'
 		}
