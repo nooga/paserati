@@ -20,7 +20,7 @@ type TypeParameter struct {
 func (tp *TypeParameter) String() string {
 	var result strings.Builder
 	result.WriteString(tp.Name)
-	if tp.Constraint != nil {
+	if tp.Constraint != nil && tp.Constraint != Any {
 		result.WriteString(" extends ")
 		result.WriteString(tp.Constraint.String())
 	}
@@ -64,6 +64,16 @@ type GenericType struct {
 }
 
 func (g *GenericType) String() string {
+	if g.Name == "Function" {
+		// An anonymous generic function type: `<T>(x: T) => T`.
+		if obj, ok := g.Body.(*ObjectType); ok && len(obj.CallSigs()) == 1 && len(obj.ConstructSigs()) == 0 && len(obj.Props()) == 0 && len(obj.IndexSigs()) == 0 {
+			sig := *obj.CallSigs()[0]
+			if len(sig.TypeParameters) == 0 {
+				sig.TypeParameters = g.TypeParameters
+			}
+			return sig.String()
+		}
+	}
 	paramNames := make([]string, len(g.TypeParameters))
 	for i, param := range g.TypeParameters {
 		paramNames[i] = param.String()

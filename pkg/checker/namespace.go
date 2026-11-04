@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -122,6 +123,10 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 				nsType.Instantiated = true
 			}
 		}
+		// The namespace object prints as `typeof N`, as tsc does.
+		if !node.AmbientModule && nsType.ValueShape.DisplayName == "" && nsType.ValueShape.GenericName == "" {
+			nsType.ValueShape.DisplayName = "typeof " + c.qualifiedDeclName(name)
+		}
 		// Bind ValueShape in value env so `N.x` member access resolves through
 		// ordinary ObjectType property lookup.
 		c.env.Define(name, nsType.ValueShape, false)
@@ -161,9 +166,16 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	outerAmbient := c.inAmbientNamespace
 	c.inAmbientNamespace = outerAmbient || node.Declare
 	c.namespaceBodyDepth++
+	outerNames := c.namespaceNames
+	bodyNames := append(outerNames[:len(outerNames):len(outerNames)], name)
+	if node.AmbientModule {
+		bodyNames = outerNames
+	}
+	c.namespaceNames = bodyNames
 	defer func() {
 		c.inAmbientNamespace = outerAmbient
 		c.namespaceBodyDepth--
+		c.namespaceNames = outerNames
 	}()
 
 	// Seed bodyEnv with existing NAMESPACE children from nsType so that merge passes
@@ -228,10 +240,13 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 			c.inAmbientNamespace = ambientBody
 			c.currentAmbientModule = ambientMod
 			c.namespaceBodyDepth++
+			prevNames := c.namespaceNames
+			c.namespaceNames = bodyNames
 			defer func() {
 				c.inAmbientNamespace = prevAmbient
 				c.currentAmbientModule = prevModule
 				c.namespaceBodyDepth--
+				c.namespaceNames = prevNames
 			}()
 			// Exported values of earlier declarations of this namespace are
 			// visible by bare name in a merged body. (Done here, not before
@@ -590,4 +605,14 @@ func namespaceValueOnly(env *Environment, name string) bool {
 	sym, found := env.symbols[name]
 	ns, isNs := env.typeAliases[name].(*types.NamespaceType)
 	return found && isNs && !ns.Instantiated && sym.Type == ns.ValueShape
+}
+
+// qualifiedDeclName is how a name declared in the current scope prints in a
+// type: qualified by the enclosing namespaces (`A.B.C`), as tsc prints a
+// symbol with no enclosing declaration to be relative to.
+func (c *Checker) qualifiedDeclName(name string) string {
+	if c.namespaceBodyDepth == 0 || len(c.namespaceNames) == 0 {
+		return name
+	}
+	return strings.Join(c.namespaceNames, ".") + "." + name
 }

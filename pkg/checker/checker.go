@@ -584,12 +584,14 @@ type Checker struct {
 	pendingAliasEnv          *Environment                          // the environment they resolve in
 	classPlaceholders        map[*types.ObjectType]bool            // Pass 0 class types not filled in yet
 	checkedParameterDefaults map[*parser.Parameter]bool
-	namespaceBodyDepth       int          // > 0 while checking a namespace body
-	fileScope                *Environment // the program's top-level scope (module scope in a module)
-	declaredHook             func()       // called once declarations are in place (see SetDeclaredHook)
-	earlyExports             map[string]earlyExport
-	earlyLookups             map[string]bool // early export lookups in progress (re-export cycles)
-	isModule                 bool            // Source is a module, so strict mode comes from the module (TS1214)
+	// namespaceNames: namespaces whose body is being checked, outermost first (qualifies printed names).
+	namespaceNames     []string
+	namespaceBodyDepth int          // > 0 while checking a namespace body
+	fileScope          *Environment // the program's top-level scope (module scope in a module)
+	declaredHook       func()       // called once declarations are in place (see SetDeclaredHook)
+	earlyExports       map[string]earlyExport
+	earlyLookups       map[string]bool // early export lookups in progress (re-export cycles)
+	isModule           bool            // Source is a module, so strict mode comes from the module (TS1214)
 	// topLevelAwaitDisallowed: see SetTopLevelAwaitDisallowed.
 	topLevelAwaitDisallowed bool
 	// Identifiers already reported as strict-mode reserved words, so narrowing
