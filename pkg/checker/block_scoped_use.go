@@ -157,6 +157,9 @@ func (c *Checker) reportUnresolvedOrTDZ(node *parser.Identifier) {
 	if c.deferMethodBodies && c.programHoistedNames[node.Value] {
 		return
 	}
+	if c.reportMissingMemberPrefix(node) {
+		return
+	}
 	if c.isTypeOnlyName(node.Value) {
 		c.addErrorWithCode(node, "TS2693", fmt.Sprintf("'%s' only refers to a type, but is being used as a value here.", node.Value))
 		return
