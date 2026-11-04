@@ -3238,6 +3238,11 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		if ia, ok := side.(*types.IndexedAccessType); ok && indexedAccessWaits(ia) {
 			return nil
 		}
+		// keyof A & keyof B with B generic (tRPC's ProtectedIntersection
+		// over a mapped type of T) is not known until T is.
+		if side == checkType && hasGenericKeyof(side, 0) {
+			return nil
+		}
 	}
 
 	// A reference to a generic declared later (ZodTypeAny = ZodType<any, any,
@@ -4870,6 +4875,43 @@ func genericParamsOf(sides ...types.Type) map[string]bool {
 		walk(side, 0)
 	}
 	return params
+}
+
+// hasGenericKeyof reports whether t is, or is a union or intersection
+// holding, keyof of a generic type: a type parameter, a mapped type over
+// keyof one, or an indexed access not known yet.
+func hasGenericKeyof(t types.Type, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.KeyofType:
+		switch op := tt.OperandType.(type) {
+		case *types.TypeParameterType:
+			return true
+		case *types.IndexedAccessType:
+			return indexedAccessWaits(op)
+		case *types.MappedType:
+			if k, ok := op.ConstraintType.(*types.KeyofType); ok {
+				return hasGenericKeyof(k, depth+1)
+			}
+			_, isParam := op.ConstraintType.(*types.TypeParameterType)
+			return isParam
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if hasGenericKeyof(m, depth+1) {
+				return true
+			}
+		}
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if hasGenericKeyof(m, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // indexedAccessWaits reports whether T[K] is not known yet: its object or
