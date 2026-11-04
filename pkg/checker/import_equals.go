@@ -40,6 +40,12 @@ func (c *Checker) checkImportEqualsDeclaration(node *parser.ImportEqualsDeclarat
 		valueSide = c.resolveQualifiedValueQuietly(e)
 	}
 	if typeSide == nil && valueSide == nil {
+		// tsc resolves the left of a qualified entity with namespace meaning:
+		// an unknown leftmost name is TS2503 there.
+		if left := leftmostIdentifier(node.Entity); left != nil && left != node.Entity && !c.nameResolvesAnywhere(left.Value) {
+			c.addCannotFindNamespaceError(left, c.env, left.Value)
+			return nil, nil
+		}
 		c.addErrorWithCode(node.Entity, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", node.Entity.String()))
 		return nil, nil
 	}
@@ -236,4 +242,15 @@ func (c *Checker) checkExportAssignment(node *parser.ExportAssignment) {
 func isNamespaceType(t types.Type) bool {
 	_, ok := t.(*types.NamespaceType)
 	return ok
+}
+
+// nameResolvesAnywhere reports whether name is bound in any meaning.
+func (c *Checker) nameResolvesAnywhere(name string) bool {
+	if _, ok := c.env.ResolveType(name); ok {
+		return true
+	}
+	if _, _, ok := c.env.Resolve(name); ok {
+		return true
+	}
+	return c.env.ResolveMergedNamespace(name) != nil
 }

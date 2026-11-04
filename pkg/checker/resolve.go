@@ -42,7 +42,7 @@ func (c *Checker) checkTypeRefDefined(node parser.Expression) {
 			"null", "undefined", "object", "symbol", "bigint":
 			return
 		}
-		c.addCannotFindNameError(n, c.env, n.Value)
+		c.addCannotFindTypeNameError(n, c.env, n.Value)
 	case *parser.GenericTypeRef:
 		// Check the base name. A qualified one (`core.T<X>`) names a member
 		// of its namespace, which resolving the reference checks.
@@ -5300,7 +5300,7 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 			if t, _, found := c.env.Resolve(obj.Value); found {
 				containerType = t
 			} else {
-				c.addCannotFindNameError(node.Object, c.env, obj.Value)
+				c.addCannotFindNamespaceError(node.Object, c.env, obj.Value)
 				return nil
 			}
 		}

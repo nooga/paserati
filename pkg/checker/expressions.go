@@ -450,6 +450,7 @@ func soleArrayMember(t types.Type) *types.ArrayType {
 // This allows array literals in property values to be typed as tuples when expected
 func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, context *ContextualType) {
 	defer c.checkSpreadOverrides(node)
+	c.noteShorthandRefs(node)
 	expectedType := context.ExpectedType
 	if checkerDebug {
 		debugPrintf("// [Checker ObjectLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
@@ -834,6 +835,7 @@ func isGenericSpreadOperand(t types.Type) bool {
 // checkObjectLiteral checks the type of an object literal expression.
 func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	defer c.checkSpreadOverrides(node)
+	c.noteShorthandRefs(node)
 	fields := make(map[string]types.Type)
 	seenKeys := make(map[string]bool)
 	seenProtoColon := false // Track if we've seen __proto__: value (colon syntax)

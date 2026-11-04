@@ -231,7 +231,9 @@ func (c *Checker) addCannotFindNameError(node parser.Node, env *Environment, nam
 		c.reportCannotFindName(node, name, nil)
 		return
 	}
-	c.reportCannotFindName(node, name, collectScopeNames(env))
+	// tsc resolves a value reference with value meaning, so only values are
+	// spelling candidates.
+	c.reportCannotFindName(node, name, collectScopeNamesFor(env, true, false))
 }
 
 // wantsSpellingSuggestion reports whether collecting the names in scope for
@@ -252,7 +254,100 @@ func (c *Checker) reportCannotFindName(node parser.Node, name string, candidates
 		c.addErrorWithCode(node, errors.TS2552, fmt.Sprintf("Cannot find name '%s'. Did you mean '%s'?", name, suggestion))
 		return
 	}
-	c.addErrorWithCode(node, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", name))
+	code, msg := c.cannotFindNameDiagnostic(node, name)
+	c.addErrorWithCode(node, code, msg)
+}
+
+// cannotFindNameDiagnostic mirrors tsc's getCannotFindNameDiagnosticForName:
+// well-known names from node, test runners, jQuery, Bun and the DOM get a hint
+// about the missing type definitions, and an unresolved shorthand property
+// value is TS18004. tsc's usesWildcardTypes (`types: ["*"]`) is not modelled,
+// so the "and then add it to the types field" variants are the ones used.
+func (c *Checker) cannotFindNameDiagnostic(node parser.Node, name string) (string, string) {
+	switch name {
+	case "document", "console":
+		return "TS2584", fmt.Sprintf("Cannot find name '%s'. Do you need to change your target library? Try changing the 'lib' compiler option to include 'dom'.", name)
+	case "$":
+		return "TS2592", fmt.Sprintf("Cannot find name '%s'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery` and then add 'jquery' to the types field in your tsconfig.", name)
+	case "beforeEach", "describe", "suite", "it", "test":
+		return "TS2593", fmt.Sprintf("Cannot find name '%s'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.", name)
+	case "process", "require", "Buffer", "module", "NodeJS":
+		return "TS2591", fmt.Sprintf("Cannot find name '%s'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.", name)
+	case "Bun":
+		return "TS2868", fmt.Sprintf("Cannot find name '%s'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun` and then add 'bun' to the types field in your tsconfig.", name)
+	}
+	if id, ok := node.(*parser.Identifier); ok && c.shorthandRefs[id] {
+		return "TS18004", fmt.Sprintf("No value exists in scope for the shorthand property '%s'. Either declare one or provide an initializer.", name)
+	}
+	return errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", name)
+}
+
+// noteShorthandRefs records the value identifiers of node's shorthand
+// properties. The parser gives a shorthand `{ x }` a value identifier that
+// shares the key's token.
+func (c *Checker) noteShorthandRefs(node *parser.ObjectLiteral) {
+	for _, prop := range node.Properties {
+		if prop == nil {
+			continue
+		}
+		key, ok := prop.Key.(*parser.Identifier)
+		if !ok || key.Token == nil {
+			continue
+		}
+		val, ok := prop.Value.(*parser.Identifier)
+		if !ok || val.Token == nil || val.Value != key.Value || val.Token.StartPos != key.Token.StartPos {
+			continue
+		}
+		if c.shorthandRefs == nil {
+			c.shorthandRefs = make(map[*parser.Identifier]bool)
+		}
+		c.shorthandRefs[val] = true
+	}
+}
+
+// addCannotFindNamespaceError reports an unresolved name resolved with
+// namespace meaning: the left side of a qualified type name (`A.B`) or of an
+// import alias entity. tsc says TS2503 "Cannot find namespace", or TS2833
+// with a namespace or enum in scope as the spelling suggestion.
+func (c *Checker) addCannotFindNamespaceError(node parser.Node, env *Environment, name string) {
+	suggestion := ""
+	if c.wantsSpellingSuggestion() {
+		suggestion = getSpellingSuggestion(name, collectNamespaceNames(env))
+	}
+	c.nameNotFoundCount++
+	if suggestion != "" {
+		c.addErrorWithCode(node, "TS2833", fmt.Sprintf("Cannot find namespace '%s'. Did you mean '%s'?", name, suggestion))
+		return
+	}
+	c.addErrorWithCode(node, "TS2503", fmt.Sprintf("Cannot find namespace '%s'.", name))
+}
+
+// collectNamespaceNames lists the namespaces and enums visible from env, the
+// candidates tsc offers for a name with namespace meaning.
+func collectNamespaceNames(env *Environment) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for e := env; e != nil; e = e.outer {
+		var scopeNames []string
+		for name, t := range e.typeAliases {
+			if _, ok := t.(*types.NamespaceType); ok && !seen[name] {
+				scopeNames = append(scopeNames, name)
+			}
+		}
+		for name, info := range e.symbols {
+			if _, ok := info.Type.(*types.EnumType); ok && !seen[name] {
+				scopeNames = append(scopeNames, name)
+			}
+		}
+		sort.Strings(scopeNames)
+		for _, name := range scopeNames {
+			if !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	return names
 }
 
 // addCannotFindTypeNameError reports an unresolved name in a type position.
