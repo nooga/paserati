@@ -1733,6 +1733,11 @@ func (c *Checker) checkImpossibleComparison(leftType, rightType types.Type, oper
 
 	// Check if the types have any overlap
 	if !c.typesHaveOverlap(genericKeysConstrained(leftType), genericKeysConstrained(rightType)) {
+		// reportOperatorError shows the literals' base types when those do
+		// not overlap either (getBaseTypesIfUnrelated).
+		if lb, rb := c.baseTypeOfLiteralForReport(leftType), c.baseTypeOfLiteralForReport(rightType); !c.typesHaveOverlap(lb, rb) {
+			leftType, rightType = lb, rb
+		}
 		c.addErrorAtStart(node, errors.TS2367, fmt.Sprintf("This comparison appears to be unintentional because the types '%s' and '%s' have no overlap.", leftType.String(), rightType.String()))
 	}
 }

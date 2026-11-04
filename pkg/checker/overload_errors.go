@@ -43,12 +43,10 @@ func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []
 	if len(withArity) == 1 {
 		sig := withArity[0]
 		if i := firstMismatch(sig); i >= 0 && i < len(sig.ParameterTypes) {
-			c.addErrorWithCode(node.Arguments[i], errors.TS2345, fmt.Sprintf(
-				"Argument of type '%s' is not assignable to parameter of type '%s'.", argTypes[i].String(), sig.ParameterTypes[i].String()))
+			c.addErrorWithCode(node.Arguments[i], errors.TS2345, c.argumentNotAssignableMessage(argTypes[i], sig.ParameterTypes[i]))
 			return
 		} else if arr, isArr := sig.RestParameterType.(*types.ArrayType); isArr && i >= 0 && i < len(node.Arguments) {
-			c.addErrorWithCode(node.Arguments[i], errors.TS2345, fmt.Sprintf(
-				"Argument of type '%s' is not assignable to parameter of type '%s'.", argTypes[i].String(), arr.ElementType.String()))
+			c.addErrorWithCode(node.Arguments[i], errors.TS2345, c.argumentNotAssignableMessage(argTypes[i], arr.ElementType))
 			return
 		}
 		c.addErrorWithCode(node, errors.TS2769, noOverloadMessage)
@@ -183,7 +181,7 @@ func (c *Checker) overloadFailureDetails(node *parser.CallExpression, argTypes [
 		if i < 0 || i >= len(sig.ParameterTypes) {
 			return ""
 		}
-		return fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argTypes[i].String(), sig.ParameterTypes[i].String())
+		return c.argumentNotAssignableMessage(argTypes[i], sig.ParameterTypes[i])
 	}
 
 	var out strings.Builder

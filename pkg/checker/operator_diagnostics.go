@@ -220,7 +220,30 @@ func (c *Checker) checkRelationalOperator(b binaryOperands, leftType, rightType 
 	if !la && !ra && (c.rel.IsComparable(l, r) || c.rel.IsComparable(r, l)) {
 		return
 	}
-	c.reportOperatorNotApplicable(b, l, r)
+	c.reportOperatorNotApplicable(b, comparisonDisplayType(l), comparisonDisplayType(r))
+}
+
+// comparisonDisplayType completes getBaseTypeOfLiteralTypeForComparison for
+// display: an enum member compares as its number or string.
+func comparisonDisplayType(t types.Type) types.Type {
+	switch tt := t.(type) {
+	case *types.EnumMemberType:
+		if _, isString := tt.Value.(string); isString {
+			return types.String
+		}
+		return types.Number
+	case *types.UnionType:
+		members := make([]types.Type, len(tt.Types))
+		changed := false
+		for i, m := range tt.Types {
+			members[i] = comparisonDisplayType(m)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
+	}
+	return t
 }
 
 // comparisonBaseType is getBaseTypeOfLiteralTypeForComparison applied after
@@ -367,6 +390,8 @@ func (c *Checker) literalBaseType(t types.Type) types.Type {
 	switch tt := t.(type) {
 	case *types.LiteralType:
 		return c.rel.GetWidenedType(tt)
+	case *types.EnumMemberType:
+		return c.baseTypeOfLiteralForReport(tt)
 	case *types.UnionType:
 		members := make([]types.Type, len(tt.Types))
 		for i, m := range tt.Types {

@@ -204,7 +204,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 					if effectiveArgIndex+j < len(paramTypes) {
 						paramType := paramTypes[effectiveArgIndex+j]
 						if !c.rel.IsAssignable(elemType, paramType) {
-							c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", elemType.String(), paramType.String()))
+							c.addErrorWithCode(spreadElement, errors.TS2345, c.argumentNotAssignableMessage(elemType, paramType))
 							allOk = false
 						}
 					}
@@ -484,7 +484,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 									}
 
 									if !c.rel.IsAssignable(argType, constructorSig.RestParameterType) {
-										c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), constructorSig.RestParameterType.String()))
+										c.addErrorWithCode(spreadElement, errors.TS2345, c.argumentNotAssignableMessage(argType, constructorSig.RestParameterType))
 									}
 								} else {
 									c.visitWithContext(argNode, &ContextualType{
@@ -498,7 +498,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 									}
 
 									if !c.rel.IsAssignable(argType, variadicElementType) {
-										c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
+										c.addErrorWithCode(argNode, errors.TS2345, c.argumentNotAssignableMessage(argType, variadicElementType))
 									}
 								}
 							}
@@ -974,13 +974,13 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 								spreadElementType := c.getSpreadElementType(argType)
 								if !argErr && !c.rel.IsAssignable(spreadElementType, variadicElementType) {
 									argErr = true
-									c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", spreadElementType.String(), variadicElementType.String()))
+									c.addErrorWithCode(spreadElement, errors.TS2345, c.argumentNotAssignableMessage(spreadElementType, variadicElementType))
 								}
 								continue
 							}
 							if !argErr && !c.rel.IsAssignable(argType, variadicParamType) {
 								argErr = true
-								c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicParamType.String()))
+								c.addErrorWithCode(spreadElement, errors.TS2345, c.argumentNotAssignableMessage(argType, variadicParamType))
 							}
 						} else {
 							// Regular arguments in variadic part
@@ -997,7 +997,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 							if !argErr && !c.rel.IsAssignable(argType, variadicElementType) {
 								argErr = true
-								c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
+								c.addErrorWithCode(argNode, errors.TS2345, c.argumentNotAssignableMessage(argType, variadicElementType))
 							}
 						}
 					}
