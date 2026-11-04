@@ -362,6 +362,31 @@ var unsupportedOptions = []string{
 	"noUnusedLocals", "noUnusedParameters", "noImplicitReturns", "noFallthroughCasesInSwitch",
 }
 
+// projectCheckOptions are the check options a tsconfig asks for, with tsc
+// 6.0's defaults for the ones it leaves unset.
+func projectCheckOptions(cfg *tsconfig.Config) driver.CheckOptions {
+	opts := driver.CheckOptions{
+		StrictNullChecks:             cfg.StrictFamily("strictNullChecks"),
+		StrictFunctionTypes:          cfg.StrictFamily("strictFunctionTypes"),
+		StrictPropertyInitialization: cfg.StrictFamily("strictPropertyInitialization"),
+		StrictBindCallApply:          cfg.StrictFamily("strictBindCallApply"),
+		NoImplicitAny:                cfg.StrictFamily("noImplicitAny"),
+		NoImplicitThis:               cfg.StrictFamily("noImplicitThis"),
+		UseUnknownInCatchVariables:   cfg.StrictFamily("useUnknownInCatchVariables"),
+		AlwaysStrict:                 cfg.StrictFamily("alwaysStrict"),
+		Target:                       cfg.Target(),
+	}
+	opts.NoImplicitOverride, _ = cfg.Bool("noImplicitOverride")
+	opts.AllowUnreachableCode, _ = cfg.Bool("allowUnreachableCode")
+	opts.ExperimentalDecorators, _ = cfg.Bool("experimentalDecorators")
+	opts.SkipLibCheck, _ = cfg.Bool("skipLibCheck")
+	opts.Module, _ = cfg.String("module")
+	if v, set := cfg.Bool("useDefineForClassFields"); set {
+		opts.UseDefineForClassFields = &v
+	}
+	return opts
+}
+
 // runProjectCheck type-checks a tsconfig.json project (tsc -p --noEmit).
 func runProjectCheck(path string, nodeModules bool) int {
 	cfg, err := tsconfig.Load(path)
@@ -378,16 +403,7 @@ func runProjectCheck(path string, nodeModules bool) int {
 	if nodeModules {
 		p.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types, Paths: cfg.Paths}))
 	}
-	opts := driver.CheckOptions{
-		StrictNullChecks:             cfg.StrictFamily("strictNullChecks"),
-		StrictFunctionTypes:          cfg.StrictFamily("strictFunctionTypes"),
-		StrictPropertyInitialization: cfg.StrictFamily("strictPropertyInitialization"),
-		NoImplicitAny:                cfg.StrictFamily("noImplicitAny"),
-		AlwaysStrict:                 cfg.StrictFamily("alwaysStrict"),
-	}
-	opts.NoImplicitOverride, _ = cfg.Bool("noImplicitOverride")
-	opts.AllowUnreachableCode, _ = cfg.Bool("allowUnreachableCode")
-	opts.SkipLibCheck, _ = cfg.Bool("skipLibCheck")
+	opts := projectCheckOptions(cfg)
 	if nodeModules {
 		opts.Types = cfg.Types()
 		opts.TypesFrom = filepath.Dir(cfg.Path)

@@ -24,15 +24,29 @@ type FileDiagnostics struct {
 	LoadError error
 }
 
-// CheckOptions are the compiler options a check honors (tsc's names).
+// CheckOptions are the compiler options a check honors (tsc's names). The
+// zero value of each field is tsc's default when that option is not set,
+// except the strict family, which DefaultCheckOptions turns on.
 type CheckOptions struct {
 	StrictNullChecks             bool
 	StrictFunctionTypes          bool
 	StrictPropertyInitialization bool
+	StrictBindCallApply          bool
 	NoImplicitAny                bool
+	NoImplicitThis               bool
+	UseUnknownInCatchVariables   bool
 	NoImplicitOverride           bool
 	AlwaysStrict                 bool
 	AllowUnreachableCode         bool
+	ExperimentalDecorators       bool
+	// Target is --target as a year (3 and 5 for ES3 and ES5, 2015 for ES6,
+	// 9999 for ESNext); 0 is tsc's default, ES2025.
+	Target int
+	// Module is --module, lower case ("" when unset).
+	Module string
+	// UseDefineForClassFields is --useDefineForClassFields; nil is tsc's
+	// default, on for a target of ES2022 or later.
+	UseDefineForClassFields *bool
 	// SkipLibCheck skips validating library files' declarations and
 	// reporting their errors (tsc's skipLibCheck); their syntax errors are
 	// still reported.
@@ -67,10 +81,30 @@ func DefaultCheckOptions() CheckOptions {
 		StrictNullChecks:             true,
 		StrictFunctionTypes:          true,
 		StrictPropertyInitialization: true,
+		StrictBindCallApply:          true,
 		NoImplicitAny:                true,
+		NoImplicitThis:               true,
+		UseUnknownInCatchVariables:   true,
 		AlwaysStrict:                 true,
 		SkipLibCheck:                 true,
 	}
+}
+
+// target is the --target year, tsc's default (ES2025) when unset.
+func (o CheckOptions) target() int {
+	if o.Target == 0 {
+		return 2025
+	}
+	return o.Target
+}
+
+// useDefineForClassFields resolves --useDefineForClassFields against its
+// target-dependent default.
+func (o CheckOptions) useDefineForClassFields() bool {
+	if o.UseDefineForClassFields != nil {
+		return *o.UseDefineForClassFields
+	}
+	return o.target() >= 2022
 }
 
 // apply configures a checker for these options.
@@ -79,12 +113,62 @@ func (o CheckOptions) apply(c *checker.Checker) {
 	c.SetSkipDefiniteAssignment(!o.StrictNullChecks)
 	c.SetStrictFunctionTypes(o.StrictFunctionTypes)
 	c.SetSkipStrictPropertyInit(!o.StrictPropertyInitialization || !o.StrictNullChecks)
+	c.SetStrictBindCallApply(o.StrictBindCallApply)
 	c.SetNoImplicitAny(o.NoImplicitAny)
+	c.SetNoImplicitThis(o.NoImplicitThis)
+	c.SetUseUnknownInCatchVariables(o.UseUnknownInCatchVariables)
 	c.SetNoImplicitOverride(o.NoImplicitOverride)
 	c.SetAlwaysStrict(o.AlwaysStrict)
 	c.SetAllowUnreachableCode(o.AllowUnreachableCode)
+	c.SetExperimentalDecorators(o.ExperimentalDecorators)
+	c.SetTarget(o.target())
+	c.SetModuleKind(o.Module)
+	c.SetLegacyModuleFormat(LegacyModuleFormat(o.Module))
+	c.SetTopLevelAwaitDisallowed(TopLevelAwaitDisallowed(o.Module, o.target()))
+	c.SetUseDefineForClassFields(o.useDefineForClassFields())
+	c.SetEmitStandardClassFields(o.useDefineForClassFields() && o.target() >= 2022)
 	c.SetTscCompatibleDiagnostics(true)
 	c.SetSkipLibCheck(o.SkipLibCheck)
+}
+
+// configureParser sets up a parser for a check under these options: tsc's
+// diagnostics and recovery, its strictness, target and decorator flavour.
+func (o CheckOptions) configureParser(ps *parser.Parser) {
+	ps.SetTscDiagnostics(true)
+	ps.SetTarget(o.target())
+	ps.SetExperimentalDecorators(o.ExperimentalDecorators)
+	if o.AlwaysStrict {
+		ps.SetStrictMode(true)
+	}
+}
+
+// LegacyModuleFormat is tsc's name for a pre-ES2015 --module (given lower
+// case), "" for any other.
+func LegacyModuleFormat(module string) string {
+	switch module {
+	case "commonjs":
+		return "CommonJS"
+	case "amd":
+		return "AMD"
+	case "umd":
+		return "UMD"
+	case "system":
+		return "System"
+	}
+	return ""
+}
+
+// TopLevelAwaitDisallowed reports whether an explicit --module (lower case)
+// and the target rule out top-level await: it needs module es2022, esnext,
+// system, node16-20, nodenext or preserve, and target es2017 or later.
+func TopLevelAwaitDisallowed(module string, target int) bool {
+	switch module {
+	case "":
+		return false
+	case "es2022", "esnext", "system", "node16", "node18", "node20", "nodenext", "preserve":
+		return target < 2017
+	}
+	return true
 }
 
 // CheckFiles type-checks files with tsc's default options; see
@@ -101,6 +185,8 @@ func (p *Paserati) CheckFiles(files []string) []FileDiagnostics {
 // registered a resolver for them (pkg/nodemodules in Types mode).
 func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []FileDiagnostics {
 	p.moduleLoader.SetCompilerFactory(nil)
+	p.moduleLoader.SetParserOptions(opts.configureParser)
+	defer p.moduleLoader.SetParserOptions(nil)
 	loader := p.moduleLoader
 	globals := checker.NewGlobalDeclarations()
 	initializers := opts.Initializers
@@ -212,6 +298,9 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 		results = append(results, FileDiagnostics{Path: rec.ResolvedPath, Diagnostics: rec.Diagnostics})
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Path < results[j].Path })
+	for _, res := range results {
+		sortByPosition(res.Diagnostics)
+	}
 	return results
 }
 
@@ -225,6 +314,19 @@ func isScriptFile(path string) bool {
 	src := &source.SourceFile{Name: path, Path: path, Content: string(content)}
 	prog, _ := parser.NewParser(lexer.NewLexerWithSource(src)).ParseProgram()
 	return prog != nil && !checker.IsModuleProgram(prog)
+}
+
+// sortByPosition orders a file's diagnostics by where they start, as tsc's
+// sortAndDeduplicateDiagnostics does; diagnostics at the same position keep
+// the order they were reported in.
+func sortByPosition(diags []errors.PaseratiError) {
+	sort.SliceStable(diags, func(i, j int) bool {
+		a, b := diags[i].Pos(), diags[j].Pos()
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		return a.Column < b.Column
+	})
 }
 
 // isLibraryFile reports whether path is a declaration file or lives under

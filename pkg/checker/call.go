@@ -3063,6 +3063,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 		IsVariadic:        sig.IsVariadic,
 		StrictVariance:    sig.StrictVariance,
 		RestParameterType: newRestParamType,
+		ThisType:          substituteThis(sig.ThisType, substitute),
 	}
 }
 
@@ -3186,6 +3187,7 @@ func (c *Checker) substituteInSignature(sig *types.Signature, solution map[*type
 		IsVariadic:        sig.IsVariadic,
 		StrictVariance:    sig.StrictVariance,
 		RestParameterType: newRestParamType,
+		ThisType:          substituteThis(sig.ThisType, substitute),
 	}
 }
 
@@ -4055,4 +4057,13 @@ func (c *Checker) checkCallThisContext(node *parser.CallExpression, callee types
 		return
 	}
 	c.addErrorWithCode(errorNode, errors.TS2684, fmt.Sprintf("The 'this' context of type '%s' is not assignable to method's 'this' of type '%s'.", thisArg.String(), sig.ThisType.String()))
+}
+
+// substituteThis substitutes into a signature's `this` parameter type, which
+// is absent (nil) for most signatures.
+func substituteThis(thisType types.Type, substitute func(types.Type) types.Type) types.Type {
+	if thisType == nil {
+		return nil
+	}
+	return substitute(thisType)
 }

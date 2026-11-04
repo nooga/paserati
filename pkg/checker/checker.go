@@ -626,6 +626,9 @@ type Checker struct {
 	// inEnumInitializer: an enum member initializer is being checked, whose
 	// `this` (outside any nested function) is TS2332.
 	inEnumInitializer bool
+	// useUnknownInCatchVariables mirrors --useUnknownInCatchVariables: an
+	// unannotated catch variable is unknown instead of any.
+	useUnknownInCatchVariables bool
 	// contextualThisBodies: see hasContextualThis.
 	contextualThisBodies  map[parser.Node]bool
 	contextualThisProgram *parser.Program
@@ -1083,6 +1086,12 @@ func (c *Checker) checkTopLevelAwaitUsing(program *parser.Program) {
 // SetNoImplicitThis mirrors --noImplicitThis.
 func (c *Checker) SetNoImplicitThis(enabled bool) {
 	c.noImplicitThis = enabled
+}
+
+// SetUseUnknownInCatchVariables mirrors --useUnknownInCatchVariables (part of
+// the strict family). Default false: Paserati also runs untyped JavaScript.
+func (c *Checker) SetUseUnknownInCatchVariables(enabled bool) {
+	c.useUnknownInCatchVariables = enabled
 }
 
 // SetSkipLibCheck mirrors tsc's skipLibCheck: library files' own
@@ -6008,9 +6017,13 @@ func (c *Checker) checkCatchClause(clause *parser.CatchClause) {
 
 	// Define the catch parameter if present
 	if clause.Parameter != nil {
-		// The catch binding is implicitly 'any'. TypeScript allows an explicit
+		// The catch binding is implicitly 'any', or 'unknown' under
+		// --useUnknownInCatchVariables. TypeScript allows an explicit
 		// annotation, but only 'any' or 'unknown' (TS1196).
 		bindingType := types.Type(types.Any)
+		if c.useUnknownInCatchVariables {
+			bindingType = types.Unknown
+		}
 		if clause.TypeAnnotation != nil {
 			annotated := c.resolveTypeAnnotation(clause.TypeAnnotation)
 			if annotated == types.Any || annotated == types.Unknown {

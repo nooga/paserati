@@ -64,6 +64,8 @@ type moduleLoader struct {
 	// Type checking and compilation
 	checkerFactory  func() TypeChecker
 	compilerFactory func() Compiler
+	// parserOptions configures each parser the loader creates (nil: none).
+	parserOptions func(*parser.Parser)
 
 	// VM instance for native module initialization
 	vmInstance *vm.VM
@@ -926,6 +928,14 @@ func (ml *moduleLoader) initializeParallelComponents() error {
 	ml.workerPool = NewWorkerPool(ml.config)
 
 	return nil
+}
+
+// SetParserOptions sets a function that configures every parser the loader
+// creates; nil restores the defaults.
+func (ml *moduleLoader) SetParserOptions(configure func(*parser.Parser)) {
+	ml.mutex.Lock()
+	defer ml.mutex.Unlock()
+	ml.parserOptions = configure
 }
 
 // SetCheckerFactory sets the factory function for creating type checkers
