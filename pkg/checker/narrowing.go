@@ -1744,7 +1744,7 @@ func genericKeysConstrained(t types.Type) types.Type {
 	switch tt := t.(type) {
 	case *types.KeyofType:
 		switch tt.OperandType.(type) {
-		case *types.TypeParameterType, *types.IndexedAccessType:
+		case *types.TypeParameterType, *types.IndexedAccessType, *types.ConditionalType:
 			return types.NewUnionType(types.String, types.Number, types.Symbol)
 		}
 	case *types.IntersectionType:
