@@ -329,6 +329,10 @@ type Parameter struct {
 	// optional (`({ a }?: T) {}`) was rewritten to: TS2463 in an
 	// implementation.
 	OptionalPattern bool
+	// SourcePattern is the destructuring pattern a lowered parameter
+	// (`__destructured_param_N`) was written as; its binding elements are
+	// shared with the declaration the body starts with.
+	SourcePattern   Expression
 	DefaultValue    Expression // Default value expression (param = defaultValue)
 	IsThis          bool       // Whether this is an explicit 'this' parameter
 	IsDestructuring bool       // Whether this parameter uses destructuring pattern

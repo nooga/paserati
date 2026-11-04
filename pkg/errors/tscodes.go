@@ -68,6 +68,7 @@ const (
 	TS2678  = "TS2678"  // Type 'X' is not comparable to type 'Y'
 	TS2551  = "TS2551"  // Property 'X' does not exist on type 'Y'. Did you mean 'Z'?
 	TS7006  = "TS7006"  // Parameter 'x' implicitly has an 'any' type
+	TS7031  = "TS7031"  // Binding element 'x' implicitly has an 'any' type
 	TS7019  = "TS7019"  // Rest parameter 'x' implicitly has an 'any[]' type
 	TS2322  = "TS2322"  // Type 'X' is not assignable to type 'Y'
 	TS2335  = "TS2335"  // 'super' can only be referenced in a derived class
