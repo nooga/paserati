@@ -64,6 +64,11 @@ type ModuleLoader interface {
 	// SetCompilerFactory sets the factory function for creating compilers
 	SetCompilerFactory(factory func() Compiler)
 
+	// SetParserOptions sets a function that configures every parser the
+	// loader creates (nil for the defaults), e.g. tsc's diagnostics mode
+	// and the target for a type check.
+	SetParserOptions(configure func(*parser.Parser))
+
 	// Modules returns every module record loaded so far, once each.
 	Modules() []*ModuleRecord
 

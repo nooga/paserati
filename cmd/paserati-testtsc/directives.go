@@ -417,28 +417,33 @@ func effectiveOptions(raw Options, v Variant) Options {
 // ---------------------------------------------------------------------------
 // Option support audit
 
-// supportedOptions are the directives createTscPaserati actually honours.
+// supportedOptions are the directives createTscPaserati (and the runner,
+// for the parser) actually honours.
 var supportedOptions = map[string]bool{
 	"strict": true, "strictnullchecks": true, "strictpropertyinitialization": true,
-	"alwaysstrict": true, "strictfunctiontypes": true, "noimplicitoverride": true, "allowunreachablecode": true,
+	"alwaysstrict": true, "strictfunctiontypes": true, "strictbindcallapply": true,
+	"noimplicitany": true, "noimplicitthis": true, "useunknownincatchvariables": true,
+	"noimplicitoverride": true, "allowunreachablecode": true,
+	"experimentaldecorators": true, "usedefineforclassfields": true,
+	"target": true, "module": true,
 }
 
 // unmodeledOptions are directives that plausibly change TypeScript's
 // diagnostics and that Paserati does not model. Directives that only affect
 // emit (sourceMap, outFile, ...) are not listed.
 var unmodeledOptions = map[string]bool{
-	"noimplicitany": true, "noimplicitthis": true, "noimplicitreturns": true,
+	"noimplicitreturns":           true,
 	"strictbuiltiniteratorreturn": true,
 	"exactoptionalpropertytypes":  true, "nouncheckedindexedaccess": true,
-	"useunknownincatchvariables": true, "nopropertyaccessfromindexsignature": true,
-	"nolib": true, "lib": true, "target": true, "module": true, "moduleresolution": true,
+	"nopropertyaccessfromindexsignature": true,
+	"nolib":                              true, "lib": true, "moduleresolution": true,
 	"moduledetection": true, "jsx": true, "jsxfactory": true, "jsxfragmentfactory": true,
 	"jsximportsource": true, "reactnamespace": true, "emitdecoratormetadata": true,
 	"allowjs": true, "checkjs": true, "maxnodemodulejsdepth": true,
 	"declaration": true, "isolateddeclarations": true, "isolatedmodules": true,
 	"verbatimmodulesyntax": true, "nounusedlocals": true, "nounusedparameters": true,
 	"nofallthroughcasesinswitch": true, "allowsyntheticdefaultimports": true,
-	"esmoduleinterop": true, "usedefineforclassfields": true, "downleveliteration": true,
+	"esmoduleinterop": true, "downleveliteration": true,
 	"importhelpers": true, "noemithelpers": true, "resolvejsonmodule": true,
 	"preserveconstenums": true, "noresolve": true, "types": true, "typeroots": true,
 	"paths": true, "baseurl": true, "rootdirs": true, "allowarbitraryextensions": true,
@@ -453,8 +458,9 @@ var unmodeledOptions = map[string]bool{
 
 // unsupportedOptionsFor lists the directives (as `key=value`, sorted) in effect
 // for this variant that Paserati does not model and that can change TS's
-// diagnostics. It also tags `strict=false` as `strict(partial)` because only
-// part of the strict family can be switched off.
+// diagnostics. It also tags `strict=false` as `strict(partial)` because
+// strictBuiltinIteratorReturn, the one member of the strict family Paserati
+// does not model, cannot be switched off.
 func unsupportedOptionsFor(eff Options) []string {
 	var out []string
 	for k, v := range eff {

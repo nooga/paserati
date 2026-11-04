@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/tsconfig"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -225,6 +225,7 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	pas.SetStrictBindCallApply(opts.strictFamily("strictbindcallapply"))
 	pas.SetNoImplicitAny(opts.strictFamily("noimplicitany"))
 	pas.SetNoImplicitThis(opts.strictFamily("noimplicitthis"))
+	pas.SetUseUnknownInCatchVariables(opts.strictFamily("useunknownincatchvariables"))
 	pas.SetTopLevelAwaitDisallowed(topLevelAwaitDisallowed(opts))
 	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(opts))
 	pas.SetTscCompatibleDiagnostics(true)
@@ -288,49 +289,18 @@ func targetLevel(o Options) int {
 	if !ok {
 		return 2025
 	}
-	switch t = strings.ToLower(t); {
-	case t == "es3":
-		return 3
-	case t == "es5":
-		return 5
-	case t == "es6":
-		return 2015
-	case strings.HasPrefix(t, "es20"):
-		if y, err := strconv.Atoi(t[2:]); err == nil {
-			return y
-		}
-	}
-	return 9999
+	return tsconfig.TargetYear(strings.ToLower(t))
 }
 
 // topLevelAwaitDisallowed reports whether an explicit --module and the
-// target rule out top-level await: it needs module es2022, esnext, system,
-// node16-20, nodenext or preserve, and target es2017 or later.
+// target rule out top-level await.
 func topLevelAwaitDisallowed(o Options) bool {
-	module := strings.ToLower(strings.TrimSpace(o["module"]))
-	if module == "" {
-		return false
-	}
-	switch module {
-	case "es2022", "esnext", "system", "node16", "node18", "node20", "nodenext", "preserve":
-		return targetLevel(o) < 2017
-	}
-	return true
+	return driver.TopLevelAwaitDisallowed(strings.ToLower(strings.TrimSpace(o["module"])), targetLevel(o))
 }
 
 // legacyModuleFormat is tsc's name for an explicit pre-ES2015 --module.
 func legacyModuleFormat(o Options) string {
-	switch strings.ToLower(strings.TrimSpace(o["module"])) {
-	case "commonjs":
-		return "CommonJS"
-	case "amd":
-		return "AMD"
-	case "umd":
-		return "UMD"
-	case "system":
-		return "System"
-	}
-	return ""
+	return driver.LegacyModuleFormat(strings.ToLower(strings.TrimSpace(o["module"])))
 }
 
 var referencePathRe = regexp.MustCompile(`^(\s*///\s*<reference\s+path\s*=\s*["'])([^"']*)["']`)

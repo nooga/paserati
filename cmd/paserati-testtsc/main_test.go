@@ -348,8 +348,8 @@ func TestOptionsStrictFamilyDefaults(t *testing.T) {
 }
 
 func TestUnsupportedOptions(t *testing.T) {
-	got := unsupportedOptionsFor(Options{"strict": "false", "target": "ES5", "noimplicitany": "false", "alwaysstrict": "true", "noemit": "true", "filename": ""})
-	want := []string{"noimplicitany=false", "strict(partial)", "target=es5"}
+	got := unsupportedOptionsFor(Options{"strict": "false", "target": "ES5", "noimplicitany": "false", "alwaysstrict": "true", "noemit": "true", "filename": "", "nounusedlocals": "true"})
+	want := []string{"nounusedlocals=true", "strict(partial)"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("unsupportedOptionsFor = %v, want %v", got, want)
 	}

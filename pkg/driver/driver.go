@@ -205,6 +205,11 @@ func (p *Paserati) SetNoImplicitThis(enabled bool) {
 	p.checker.SetNoImplicitThis(enabled)
 }
 
+// SetUseUnknownInCatchVariables mirrors --useUnknownInCatchVariables.
+func (p *Paserati) SetUseUnknownInCatchVariables(enabled bool) {
+	p.checker.SetUseUnknownInCatchVariables(enabled)
+}
+
 // SetAllowTopLevelReturn controls whether script/eval style top-level returns
 // are accepted by the type checker.
 func (p *Paserati) SetAllowTopLevelReturn(allow bool) {

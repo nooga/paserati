@@ -638,6 +638,13 @@ func substituteSignatureMemo(sig *Signature, substitutions map[*TypeParameter]Ty
 		newRestParamType = substituteTypeMemo(sig.RestParameterType, substitutions, memo)
 	}
 
+	// The `this` parameter is part of the signature: dropping it would
+	// leave an instantiated callback type without its contextual this.
+	var newThisType Type
+	if sig.ThisType != nil {
+		newThisType = substituteTypeMemo(sig.ThisType, substitutions, memo)
+	}
+
 	return &Signature{
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
@@ -645,6 +652,7 @@ func substituteSignatureMemo(sig *Signature, substitutions map[*TypeParameter]Ty
 		IsVariadic:        sig.IsVariadic,
 		StrictVariance:    sig.StrictVariance,
 		RestParameterType: newRestParamType,
+		ThisType:          newThisType,
 	}
 }
 

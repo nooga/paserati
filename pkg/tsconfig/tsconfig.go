@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/nodemodules"
@@ -432,6 +433,41 @@ func StripJSONC(data []byte) []byte {
 func (c *Config) Bool(name string) (value, set bool) {
 	v, ok := c.Options[strings.ToLower(name)].(bool)
 	return v, ok
+}
+
+// String returns a string compiler option, lower-cased (tsc's enum options
+// such as "target" and "module" are case-insensitive), and whether it is set.
+func (c *Config) String(name string) (value string, set bool) {
+	v, ok := c.Options[strings.ToLower(name)].(string)
+	return strings.ToLower(strings.TrimSpace(v)), ok
+}
+
+// Target returns the "target" option as a year (3 and 5 for ES3 and ES5,
+// 2015 for ES6, 9999 for ESNext), or 0 when it is not set.
+func (c *Config) Target() int {
+	t, ok := c.String("target")
+	if !ok {
+		return 0
+	}
+	return TargetYear(t)
+}
+
+// TargetYear converts a --target value (lower case) to a year: 3 and 5 for
+// ES3 and ES5, 2015 for ES6, 9999 for ESNext and anything unknown.
+func TargetYear(t string) int {
+	switch {
+	case t == "es3":
+		return 3
+	case t == "es5":
+		return 5
+	case t == "es6":
+		return 2015
+	case strings.HasPrefix(t, "es20"):
+		if y, err := strconv.Atoi(t[2:]); err == nil {
+			return y
+		}
+	}
+	return 9999
 }
 
 // StrictFamily returns a strict-family option: its own setting, else
