@@ -77,6 +77,11 @@ func (e *EnumType) GetName() string {
 
 // String returns the string representation of the enum member type
 func (em *EnumMemberType) String() string {
+	// The member of a single-member enum is the enum type itself, which
+	// tsc prints by the enum's name.
+	if em.Parent != nil && len(em.Parent.Members) == 1 {
+		return em.EnumName
+	}
 	return fmt.Sprintf("%s.%s", em.EnumName, em.MemberName)
 }
 

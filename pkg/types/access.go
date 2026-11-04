@@ -1,5 +1,7 @@
 package types
 
+import "strings"
+
 // AccessModifier represents the visibility level of class members
 type AccessModifier int
 
@@ -359,6 +361,9 @@ func (cm *ClassMetadata) DisplayName() string {
 	}
 	if cm.DisplayText != "" {
 		return cm.DisplayText
+	}
+	if strings.HasPrefix(cm.ClassName, "__AnonymousClass_") {
+		return "(Anonymous class)"
 	}
 	return cm.ClassName
 }
