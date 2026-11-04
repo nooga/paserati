@@ -2006,15 +2006,9 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 						// Check if the variable exists and is assignable to string
 						varType, _, exists := c.env.Resolve(ident.Value)
 						if !exists {
-							// In non-strict mode JS, bare identifier in for-in creates/targets global var.
-							// For our checker (which may be disabled during Test262), emulate by defining in outermost env.
-							// Walk to outermost environment and define there to unblock body resolution.
-							outer := c.env
-							for outer.outer != nil {
-								outer = outer.outer
-							}
-							outer.Define(ident.Value, elementType, false)
-							// No error added; body will see the binding.
+							// An undeclared target is an unresolved name, as in
+							// a for-of head (tsc's checkIdentifier).
+							c.reportUnresolvedOrTDZ(ident)
 						} else if !c.rel.IsAssignable(elementType, varType) {
 							c.addErrorWithCode(ident, "TS2405", "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'.")
 						}

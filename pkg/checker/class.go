@@ -2430,6 +2430,10 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 			} else {
 				c.addErrorWithCode(superClassExpr, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", genRef.Name.Value))
 			}
+			// The type arguments are checked all the same.
+			for _, arg := range genRef.TypeArguments {
+				c.resolveTypeAnnotation(arg)
+			}
 			return
 		}
 		debugPrintf("// [Checker Class] Found generic base constructor '%s': %T\n", genRef.Name.Value, baseConstructor)

@@ -1048,6 +1048,10 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				}
 			} else {
 				c.addErrorWithCode(node, errors.TS2315, fmt.Sprintf("Type '%s' is not generic.", node.Name.Value))
+				// tsc's checkTypeReferenceNode checks the arguments all the same.
+				for _, arg := range node.TypeArguments {
+					c.resolveTypeAnnotation(arg)
+				}
 				return nil
 			}
 		}
