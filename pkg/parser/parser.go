@@ -1160,6 +1160,11 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		}
 		return p.parseExpressionStatement()
 	case lexer.INTERFACE:
+		// tsc: `interface` starts a declaration only when an identifier
+		// follows on the same line; otherwise it is an identifier (ASI).
+		if p.peekToken.Line != p.curToken.Line {
+			return p.parseExpressionStatement()
+		}
 		stmt := p.parseInterfaceDeclaration()
 		// After interface ending with }, next / should be regex
 		p.rescanPeekAsRegex()
@@ -1322,7 +1327,9 @@ func (p *Parser) parseStatementNoDoc() Statement {
 	case lexer.IDENT:
 		// Handle TypeScript 'declare' keyword for ambient declarations
 		// declare const/let/var/function/class/interface/type/enum — no code emitted
-		if p.curToken.Literal == "declare" {
+		// tsc's isDeclaration: a modifier keyword followed by a line break
+		// is an identifier expression (ASI), not the start of a declaration.
+		if p.curToken.Literal == "declare" && p.peekToken.Line == p.curToken.Line {
 			if p.tscDiagnostics && p.canRecover() && p.peekToken.Line == p.curToken.Line &&
 				(p.peekToken.Literal == "using" || p.peekTokenIs(lexer.AWAIT)) && p.tscIsDeclaration() {
 				mod := p.curToken
@@ -1364,7 +1371,7 @@ func (p *Parser) parseStatementNoDoc() Statement {
 			return nil
 		}
 		// `namespace X { ... }` — TypeScript namespace declaration (contextual keyword).
-		if p.curToken.Literal == "namespace" &&
+		if p.curToken.Literal == "namespace" && p.peekToken.Line == p.curToken.Line &&
 			(p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
 			return p.parseNamespaceDeclaration(false)
 		}
