@@ -610,6 +610,9 @@ type Checker struct {
 	// a function whose this is any only for want of any context (TS2683).
 	noImplicitThis  bool
 	implicitAnyThis bool
+	// inEnumInitializer: an enum member initializer is being checked, whose
+	// `this` (outside any nested function) is TS2332.
+	inEnumInitializer bool
 	// contextualThisBodies: see hasContextualThis.
 	contextualThisBodies  map[parser.Node]bool
 	contextualThisProgram *parser.Program
@@ -3805,6 +3808,17 @@ func (c *Checker) visit(node parser.Node) {
 				debugPrintf("// [Checker ThisExpr] Using context this type: %s\n", c.currentThisType.String())
 			}
 		} else {
+			// tsc's checkThisExpression: no function or class owns this
+			// `this`, so a namespace body or an enum initializer does.
+			switch {
+			case c.inEnumInitializer:
+				c.addErrorWithCode(node, errors.TS2332, "'this' cannot be referenced in current location.")
+			case c.namespaceBodyDepth > 0:
+				c.addErrorWithCode(node, errors.TS2331, "'this' cannot be referenced in a module or namespace body.")
+			}
+			if (c.inEnumInitializer || c.namespaceBodyDepth > 0) && c.noImplicitThis {
+				c.addErrorWithCode(node, "TS2683", "'this' implicitly has type 'any' because it does not have a type annotation.")
+			}
 			// Top level: 'this' is typeof globalThis (script) or undefined
 			// (module); we cannot tell them apart reliably, so stay permissive.
 			node.SetComputedType(types.Any)
