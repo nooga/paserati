@@ -1063,7 +1063,9 @@ func (c *Checker) SetTopLevelAwaitDisallowed(disallowed bool) {
 func (c *Checker) checkTopLevelAwaitUsing(program *parser.Program) {
 	forEachNodeInScope(program, func(n parser.Node) {
 		ls, ok := n.(*parser.LetStatement)
-		if !ok || !ls.IsAwaitUsing {
+		// An empty list is TS1123 first, and tsc's checkGrammarVariableDeclarationList
+		// stops there.
+		if !ok || !ls.IsAwaitUsing || len(ls.Declarations) == 0 {
 			return
 		}
 		switch {

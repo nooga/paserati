@@ -99,6 +99,34 @@ func (p *Parser) startsUsingDeclarationAt(at int) bool {
 // startsAwaitUsingDeclaration reports whether the current token begins an
 // `await using` declaration, i.e. `await` immediately followed by a `using`
 // declaration on the same line.
+// tscAwaitUsingOfAt reports whether the tokens at lookahead offset at are
+// `await using of` on one line, which tsc's for-head check
+// (nextTokenIsUsingKeywordThenBindingIdentifierOrStartOfObjectDestructuringOnSameLine,
+// "meant to allow of") reads as an `await using` declaration: of a variable
+// named `of`, or with an empty list when the `of` is the loop's (`of x)`).
+// at is -1 for the current token, 0 for the peek token, and so on.
+func (p *Parser) tscAwaitUsingOfAt(at int) bool {
+	if !p.tscDiagnostics || !p.canRecover() {
+		return false
+	}
+	tok := func(i int) lexer.Token {
+		if i < 0 {
+			return *p.curToken
+		}
+		return p.lookAhead(i)
+	}
+	aw, us, of := tok(at), tok(at+1), tok(at+2)
+	return aw.Type == lexer.AWAIT && us.Type == lexer.IDENT && us.Literal == "using" &&
+		of.Type == lexer.OF && us.Line == aw.Line && of.Line == us.Line
+}
+
+// lookAheadIsNameThenRParen reports whether lookahead offset at holds a name
+// directly followed by ')' (tsc's canFollowContextualOfKeyword).
+func (p *Parser) lookAheadIsNameThenRParen(at int) bool {
+	name := p.lookAhead(at)
+	return (name.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(name.Type)) && p.lookAhead(at+1).Type == lexer.RPAREN
+}
+
 func (p *Parser) startsAwaitUsingDeclaration() bool {
 	if !p.curTokenIs(lexer.AWAIT) {
 		return false
