@@ -81,6 +81,9 @@ type ModuleRecord struct {
 	// Diagnostics is every type-checking diagnostic of the module (Error
 	// keeps only the first, for loading); see Paserati.CheckFiles.
 	Diagnostics []errors.PaseratiError
+	// parseDiagnostics are the parse errors of a module checked despite
+	// them (LoaderConfig.CheckAfterParseErrors).
+	parseDiagnostics []errors.PaseratiError
 	ExportValues  map[string]vm.Value   // Exported runtime values
 	ExportIndices map[string]uint16     // Export name to global heap index mapping (for dynamic import)
 	ReExports     map[string]vm.ModuleReExport
@@ -230,6 +233,15 @@ type LoaderConfig struct {
 	// Type checking settings
 	IgnoreTypeErrors bool // When true, type errors don't stop module loading
 	SkipTypeCheck    bool // When true, type checker is not run at all (for pure JS mode)
+
+	// ConfigureParser, when set, configures every parser the loader
+	// creates (tsc diagnostics mode, target, decorators: see
+	// Paserati.CheckFilesWithOptions).
+	ConfigureParser func(*parser.Parser)
+	// CheckAfterParseErrors type-checks a module whose parse reported
+	// errors on its error-recovered AST, as tsc does, reporting both. A
+	// checker panic on the partial AST keeps just the parse errors.
+	CheckAfterParseErrors bool
 }
 
 // DefaultLoaderConfig returns sensible default configuration

@@ -74,7 +74,7 @@ func main() {
 		verbose     = flag.Bool("verbose", false, "Show individual test results")
 		limit       = flag.Int("limit", 0, "Limit number of test files (0 = all)")
 		suiteMode   = flag.Bool("suite", false, "Show pass rates by directory")
-		_           = flag.Bool("single-only", true, "Deprecated no-op: multi-file tests are always skipped (and counted)")
+		_           = flag.Bool("single-only", true, "Deprecated no-op: multi-file and .tsx tests run through the multi-file path")
 		dumpFile    = flag.String("dump", "", "Dump results to file (+id/-id format, header records the metric)")
 		diffFile    = flag.String("diff", "", "Compare against a dump file")
 		pattern     = flag.String("pattern", "*.ts,*.tsx", "Comma-separated file patterns")
@@ -263,7 +263,7 @@ func findTestFiles(searchDir, pattern, skipPattern string) ([]string, error) {
 }
 
 // prepareCases reads every file, strips directives, expands variants and looks
-// up baselines. Files that cannot be run (multi-file, tsx, too large) yield a
+// up baselines. Files that cannot be read or are too large yield a
 // single skipped case so they stay visible in the denominators.
 func prepareCases(files []string, conformanceDir string, index *baselineIndex, skipList map[string]bool, limit, maxSize int) []testCase {
 	var cases []testCase
@@ -276,10 +276,6 @@ func prepareCases(files []string, conformanceDir string, index *baselineIndex, s
 		skipCase := func(reason string) testCase {
 			return testCase{ID: rel, Rel: rel, Skip: reason, Job: -1}
 		}
-		if strings.HasSuffix(f, ".tsx") {
-			cases = append(cases, skipCase("tsx-unsupported"))
-			continue
-		}
 		content, err := os.ReadFile(f)
 		if err != nil {
 			cases = append(cases, skipCase("read-error"))
@@ -291,14 +287,14 @@ func prepareCases(files []string, conformanceDir string, index *baselineIndex, s
 		}
 		source := strings.TrimPrefix(string(content), "\xEF\xBB\xBF")
 		st := stripDirectives(source)
-		if st.HasFilename {
-			cases = append(cases, skipCase("multi-file"))
-			continue
-		}
 		if limit > 0 && runnable >= limit {
 			break
 		}
 		runnable++
+		if isMultiTest(rel, st) {
+			cases = append(cases, prepareMulti(rel, filepath.Base(f), source, index, skipList)...)
+			continue
+		}
 
 		base := filepath.Base(f)
 		name := strings.TrimSuffix(base, filepath.Ext(base))

@@ -63,6 +63,10 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 	}
 	source := strings.TrimPrefix(string(content), "\xEF\xBB\xBF")
 	st := stripDirectives(source)
+	if isMultiTest(req.Rel, st) {
+		runMultiJob(conformanceDir, req, source, &resp)
+		return
+	}
 	opts := effectiveOptions(st.Options, Variant(req.Params))
 
 	pas := createTscPaserati(opts)
@@ -144,13 +148,14 @@ func runJob(conformanceDir string, req workerReq) (resp workerResp) {
 // and checker can both report the same strict-mode error.
 func dedupeDiags(ds []Diag) []Diag {
 	type key struct {
+		file      string
 		line, col int
 		code, msg string
 	}
 	seen := make(map[key]bool, len(ds))
 	out := ds[:0]
 	for _, d := range ds {
-		k := key{d.Line, d.Col, d.Code, d.Msg}
+		k := key{d.File, d.Line, d.Col, d.Code, d.Msg}
 		if seen[k] {
 			continue
 		}

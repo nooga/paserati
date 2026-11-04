@@ -93,19 +93,27 @@ func scoreAll(exp, act []Diag) map[Tier]TierResult {
 	}
 	out[TierCodesExact] = set(exactOK, d)
 
-	lcExp := multiset(exp, func(x Diag) string { return fmt.Sprintf("%d:%s", x.Line, x.Code) })
-	lcAct := multiset(act, func(x Diag) string { return fmt.Sprintf("%d:%s", x.Line, x.Code) })
+	lcExp := multiset(exp, func(x Diag) string { return fileLabel(x) + fmt.Sprintf("%d:%s", x.Line, x.Code) })
+	lcAct := multiset(act, func(x Diag) string { return fileLabel(x) + fmt.Sprintf("%d:%s", x.Line, x.Code) })
 	miss, extra := multisetDiff(lcExp, lcAct)
 	out[TierLineCodeExact] = set(len(miss) == 0 && len(extra) == 0, diffDetail(miss, extra))
 
 	fullKey := func(x Diag) string {
-		return fmt.Sprintf("%d:%d:%s:%s", x.Line, x.Col, x.Code, strings.TrimSpace(firstLine(x.Msg)))
+		return fileLabel(x) + fmt.Sprintf("%d:%d:%s:%s", x.Line, x.Col, x.Code, strings.TrimSpace(firstLine(x.Msg)))
 	}
 	fExp := multiset(exp, fullKey)
 	fAct := multiset(act, fullKey)
 	fm, fe := multisetDiff(fExp, fAct)
 	out[TierFullExact] = set(len(fm) == 0 && len(fe) == 0, diffDetail(fm, fe))
 	return out
+}
+
+// fileLabel prefixes a multi-file test's diagnostic keys with its file.
+func fileLabel(d Diag) string {
+	if d.File == "" {
+		return ""
+	}
+	return d.File + "@"
 }
 
 func looseDetail(exp, act []Diag) string {

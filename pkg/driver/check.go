@@ -11,6 +11,7 @@ import (
 	"github.com/nooga/paserati/pkg/checker"
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/modules"
+	"github.com/nooga/paserati/pkg/parser"
 )
 
 // FileDiagnostics is the type-checking result of one file.
@@ -39,6 +40,18 @@ type CheckOptions struct {
 	// loaded before the files. They resolve from TypesFrom (a directory).
 	Types     []string
 	TypesFrom string
+
+	// Initializers are the builtins every file sees (default: the
+	// standard ones).
+	Initializers []builtins.BuiltinInitializer
+	// Configure, when set, configures each file's checker after the
+	// options above (for options without a field here, such as target).
+	Configure func(*checker.Checker)
+	// ConfigureParser, when set, configures each file's parser.
+	ConfigureParser func(*parser.Parser)
+	// CheckAfterParseErrors type-checks files with syntax errors too, as
+	// tsc does, reporting both kinds of diagnostic.
+	CheckAfterParseErrors bool
 }
 
 // DefaultCheckOptions are tsc's defaults (TypeScript 6: the strict family on).
@@ -83,14 +96,23 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 	p.moduleLoader.SetCompilerFactory(nil)
 	loader := p.moduleLoader
 	globals := checker.NewGlobalDeclarations()
-	builtinEnv := checker.NewBuiltinEnvironment(builtins.GetStandardInitializers())
+	initializers := opts.Initializers
+	if initializers == nil {
+		initializers = builtins.GetStandardInitializers()
+	}
+	builtinEnv := checker.NewBuiltinEnvironment(initializers)
 	p.moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
 		c := checker.NewCheckerWithBuiltins(builtinEnv)
 		c.EnableModuleMode("", loader)
 		opts.apply(c)
+		if opts.Configure != nil {
+			opts.Configure(c)
+		}
 		c.SetSharedGlobals(globals)
 		return c
 	})
+	p.moduleLoader.SetParseOptions(opts.ConfigureParser, opts.CheckAfterParseErrors)
+	defer p.moduleLoader.SetParseOptions(nil, false)
 	// A type error in one module must not hide the types it exports from
 	// the modules importing it: every module's diagnostics are kept on its
 	// record and reported below.

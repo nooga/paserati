@@ -107,6 +107,10 @@ type ModuleLoader interface {
 	// declarations (`declare module "fs" { ... }`) declare: a non-relative
 	// specifier it answers is that module, ahead of the resolvers.
 	SetAmbientModules(lookup func(specifier string) map[string]types.Type)
+
+	// SetParseOptions configures the parsers the loader creates and whether
+	// a module with syntax errors is still type-checked (see LoaderConfig).
+	SetParseOptions(configure func(*parser.Parser), checkAfterParseErrors bool)
 }
 
 // ModuleRegistry manages the cache of loaded modules

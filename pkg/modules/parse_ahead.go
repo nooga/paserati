@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	paseratiErrors "github.com/nooga/paserati/pkg/errors"
-	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/source"
 )
@@ -136,12 +135,13 @@ func (pa *parseAhead) start(specifier, fromPath string) {
 	pa.mu.Unlock()
 
 	pa.slots <- struct{}{}
-	p.parse(resolved)
+	p.parse(pa, resolved)
 	<-pa.slots
 	close(p.done)
 
-	// The loader does not load the imports of a module that fails to parse.
-	if p.readErr != nil || len(p.errs) > 0 {
+	// The loader does not load the imports of a module that fails to parse
+	// (unless it checks such modules too).
+	if p.readErr != nil || (len(p.errs) > 0 && !(pa.ml.config.CheckAfterParseErrors && p.program != nil)) {
 		return
 	}
 	pa.startImports(p.source, p.program, resolved.ResolvedPath)
@@ -168,7 +168,7 @@ func (pa *parseAhead) startImports(src *source.SourceFile, program *parser.Progr
 	}
 }
 
-func (p *aheadParse) parse(resolved *ResolvedModule) {
+func (p *aheadParse) parse(pa *parseAhead, resolved *ResolvedModule) {
 	defer resolved.Source.Close()
 	content, err := io.ReadAll(resolved.Source)
 	if err != nil {
@@ -180,7 +180,7 @@ func (p *aheadParse) parse(resolved *ResolvedModule) {
 		Path:    resolved.ResolvedPath,
 		Content: string(content),
 	}
-	p.program, p.errs = parser.NewParser(lexer.NewLexerWithSource(p.source)).ParseProgram()
+	p.program, p.errs = pa.ml.newParser(p.source).ParseProgram()
 }
 
 // take returns the background parse of the file at path, waiting for it to
