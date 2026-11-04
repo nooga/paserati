@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -1039,6 +1040,53 @@ func (c *Checker) SetSkipLibCheck(skip bool) {
 	c.skipLibCheck = skip
 }
 
+// inJavaScriptFile reports whether the file being checked is JavaScript.
+func (c *Checker) inJavaScriptFile() bool {
+	if c.source == nil {
+		return false
+	}
+	for _, ext := range []string{".js", ".jsx", ".mjs", ".cjs"} {
+		if strings.HasSuffix(c.source.Path, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// defineCommonJSBindings gives a JavaScript file CommonJS's require, and
+// module and exports when the file is a CommonJS module (tsc's binder sets
+// commonJsModuleIndicator on an assignment to module.exports or exports.x,
+// or a require call). They are defined before the file's globals are
+// snapshotted, so other files do not see them.
+// FIXME: they are any; tsc types module.exports from the file's
+// assignments to it and makes the file a CommonJS module.
+func (c *Checker) defineCommonJSBindings(env *Environment) {
+	if !c.inJavaScriptFile() || c.program == nil {
+		return
+	}
+	names := []string{"require"}
+	if hasCommonJSIndicator(c.source) {
+		names = append(names, "module", "exports")
+	}
+	for _, name := range names {
+		if _, _, found := env.Resolve(name); !found {
+			env.Define(name, types.Any, false)
+		}
+	}
+}
+
+// commonJSIndicator matches what makes tsc's binder see a JavaScript file as
+// a CommonJS module: an assignment to module.exports or exports.name (or
+// exports["name"]), or a require("...") call.
+var commonJSIndicator = regexp.MustCompile(`\bmodule\s*\.\s*exports\b|(^|[^.\w$])exports\s*(\.\s*[A-Za-z_$]|\[)|(^|[^.\w$])require\s*\(\s*['"` + "`" + `]`)
+
+// hasCommonJSIndicator reports whether a JavaScript file is a CommonJS
+// module. FIXME: tsc's binder looks at the syntax tree; this scans the text,
+// so a comment or string can count.
+func hasCommonJSIndicator(src *source.SourceFile) bool {
+	return src != nil && commonJSIndicator.MatchString(src.Content)
+}
+
 // inDeclarationFile reports whether the file being checked is a declaration
 // file, where every declaration is ambient.
 func (c *Checker) inDeclarationFile() bool {
@@ -1623,6 +1671,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	globalEnv := c.env
 	c.importSharedGlobals(globalEnv)
 	c.globalScope = globalEnv
+	c.defineCommonJSBindings(globalEnv)
 	globalsBefore := snapshotGlobals(globalEnv)
 	defer func(env *Environment) { c.publishGlobals(env, globalsBefore) }(globalEnv)
 	if programHasModuleSyntax(program) {
