@@ -99,6 +99,9 @@ func NewIntersectionType(ts ...Type) Type {
 	if d := distributePrimitiveUnions(potentialMembers); d != nil {
 		return d
 	}
+	if d := distributeObjectUnions(potentialMembers); d != nil {
+		return d
+	}
 
 	// Filter for unique types using the Equals method
 	uniqueMembers := make([]Type, 0, len(potentialMembers))
@@ -150,7 +153,7 @@ func NewIntersectionType(ts ...Type) Type {
 	// Disjoint primitives are never: "a" & "b", string & number, "a" & number.
 	for i, a := range uniqueMembers {
 		for _, b := range uniqueMembers[i+1:] {
-			if disjointPrimitives(a, b) {
+			if disjointPrimitives(a, b) || objectAndNullish(a, b) || objectAndNullish(b, a) {
 				return Never
 			}
 		}
@@ -186,6 +189,137 @@ func NewIntersectionType(ts ...Type) Type {
 	// intersection's call signatures is its overload order. (Sorting them
 	// by String() printed csstype's huge types over and over.)
 	return &IntersectionType{Types: uniqueMembers}
+}
+
+// distributeObjectUnions is tsc's normalization of an intersection holding a
+// union into a union of intersections: A & (B | C) is (A & B) | (A & C), so
+// a discriminant narrows it and each branch's members are visible. The
+// written form stays the union's Origin when it is the shorter one, as in
+// tsc's getIntersectionType. nil when no member is a union of object types
+// or the cross product would be large.
+// FIXME: tsc distributes every union constituent (up to 100000 combinations,
+// TS2590 beyond); this covers unions whose members are object types or
+// intersections of them.
+func distributeObjectUnions(members []Type) Type {
+	const maxCombinations = 64
+	hasUnion := false
+	combinations := 1
+	for _, m := range members {
+		u, ok := m.(*UnionType)
+		if !ok {
+			continue
+		}
+		objects := 0
+		for _, um := range u.Types {
+			if um == Null || um == Undefined {
+				continue
+			}
+			if !isObjectLikeConstituent(um) {
+				return nil
+			}
+			objects++
+		}
+		if objects == 0 {
+			return nil
+		}
+		hasUnion = true
+		combinations *= len(u.Types)
+		if combinations > maxCombinations {
+			return nil
+		}
+	}
+	if !hasUnion || len(members) < 2 {
+		return nil
+	}
+	var results []Type
+	anyIntersection := false
+	picked := make([]Type, len(members))
+	var walk func(i int)
+	walk = func(i int) {
+		if i == len(members) {
+			r := NewIntersectionType(append([]Type(nil), picked...)...)
+			if r != Never {
+				if _, ok := r.(*IntersectionType); ok {
+					anyIntersection = true
+				}
+				results = append(results, r)
+			}
+			return
+		}
+		if u, ok := members[i].(*UnionType); ok {
+			for _, um := range u.Types {
+				picked[i] = um
+				walk(i + 1)
+			}
+			return
+		}
+		picked[i] = members[i]
+		walk(i + 1)
+	}
+	walk(0)
+	if len(results) == 0 {
+		return Never
+	}
+	result := NewUnionType(results...)
+	if ut, ok := result.(*UnionType); ok && anyIntersection && constituentCount(ut.Types) > constituentCount(members) {
+		ut.Origin = &IntersectionType{Types: members}
+	}
+	return result
+}
+
+// objectAndNullish reports whether a is an object type and b null or
+// undefined: tsc reduces such an intersection to never.
+// FIXME: tsc does so only under strictNullChecks.
+func objectAndNullish(a, b Type) bool {
+	if b != Null && b != Undefined {
+		return false
+	}
+	switch a.(type) {
+	case *ObjectType, *ArrayType, *TupleType:
+		return true
+	}
+	return a == NonPrimitive
+}
+
+// isObjectLikeConstituent reports whether t is an object type or an
+// intersection of them.
+func isObjectLikeConstituent(t Type) bool {
+	if t == NonPrimitive {
+		return true
+	}
+	switch tt := t.(type) {
+	case *ObjectType, *ArrayType, *TupleType:
+		return true
+	case *IntersectionType:
+		for _, m := range tt.Types {
+			if !isObjectLikeConstituent(m) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// constituentCount is tsc's getConstituentCountOfTypes: how many leaf types
+// writing the list out takes.
+func constituentCount(ts []Type) int {
+	n := 0
+	for _, t := range ts {
+		switch tt := t.(type) {
+		case *UnionType:
+			if tt.Origin != nil {
+				n += constituentCount([]Type{tt.Origin})
+			} else {
+				n += constituentCount(tt.Types)
+			}
+		case *IntersectionType:
+			n += constituentCount(tt.Types)
+		default:
+			n++
+		}
+	}
+	return n
 }
 
 // primitiveKind is the primitive a type is or belongs to ("string" for string

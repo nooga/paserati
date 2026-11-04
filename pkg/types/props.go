@@ -167,14 +167,30 @@ func (r *Relation) GetPropertyType(objectType Type, propertyName string, isOptio
 // The resulting type is the intersection of the property types from all types that have it.
 func (r *Relation) GetPropertyTypeFromIntersection(intersection *IntersectionType, propertyName string) Type {
 	var resultTypes []Type
+	var optional []bool
+	someOptional, someRequired := false, false
 
 	for _, member := range intersection.Types {
 		propType := r.GetPropertyType(member, propertyName, false)
 		if propType != Never {
 			// Property exists on this member - collect its type
 			resultTypes = append(resultTypes, propType)
+			obj, isObj := member.(*ObjectType)
+			opt := isObj && obj.OptionalProps()[propertyName]
+			optional = append(optional, opt)
+			someOptional = someOptional || opt
+			someRequired = someRequired || !opt
 		}
 		// If property doesn't exist on this member, that's okay for intersections
+	}
+	// An optional member reads as T | undefined: where optionality differs,
+	// the required side decides whether undefined survives the intersection.
+	if r.StrictNullChecks && someOptional && someRequired {
+		for i, opt := range optional {
+			if opt {
+				resultTypes[i] = NewUnionType(resultTypes[i], Undefined)
+			}
+		}
 	}
 
 	if len(resultTypes) == 0 {

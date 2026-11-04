@@ -8,14 +8,25 @@ import "github.com/nooga/paserati/pkg/vm"
 // Stores constituent types in a slice.
 type UnionType struct {
 	Types []Type // Slice holding the types in the union
-	// TODO: Consider storing unique types or a canonical representation?
+	// Origin is the denormalized form a union came from, printed in its
+	// place: tsc keeps A & (B | C) as the origin of (A & B) | (A & C) when
+	// that is the shorter way to write it.
+	Origin Type
 }
 
 func (ut *UnionType) String() string {
+	if ut.Origin != nil {
+		return ut.Origin.String()
+	}
 	typesStr := ""
 	for i, t := range ut.Types {
 		if i > 0 {
 			typesStr += " | "
+		}
+		if _, isIntersection := t.(*IntersectionType); isIntersection {
+			// tsc parenthesizes an intersection constituent of a union.
+			typesStr += "(" + t.String() + ")"
+			continue
 		}
 		typesStr += t.String()
 	}
