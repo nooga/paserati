@@ -357,6 +357,20 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	return ml.checkAndCompile(record, specifier)
 }
 
+// check type-checks a module. The checker may not cope with the partial AST
+// of a module checked despite syntax errors; its parse errors are then all
+// that is reported.
+func (ml *moduleLoader) check(record *ModuleRecord, c TypeChecker) (errs []paseratiErrors.PaseratiError) {
+	if len(record.parseDiagnostics) > 0 {
+		defer func() {
+			if r := recover(); r != nil {
+				errs = nil
+			}
+		}()
+	}
+	return c.Check(record.AST)
+}
+
 // finishDeferredChecks checks the modules whose check waited for the load
 // that declared them to return (see deferredChecks).
 func (ml *moduleLoader) finishDeferredChecks() {
@@ -391,9 +405,20 @@ func (ml *moduleLoader) checkAndCompile(record *ModuleRecord, specifier string) 
 			moduleChecker = ml.checkerFactory()
 			moduleChecker.EnableModuleMode(record.ResolvedPath, ml)
 			exposeEarlyExports(record, moduleChecker)
-			checkErrors = moduleChecker.Check(record.AST)
+			checkErrors = ml.check(record, moduleChecker)
 		}
 		record.EarlyExport, record.EarlyExportNames = nil, nil
+		if parseErrs := record.parseDiagnostics; len(parseErrs) > 0 {
+			record.parseDiagnostics = nil
+			record.Diagnostics = append(append([]paseratiErrors.PaseratiError{}, parseErrs...), checkErrors...)
+			// A module with syntax errors is reported, never compiled.
+			record.State = ModuleError
+			record.Error = paseratiErrors.NewPositionedError("parsing failed", parseErrs[0])
+			if moduleChecker.IsModuleMode() && !record.isNative {
+				record.Exports = moduleChecker.GetModuleExports()
+			}
+			return record, nil
+		}
 		record.Diagnostics = checkErrors
 
 		// Always extract exported types, even if type checking had errors.
@@ -612,12 +637,7 @@ func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *Re
 				return p.readErr
 			}
 			record.Source = p.source
-			if len(p.errs) > 0 {
-				record.Diagnostics = p.errs
-				return paseratiErrors.NewPositionedError("parsing failed", p.errs[0])
-			}
-			record.AST = p.program
-			return nil
+			return ml.takeParse(record, p.program, p.errs)
 		}
 	}
 
@@ -646,22 +666,9 @@ func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *Re
 		Content: string(content),
 	}
 
-	// Parse using real lexer and parser
-	lexerInstance := lexer.NewLexerWithSource(sourceFile)
-	parserInstance := parser.NewParser(lexerInstance)
-
-	program, parseErrs := parserInstance.ParseProgram()
-	if len(parseErrs) > 0 {
-		record.Diagnostics = parseErrs
-		record.Source = sourceFile
-		return paseratiErrors.NewPositionedError("parsing failed", parseErrs[0])
-	}
-
-	// Store the parsed AST and source
-	record.AST = program
+	program, parseErrs := ml.newParser(sourceFile).ParseProgram()
 	record.Source = sourceFile
-
-	return nil
+	return ml.takeParse(record, program, parseErrs)
 }
 
 // loadModuleParallelImpl implements parallel module loading
@@ -926,6 +933,39 @@ func (ml *moduleLoader) SetVMInstance(vm *vm.VM) {
 	defer ml.mutex.Unlock()
 
 	ml.vmInstance = vm
+}
+
+// SetParseOptions sets LoaderConfig.ConfigureParser and
+// LoaderConfig.CheckAfterParseErrors.
+func (ml *moduleLoader) SetParseOptions(configure func(*parser.Parser), checkAfterParseErrors bool) {
+	ml.config.ConfigureParser = configure
+	ml.config.CheckAfterParseErrors = checkAfterParseErrors
+}
+
+// newParser creates a parser for a module's source, configured as the
+// loader's config says.
+func (ml *moduleLoader) newParser(src *source.SourceFile) *parser.Parser {
+	p := parser.NewParser(lexer.NewLexerWithSource(src))
+	if ml.config.ConfigureParser != nil {
+		ml.config.ConfigureParser(p)
+	}
+	return p
+}
+
+// takeParse stores a module's parse in its record. A parse with errors fails
+// the load, unless the module is to be checked despite them.
+func (ml *moduleLoader) takeParse(record *ModuleRecord, program *parser.Program, errs []paseratiErrors.PaseratiError) error {
+	if len(errs) > 0 {
+		if ml.config.CheckAfterParseErrors && program != nil {
+			record.AST = program
+			record.parseDiagnostics = errs
+			return nil
+		}
+		record.Diagnostics = errs
+		return paseratiErrors.NewPositionedError("parsing failed", errs[0])
+	}
+	record.AST = program
+	return nil
 }
 
 // SetIgnoreTypeErrors sets whether type errors should be ignored during module loading

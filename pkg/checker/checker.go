@@ -1621,6 +1621,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	globalsBefore := snapshotGlobals(globalEnv)
 	defer func(env *Environment) { c.publishGlobals(env, globalsBefore) }(globalEnv)
 	if programHasModuleSyntax(program) {
+		// A module is strict whatever --alwaysStrict says (TS1214).
+		c.isModule = true
 		// A module's top-level declarations are module-scoped: they shadow
 		// builtin globals (`export class Object {}`) instead of colliding.
 		realGlobal := globalEnv

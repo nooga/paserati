@@ -313,7 +313,7 @@ func extractImportSpecs(program *parser.Program) []*ImportSpec {
 		switch node := stmt.(type) {
 		case *parser.ImportDeclaration:
 			// Regular import statements
-			if node.Source != nil {
+			if node != nil && node.Source != nil {
 				spec := &ImportSpec{
 					ModulePath: node.Source.Value,
 					Attributes: node.Attributes, // Capture import attributes (e.g., type: "json")
@@ -322,7 +322,7 @@ func extractImportSpecs(program *parser.Program) []*ImportSpec {
 			}
 		case *parser.ExportNamedDeclaration:
 			// Re-export statements: export { name } from "module"
-			if node.Source != nil {
+			if node != nil && node.Source != nil {
 				spec := &ImportSpec{
 					ModulePath: node.Source.Value,
 				}
@@ -330,11 +330,16 @@ func extractImportSpecs(program *parser.Program) []*ImportSpec {
 			}
 		case *parser.ExportAllDeclaration:
 			// Re-export all statements: export * from "module"
-			if node.Source != nil {
+			if node != nil && node.Source != nil {
 				spec := &ImportSpec{
 					ModulePath: node.Source.Value,
 				}
 				specs = append(specs, spec)
+			}
+		case *parser.ImportEqualsDeclaration:
+			// import x = require("module")
+			if node != nil && node.Require != nil {
+				specs = append(specs, &ImportSpec{ModulePath: node.Require.Value})
 			}
 		}
 	}
