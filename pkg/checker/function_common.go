@@ -839,6 +839,7 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 		OptionalParams:    optionalParams,
 		IsVariadic:        ctx.RestParameter != nil,
 		RestParameterType: restParameterType,
+		WrittenParams:     allParametersAnnotated(ctx.Parameters, ctx.RestParameter),
 	}
 	dropThisParam(sig, ctx.Parameters)
 
@@ -1113,4 +1114,16 @@ func returnTypeOfReturns(returned []types.Type) types.Type {
 		normalized = append(normalized, t)
 	}
 	return types.NewUnionType(normalized...)
+}
+
+// allParametersAnnotated reports whether every parameter of a function has a
+// type annotation, so that tsc prints a function expression's parameters as
+// written (see types.Signature.WrittenParams).
+func allParametersAnnotated(params []*parser.Parameter, rest *parser.RestParameter) bool {
+	for _, p := range params {
+		if p == nil || p.TypeAnnotation == nil {
+			return false
+		}
+	}
+	return rest == nil || rest.TypeAnnotation != nil
 }

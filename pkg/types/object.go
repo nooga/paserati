@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 )
 
@@ -82,6 +83,11 @@ type Signature struct {
 	// stand in for a construct signature that is not abstract.
 	IsAbstract bool
 
+	// WrittenParams marks the signature of a function expression whose
+	// parameters are all annotated: tsc prints those annotations as written,
+	// so an optional parameter shows no added `| undefined`.
+	WrittenParams bool
+
 	// erased caches eraseSignatureTypeParams(erasedOf); it is valid only
 	// while erasedOf is this signature.
 	erased, erasedOf *Signature
@@ -153,6 +159,9 @@ func (sig *Signature) format(arrow bool) string {
 			b.WriteString(sig.paramName(i, false))
 			if i < len(sig.OptionalParams) && sig.OptionalParams[i] {
 				b.WriteString("?")
+				if !sig.WrittenParams {
+					p = OptionalDisplayType(p)
+				}
 			}
 		}
 		b.WriteString(": ")
@@ -481,6 +490,9 @@ func (ot *ObjectType) String() string {
 		m.WriteString(PropertyNameText(name))
 		if ot.OptionalProps() != nil && ot.OptionalProps()[name] {
 			m.WriteString("?")
+			if typ != nil {
+				typStr = OptionalDisplayType(typ).String()
+			}
 		}
 		m.WriteString(": ")
 		m.WriteString(typStr)
@@ -1213,4 +1225,31 @@ func resolveBaseType(t Type) Type {
 		}
 	}
 	return t
+}
+
+// printOptionalUndefined is whether an optional member prints with
+// `| undefined` added (tsc does under strictNullChecks, where the member's
+// type includes it). The checker sets it from its options.
+var printOptionalUndefined atomic.Bool
+
+func init() { printOptionalUndefined.Store(true) }
+
+// SetPrintOptionalUndefined sets whether optional properties and parameters
+// print with `| undefined`, as under strictNullChecks.
+func SetPrintOptionalUndefined(on bool) { printOptionalUndefined.Store(on) }
+
+// OptionalDisplayType is the type an optional member of type t shows: with
+// undefined added under strictNullChecks.
+func OptionalDisplayType(t Type) Type {
+	if t == nil || !printOptionalUndefined.Load() || t == Any || t == Unknown || t == Undefined {
+		return t
+	}
+	if u, ok := t.(*UnionType); ok {
+		for _, m := range u.Types {
+			if m == Undefined {
+				return t
+			}
+		}
+	}
+	return NewUnionType(t, Undefined)
 }
