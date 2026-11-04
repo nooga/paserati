@@ -119,6 +119,9 @@ type Parser struct {
 	// one token so a caller that retries cannot loop forever.
 	stepBackPos   int
 	stepBackCount int
+	// uncheckedSpans are [start, end) source offsets of code tsc's checker
+	// never visits (a `with` body), where its grammar checks do not run.
+	uncheckedSpans [][2]int
 
 	// Jump-statement context for the current function: how many iteration
 	// statements / switches enclose the statement being parsed, and how many
@@ -742,6 +745,16 @@ func (p *Parser) reportLegacyNumericLiteral(tok *lexer.Token) {
 // dropSuppressedGrammarErrors implements tsc's rule that checker grammar errors
 // are not reported for a file that already has parse diagnostics.
 func (p *Parser) dropSuppressedGrammarErrors() []errors.PaseratiError {
+	if len(p.uncheckedSpans) > 0 {
+		kept := p.errors[:0:0]
+		for _, e := range p.errors {
+			if se, ok := e.(*errors.SyntaxError); ok && se.Grammar && p.inUncheckedSpan(se.Position.StartPos) {
+				continue
+			}
+			kept = append(kept, e)
+		}
+		p.errors = kept
+	}
 	hasParse := false
 	for _, e := range p.errors {
 		if se, ok := e.(*errors.SyntaxError); !ok || (!se.Grammar && !se.Semantic) {
@@ -761,6 +774,15 @@ func (p *Parser) dropSuppressedGrammarErrors() []errors.PaseratiError {
 	}
 	p.errors = kept
 	return kept
+}
+
+func (p *Parser) inUncheckedSpan(pos int) bool {
+	for _, s := range p.uncheckedSpans {
+		if pos >= s[0] && pos < s[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // speculatively runs f with error recovery disabled (see Parser.speculating).
@@ -995,6 +1017,12 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 
 	errs := p.dropSuppressedGrammarErrors()
 	program.HasParseErrors = len(errs) > 0
+	for _, e := range errs {
+		if se, ok := e.(*errors.SyntaxError); !ok || !se.Grammar && !se.Semantic {
+			program.HasParseDiagnostics = true
+			break
+		}
+	}
 	return program, errs
 }
 
@@ -7734,8 +7762,12 @@ func (p *Parser) parseWithStatement() *WithStatement {
 	// Parses 'with' '(' <expression> ')' <statement>
 	// Per ECMAScript spec, 'with' is not allowed in strict mode
 	if p.strictMode {
-		p.addError(p.curToken, "Strict mode code may not include a with statement")
-		return nil
+		if !p.tscDiagnostics {
+			p.addError(p.curToken, "Strict mode code may not include a with statement")
+			return nil
+		}
+		// tsc's binder reports this and the statement is still checked.
+		p.addSemanticErrorWithCode(p.curToken, "TS1101", "'with' statements are not allowed in strict mode.")
 	}
 
 	stmt := &WithStatement{Token: p.curToken} // Current token is 'with'
@@ -7753,6 +7785,7 @@ func (p *Parser) parseWithStatement() *WithStatement {
 	// See parseIfStatement's identical rescan for why (#235).
 	p.rescanPeekAsRegex()
 
+	bodyStart := p.peekToken.StartPos
 	// Handle both block statements and single statements
 	if p.peekTokenIs(lexer.LBRACE) {
 		// Block statement case: with (expression) { ... }
@@ -7767,6 +7800,9 @@ func (p *Parser) parseWithStatement() *WithStatement {
 		if stmt.Body == nil {
 			return nil
 		}
+	}
+	if p.tscDiagnostics {
+		p.uncheckedSpans = append(p.uncheckedSpans, [2]int{bodyStart, p.curToken.EndPos})
 	}
 
 	return stmt
