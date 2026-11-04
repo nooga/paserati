@@ -544,6 +544,9 @@ type Checker struct {
 	// targetYear mirrors --target as a year (5 for ES5); 0 means the default,
 	// ES2025.
 	targetYear int
+	// downlevelIteration mirrors --downlevelIteration: below ES2015, for-of
+	// and destructuring then use the iteration protocol too.
+	downlevelIteration bool
 	// legacyModuleFormat names --module when it is a pre-ES2015 format
 	// (CommonJS, AMD, UMD or System); "" otherwise.
 	legacyModuleFormat string
@@ -970,6 +973,11 @@ func (c *Checker) SetLegacyModuleFormat(name string) {
 // 2015 for ES6, 9999 for ESNext).
 func (c *Checker) SetTarget(year int) {
 	c.targetYear = year
+}
+
+// SetDownlevelIteration mirrors the --downlevelIteration compiler option.
+func (c *Checker) SetDownlevelIteration(on bool) {
+	c.downlevelIteration = on
 }
 
 // target returns the --target year.

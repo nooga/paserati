@@ -208,6 +208,7 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	pas.SetAlwaysStrict(alwaysStrictEnabled(opts))
 	pas.SetUseDefineForClassFields(useDefineForClassFieldsEnabled(opts))
 	pas.SetTarget(targetLevel(opts))
+	pas.SetDownlevelIteration(downlevelIterationEnabled(opts))
 	pas.SetLegacyModuleFormat(legacyModuleFormat(opts))
 	pas.SetEmitStandardClassFields(useDefineForClassFieldsEnabled(opts) && targetLevel(opts) >= 2022)
 	return pas
@@ -253,6 +254,12 @@ func useDefineForClassFieldsEnabled(o Options) bool {
 
 // targetLevel is the variant's --target as a year (esnext and the default,
 // ES2025, count as current); es3/es5 are 3 and 5.
+// downlevelIterationEnabled reports an explicit `// @downlevelIteration: true`.
+func downlevelIterationEnabled(o Options) bool {
+	v, set := o.boolOpt("downleveliteration")
+	return set && v
+}
+
 func targetLevel(o Options) int {
 	t, ok := o.singleValue("target")
 	if !ok {
