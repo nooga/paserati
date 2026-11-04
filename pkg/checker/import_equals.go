@@ -42,12 +42,16 @@ func (c *Checker) checkImportEqualsDeclaration(node *parser.ImportEqualsDeclarat
 	if typeSide == nil && valueSide == nil {
 		// tsc resolves the left of a qualified entity with namespace meaning:
 		// an unknown leftmost name is TS2503 there.
-		if left := leftmostIdentifier(node.Entity); left != nil && left != node.Entity && !c.nameResolvesAnywhere(left.Value) {
+		// So is a bare identifier entity (getSymbolOfPartOfRightHandSideOfImportEquals).
+		if left := leftmostIdentifier(node.Entity); left != nil && !c.nameResolvesAnywhere(left.Value) {
 			c.addCannotFindNamespaceError(left, c.env, left.Value)
 			return nil, nil
 		}
 		c.addErrorWithCode(node.Entity, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", node.Entity.String()))
 		return nil, nil
+	}
+	if id, ok := node.Entity.(*parser.Identifier); ok {
+		c.reportTypeUsedAsNamespace(id, typeSide, valueSide)
 	}
 	if typeSide != nil {
 		c.env.DefineTypeAlias(name, typeSide)
@@ -253,4 +257,24 @@ func (c *Checker) nameResolvesAnywhere(name string) bool {
 		return true
 	}
 	return c.env.ResolveMergedNamespace(name) != nil
+}
+
+// reportTypeUsedAsNamespace reports TS2702 for an import alias whose entity is
+// a class, interface or type alias and not a namespace: tsc resolves the
+// entity with namespace meaning (checkAndReportErrorForUsingTypeAsNamespace).
+// FIXME: a plain variable entity is TS2503 in tsc; imports are bound like
+// variables here, so it is not reported.
+func (c *Checker) reportTypeUsedAsNamespace(id *parser.Identifier, typeSide, valueSide types.Type) {
+	if c.env.ResolveMergedNamespace(id.Value) != nil {
+		return
+	}
+	if _, isNs := typeSide.(*types.NamespaceType); isNs {
+		return
+	}
+	isClass := valueSide != nil && c.env.ResolveBindingKind(id.Value) == BindingClass
+	typeOnly := valueSide == nil && typeSide != nil
+	if !isClass && !typeOnly {
+		return
+	}
+	c.addErrorWithCode(id, "TS2702", fmt.Sprintf("'%s' only refers to a type, but is being used as a namespace here.", id.Value))
 }
