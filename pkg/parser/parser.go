@@ -2003,7 +2003,12 @@ func (p *Parser) parseTypeAliasStatement() *TypeAliasStatement {
 	stmt.TypeParameters = p.tryParseTypeParameters()
 
 	if !p.expectPeek(lexer.ASSIGN) {
-		return nil // Expected '=' after identifier
+		if !p.tscDiagnostics || !p.canRecover() {
+			return nil // Expected '=' after identifier
+		}
+		// tsc's parseExpected: the alias keeps its name (it still declares
+		// it, e.g. for duplicate checks) and the type is parsed from here
+		// (a missing one is "Type expected." at the same spot, deduplicated).
 	}
 
 	p.nextToken() // Consume '=', move to the start of the type expression
