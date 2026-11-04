@@ -2630,6 +2630,12 @@ func (p *Parser) parseIfStatement() *IfStatement {
 	}
 
 	if !p.expectPeek(lexer.RPAREN) {
+		if p.canRecover() {
+			// tsc keeps the statement (its condition still gets checked)
+			// with a missing consequence; keep it with an empty one.
+			stmt.Consequence = p.emptyRecoveryBlock()
+			return stmt
+		}
 		return nil
 	}
 	// An un-braced consequence starting with `/` is a regex literal, not
@@ -2638,6 +2644,14 @@ func (p *Parser) parseIfStatement() *IfStatement {
 	// of it needs the same rescan every other statement-boundary token gets
 	// (#235).
 	p.rescanPeekAsRegex()
+
+	if p.peekTokenIs(lexer.RBRACE) && p.canRecover() {
+		// `if (c) }`: tsc parses a missing expression statement there
+		// (TS1109 at the `}`) and leaves the `}` to close the enclosing block.
+		p.addErrorWithCode(p.peekToken, "TS1109", "Expression expected.")
+		stmt.Consequence = p.emptyRecoveryBlock()
+		return stmt
+	}
 
 	// --- MODIFIED: Handle both block statements and single statements ---
 	if p.peekTokenIs(lexer.LBRACE) {
@@ -2708,6 +2722,13 @@ func (p *Parser) parseIfStatement() *IfStatement {
 	}
 
 	return stmt
+}
+
+// emptyRecoveryBlock stands in for a statement body the parser could not
+// parse (it has reported why), so the enclosing statement survives into the
+// tree for the checker.
+func (p *Parser) emptyRecoveryBlock() *BlockStatement {
+	return &BlockStatement{Token: p.curToken, HoistedDeclarations: make(map[string]Expression)}
 }
 
 func (p *Parser) parseExpressionStatement() *ExpressionStatement {

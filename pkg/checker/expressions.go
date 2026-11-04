@@ -1673,6 +1673,14 @@ func (c *Checker) instantiateAliasReferenceUncached(ref *types.GenericTypeAliasF
 }
 
 func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
+	if prop, ok := node.Property.(*parser.Identifier); ok && prop.Value == "" {
+		// `obj.` with the name missing (TS1003 from the parser): tsc checks
+		// the object but reports nothing for the empty name, and the access
+		// has the error type.
+		c.visit(node.Object)
+		node.SetComputedType(types.Any)
+		return
+	}
 	if len(c.expandoNames) > 0 {
 		c.declareExpandoRead(node)
 	}
