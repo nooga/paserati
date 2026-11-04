@@ -22,6 +22,11 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 
 	// Visit LHS (Identifier, IndexExpr, MemberExpr)
 	c.visit(node.Left)
+	if m, ok := node.Left.(*parser.MemberExpression); ok && m.Property != nil {
+		if objT := m.Object.GetComputedType(); objT != nil {
+			c.validateMemberWrite(objT, c.extractPropertyName(m.Property), m.Property)
+		}
+	}
 	lhsType := node.Left.GetComputedType()
 	if lhsType == nil {
 		lhsType = types.Any

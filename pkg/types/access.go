@@ -31,6 +31,11 @@ type MemberAccessInfo struct {
 	IsGetter    bool // This property is defined with 'get' keyword
 	IsSetter    bool // This property is defined with 'set' keyword
 	IsMethod    bool // This member is a method declaration
+	// SetterAccessLevel is a get/set pair's setter accessibility when it
+	// differs from the getter's (AccessLevel): reads check the getter's,
+	// writes the setter's (tsc's getDeclarationModifierFlagsFromSymbol).
+	SetterAccessLevel AccessModifier
+	HasSetterAccess   bool
 }
 
 // ClassMetadata contains class-specific type information for access control
@@ -99,15 +104,22 @@ func (cm *ClassMetadata) AddGetterMember(memberName string, accessLevel AccessMo
 	accessLevel = privateNameAccess(memberName, accessLevel)
 	// A setter of the same name already declared makes this a get/set pair.
 	hasSetter := false
+	var setterAccess AccessModifier
 	if prev := cm.MemberAccess[memberName]; prev != nil && prev.IsSetter && prev.IsStatic == isStatic {
 		hasSetter = true
+		setterAccess = prev.AccessLevel
+		if prev.HasSetterAccess {
+			setterAccess = prev.SetterAccessLevel
+		}
 	}
 	cm.MemberAccess[memberName] = &MemberAccessInfo{
-		AccessLevel: accessLevel,
-		IsStatic:    isStatic,
-		IsReadonly:  false, // Getters are not readonly in the traditional sense
-		IsGetter:    true,
-		IsSetter:    hasSetter,
+		AccessLevel:       accessLevel,
+		IsStatic:          isStatic,
+		IsReadonly:        false, // Getters are not readonly in the traditional sense
+		IsGetter:          true,
+		IsSetter:          hasSetter,
+		SetterAccessLevel: setterAccess,
+		HasSetterAccess:   hasSetter && setterAccess != accessLevel,
 	}
 }
 
@@ -115,15 +127,19 @@ func (cm *ClassMetadata) AddGetterMember(memberName string, accessLevel AccessMo
 func (cm *ClassMetadata) AddSetterMember(memberName string, accessLevel AccessModifier, isStatic bool) {
 	accessLevel = privateNameAccess(memberName, accessLevel)
 	hasGetter := false
+	readAccess := accessLevel
 	if prev := cm.MemberAccess[memberName]; prev != nil && prev.IsGetter && prev.IsStatic == isStatic {
 		hasGetter = true
+		readAccess = prev.AccessLevel
 	}
 	cm.MemberAccess[memberName] = &MemberAccessInfo{
-		AccessLevel: accessLevel,
-		IsStatic:    isStatic,
-		IsReadonly:  false,
-		IsGetter:    hasGetter,
-		IsSetter:    true,
+		AccessLevel:       readAccess,
+		IsStatic:          isStatic,
+		IsReadonly:        false,
+		IsGetter:          hasGetter,
+		IsSetter:          true,
+		SetterAccessLevel: accessLevel,
+		HasSetterAccess:   readAccess != accessLevel,
 	}
 }
 
@@ -197,8 +213,24 @@ func (cm *ClassMetadata) IsAccessibleFrom(memberName string, accessContext *Acce
 	if memberInfo == nil {
 		return false // Member doesn't exist
 	}
+	return cm.levelAccessibleFrom(memberInfo.AccessLevel, accessContext)
+}
 
-	switch memberInfo.AccessLevel {
+// IsWritableFrom is IsAccessibleFrom for an assignment: a get/set pair is
+// written through its setter's accessibility.
+func (cm *ClassMetadata) IsWritableFrom(memberName string, accessContext *AccessContext) bool {
+	memberInfo := cm.GetMemberAccess(memberName)
+	if memberInfo == nil {
+		return false
+	}
+	if memberInfo.HasSetterAccess {
+		return cm.levelAccessibleFrom(memberInfo.SetterAccessLevel, accessContext)
+	}
+	return cm.levelAccessibleFrom(memberInfo.AccessLevel, accessContext)
+}
+
+func (cm *ClassMetadata) levelAccessibleFrom(level AccessModifier, accessContext *AccessContext) bool {
+	switch level {
 	case AccessPublic:
 		return true // Always accessible
 

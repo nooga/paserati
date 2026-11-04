@@ -2009,6 +2009,13 @@ func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
 // applyTypeNarrowingFromCondition recursively walks logical expressions and composes narrowed environments
 // This handles compound conditions like "a && b && c" by applying each constraint in sequence
 func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *Environment {
+	// `!!x` is true exactly when x is truthy: it narrows as x does
+	// (`!!this.ws && this.ws.readyState`).
+	if outer, ok := condition.(*parser.PrefixExpression); ok && outer.Operator == "!" {
+		if inner, ok := outer.Right.(*parser.PrefixExpression); ok && inner.Operator == "!" {
+			return c.applyTypeNarrowingFromCondition(inner.Right)
+		}
+	}
 	// Handle logical AND expressions by composing environments
 	if infixExpr, ok := condition.(*parser.InfixExpression); ok && infixExpr.Operator == "&&" {
 		// For "a && b", first apply narrowing from "a", then apply "b" in that narrowed context
