@@ -83,6 +83,19 @@ func (p *Parser) parseMoreDeclListItems(items []declListItem, declToken *lexer.T
 			// next declarator if one starts here; otherwise the list ends
 			// (the statement's own ';' error lands at the same place).
 			p.addErrorWithCode(p.peekToken, errors.TS1005, "',' expected.")
+			if p.tscDiagnostics {
+				// abortParsingListOrMoveToNextToken: each token that starts
+				// no declarator is reported (TS1134, at most once per
+				// position) and skipped, until the list ends or an enclosing
+				// construct can use the token.
+				for !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.LBRACKET) && !p.peekTokenIs(lexer.LBRACE) && !p.declListEnds() {
+					p.addErrorWithCode(p.peekToken, "TS1134", "Variable declaration expected.")
+					if listAbortsAt(p.peekToken) {
+						break
+					}
+					p.nextToken()
+				}
+			}
 			if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.LBRACKET) && !p.peekTokenIs(lexer.LBRACE) {
 				break
 			}

@@ -141,14 +141,14 @@ func (p *Parser) finishDeclareClass(classStmt Statement) Statement {
 	for _, sig := range cd.Body.ConstructorSigs {
 		for _, param := range sig.Parameters {
 			if param.DefaultValue != nil {
-				p.addError(param.Token, "A parameter initializer is only allowed in a function or constructor implementation.")
+				p.addSemanticErrorWithCode(param.Token, "TS2371", "A parameter initializer is only allowed in a function or constructor implementation.")
 			}
 		}
 	}
 	for _, sig := range cd.Body.MethodSigs {
 		for _, param := range sig.Parameters {
 			if param.DefaultValue != nil {
-				p.addError(param.Token, "A parameter initializer is only allowed in a function or constructor implementation.")
+				p.addSemanticErrorWithCode(param.Token, "TS2371", "A parameter initializer is only allowed in a function or constructor implementation.")
 			}
 		}
 	}

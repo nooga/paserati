@@ -370,6 +370,21 @@ func (p *Parser) parseArrowParameterListTsc() ([]*Parameter, *RestParameter, err
 			if r == nil {
 				return nil, nil, fmt.Errorf("failed to parse rest parameter")
 			}
+			// checkGrammarParameterList refuses these; tsc parses them.
+			if p.peekTokenIs(lexer.QUESTION) {
+				p.nextToken()
+				p.addGrammarErrorWithCode(p.curToken, "TS1047", "A rest parameter cannot be optional.")
+			}
+			if p.peekTokenIs(lexer.ASSIGN) {
+				if r.Name != nil {
+					p.addGrammarErrorWithCode(r.Name.Token, "TS1048", "A rest parameter cannot have an initializer.")
+				}
+				p.nextToken()
+				p.nextToken()
+				if p.parseExpression(COMMA) == nil {
+					return nil, nil, fmt.Errorf("bad rest parameter initializer")
+				}
+			}
 			if rest == nil {
 				rest = r
 				r.NotLast = p.peekTokenIs(lexer.COMMA)
