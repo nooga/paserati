@@ -82,6 +82,10 @@ type Program struct {
 	// UsesImportMeta is set when the program reads import.meta, which makes
 	// a file a module for tsc's module detection.
 	UsesImportMeta bool
+	// HasParseErrors is set when parsing reported errors: the tree may be an
+	// error-recovered partial one, fit for type checking (tsc checks such
+	// files too) but not for code generation.
+	HasParseErrors bool
 }
 
 func (p *Program) TokenLiteral() string {

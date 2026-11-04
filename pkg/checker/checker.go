@@ -2163,7 +2163,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		switch node := stmt.(type) {
 		case *parser.FunctionSignature:
-			debugPrintf("// [Checker Pass 2] Processing Function Signature: %s\n", node.Name.Value)
+			debugPrintf("// [Checker Pass 2] Processing Function Signature: %s\n", node.Name)
 			c.processFunctionSignature(node)
 			nodesProcessedPass2[stmt] = true
 			continue
@@ -2171,7 +2171,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		case *parser.ExpressionStatement:
 			// --- NEW: Handle FunctionSignature expressions during Pass 2 ---
 			if sigExpr, ok := node.Expression.(*parser.FunctionSignature); ok {
-				debugPrintf("// [Checker Pass 2] Processing Function Signature: %s\n", sigExpr.Name.Value)
+				debugPrintf("// [Checker Pass 2] Processing Function Signature: %s\n", sigExpr.Name)
 				c.processFunctionSignature(sigExpr)
 				nodesProcessedPass2[stmt] = true // Mark as processed
 				continue
@@ -3635,6 +3635,10 @@ func (c *Checker) visit(node parser.Node) {
 		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, widenedReturnType)
 
 	case *parser.BlockStatement:
+		if node == nil {
+			// A body the parser could not produce (it reported why).
+			return
+		}
 		// --- UPDATED: Handle Block Scope & Hoisting ---
 		debugPrintf("// [Checker Visit Block] Entering Block. Current Env: %p\n", c.env)
 		if c.env == nil {
