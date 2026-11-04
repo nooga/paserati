@@ -629,6 +629,10 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	constructorType.AsClassConstructor(node.Name.Value)
 	constructorType.ClassMeta.ConstructorAccess = c.declaredConstructorAccess(node.Body, instanceType)
 	c.recordClassDeclRange(constructorType.ClassMeta, node.Body)
+	if instanceType != nil && instanceType.ClassMeta != nil && node.Body != nil && node.Body.Token != nil {
+		instanceType.ClassMeta.DeclPosFile = c.currentFilePath()
+		instanceType.ClassMeta.DeclPos = node.Body.Token.StartPos + 1
+	}
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
@@ -880,6 +884,10 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	constructorType.AsClassConstructor(node.Name.Value)
 	constructorType.ClassMeta.ConstructorAccess = c.declaredConstructorAccess(node.Body, instanceType)
 	c.recordClassDeclRange(constructorType.ClassMeta, node.Body)
+	if instanceType != nil && instanceType.ClassMeta != nil && node.Body != nil && node.Body.Token != nil {
+		instanceType.ClassMeta.DeclPosFile = c.currentFilePath()
+		instanceType.ClassMeta.DeclPos = node.Body.Token.StartPos + 1
+	}
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
 	c.deferRelationCheck(func() { c.checkClassIndexConstraints(node.Body, instanceType, constructorType) })
 	c.checkClassInitializationOrder(node.Name.Value, node.Body, instanceType)

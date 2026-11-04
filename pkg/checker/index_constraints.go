@@ -59,8 +59,56 @@ func (c *Checker) checkPropertyAgainstIndexSignaturesNamed(owner *types.ObjectTy
 		}
 		c.addErrorAtStart(nameNode, errors.TS2411, fmt.Sprintf(
 			"Property '%s' of type '%s' is not assignable to '%s' index type '%s'.",
-			name, propType.String(), sig.KeyType.String(), sig.ValueType.String()))
+			c.writtenPropertyName(nameNode, name), propType.String(), sig.KeyType.String(), sig.ValueType.String()))
 	}
+}
+
+// writtenPropertyName is a declared property's name as tsc's symbolToString
+// shows it: as written in the source (`"e"`, `2.0`, `["get1"]`), falling
+// back to name when the source text is not at hand.
+func (c *Checker) writtenPropertyName(nameNode parser.Node, name string) string {
+	tokenText := func(tok *lexer.Token) (string, bool) {
+		if tok == nil || c.source == nil || (c.moduleEnv != nil && c.moduleEnv.ModulePath != "" && c.moduleEnv.ModulePath != c.source.Path) {
+			return "", false
+		}
+		content := c.source.Content
+		if tok.StartPos < 0 || tok.EndPos > len(content) || tok.StartPos >= tok.EndPos {
+			return "", false
+		}
+		text := content[tok.StartPos:tok.EndPos]
+		if strings.ContainsAny(text, "\n\r") {
+			return "", false
+		}
+		return text, true
+	}
+	switch n := nameNode.(type) {
+	case *parser.Identifier:
+		if n.Token != nil && (n.Token.Type == lexer.STRING || n.Token.Type == lexer.NUMBER) {
+			if text, ok := tokenText(n.Token); ok {
+				return text
+			}
+		}
+	case *parser.ComputedPropertyName:
+		switch e := n.Expr.(type) {
+		case *parser.StringLiteral:
+			if text, ok := tokenText(e.Token); ok {
+				return "[" + text + "]"
+			}
+		case *parser.NumberLiteral:
+			if text, ok := tokenText(e.Token); ok {
+				return "[" + text + "]"
+			}
+		}
+	case *parser.StringLiteral:
+		if text, ok := tokenText(n.Token); ok {
+			return text
+		}
+	case *parser.NumberLiteral:
+		if text, ok := tokenText(n.Token); ok {
+			return text
+		}
+	}
+	return name
 }
 
 // checkInterfaceIndexConstraints checks the properties an interface

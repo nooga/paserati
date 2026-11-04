@@ -410,7 +410,8 @@ func (c *Checker) missingProperties(source, target types.Type) ([]string, bool) 
 		}
 	}
 	var missing []string
-	for name := range tgtObj.GetEffectiveProperties() {
+	tgtProps := tgtObj.GetEffectiveProperties()
+	for _, name := range orderedEffectiveNames(tgtObj, tgtProps) {
 		if tgtObj.IsPropertyOptional(name) {
 			continue
 		}
@@ -421,8 +422,29 @@ func (c *Checker) missingProperties(source, target types.Type) ([]string, bool) 
 			missing = append(missing, name)
 		}
 	}
-	sort.Strings(missing)
 	return missing, len(missing) > 0
+}
+
+// orderedEffectiveNames lists the keys of props, obj's effective properties,
+// in tsc's member order (own members, then inherited ones), any others
+// after them sorted: the order tsc reports missing properties in.
+func orderedEffectiveNames(obj *types.ObjectType, props map[string]types.Type) []string {
+	names := make([]string, 0, len(props))
+	seen := make(map[string]bool, len(props))
+	for _, n := range obj.MemberOrderNames() {
+		if _, ok := props[n]; ok && !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	var rest []string
+	for n := range props {
+		if !seen[n] {
+			rest = append(rest, n)
+		}
+	}
+	sort.Strings(rest)
+	return append(names, rest...)
 }
 
 // reportLeaf reports an assignability failure at a node with the code TypeScript

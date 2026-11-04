@@ -615,7 +615,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 	}
 
 	// Create the result type
-	resultType := &types.ObjectType{Properties: fields}
+	resultType := &types.ObjectType{Properties: fields, PropertyOrder: objectLiteralKeyOrder(node)}
 	c.noteFlattenedSpread(node)
 	for key := range spreadOptional {
 		if resultType.OptionalProperties == nil {
@@ -1362,7 +1362,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	}
 
 	// Create the final ObjectType
-	objType := &types.ObjectType{Properties: finalFields}
+	objType := &types.ObjectType{Properties: finalFields, PropertyOrder: objectLiteralKeyOrder(node)}
 	c.noteFlattenedSpread(node)
 	for key := range spreadOptional {
 		if _, ok := finalFields[key]; ok {
@@ -5073,4 +5073,31 @@ func isLibIterationType(name string) bool {
 		return true
 	}
 	return false
+}
+
+// objectLiteralKeyOrder is the order an object literal's properties were
+// first written in (a spread contributes its operand's properties where it
+// stands), which its type lists them in, as tsc's symbol table does.
+func objectLiteralKeyOrder(node *parser.ObjectLiteral) []string {
+	var order []string
+	for _, prop := range node.Properties {
+		if prop == nil {
+			continue
+		}
+		switch key := prop.Key.(type) {
+		case *parser.Identifier:
+			order = append(order, key.Value)
+		case *parser.StringLiteral:
+			order = append(order, key.Value)
+		case *parser.NumberLiteral:
+			order = append(order, jsNumberKey(key.Value))
+		case *parser.BigIntLiteral:
+			order = append(order, key.Value)
+		case *parser.SpreadElement:
+			if obj, ok := key.Argument.GetComputedType().(*types.ObjectType); ok {
+				order = append(order, obj.PropertyNames()...)
+			}
+		}
+	}
+	return order
 }

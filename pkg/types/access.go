@@ -65,6 +65,11 @@ type ClassMetadata struct {
 	DeclFile           string
 	DeclStart, DeclEnd int
 
+	// DeclPos is where the class was declared (file and offset), recorded
+	// on its instance type: unions print classes in declaration order.
+	DeclPosFile string
+	DeclPos     int
+
 	// Reference to the source class declaration (if available)
 	// This is used for inheritance checks and access validation
 	SourceClassName string
