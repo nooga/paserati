@@ -42,7 +42,7 @@ func fakeWorker(mode string) {
 		case strings.HasPrefix(req.Rel, "panic"):
 			_ = enc.Encode(workerResp{Panic: "panic: boom"})
 		default:
-			_ = enc.Encode(workerResp{Actual: []Diag{{Line: 1, Code: "TS1000"}}, CheckRan: true})
+			_ = enc.Encode(workerResp{Actual: []Diag{{Line: 1, Code: "TS1000"}}})
 		}
 	}
 }

@@ -14,11 +14,7 @@ func failureDetail(r *Record, metric Tier) string {
 	if r.Status != StatusOK {
 		return r.Detail
 	}
-	d := r.Tiers[metric].Detail
-	if r.ParseCheck == "parse-only" {
-		d += " [parse-only]"
-	}
-	return d
+	return r.Tiers[metric].Detail
 }
 
 func category(r *Record, metric Tier) string {
@@ -78,7 +74,7 @@ func printSummary(records []Record, metric Tier, elapsed time.Duration) {
 	var run, skipped, timeouts, crashes, panics, errs int
 	skipReasons := map[string]int{}
 	var expClean, expErrors, cleanFail int
-	var parseCheck, parseOnly, unmatched int
+	var parseCheck, unmatched int
 	files := map[string]bool{}
 	variantIDs := 0
 	for i := range records {
@@ -111,11 +107,8 @@ func printSummary(records []Record, metric Tier, elapsed time.Duration) {
 		} else {
 			expErrors++
 		}
-		switch r.ParseCheck {
-		case "parse+check":
+		if r.ParseCheck == "parse+check" {
 			parseCheck++
-		case "parse-only":
-			parseOnly++
 		}
 		if r.BaselineUnmatched && len(r.Variant) > 0 {
 			unmatched++
@@ -128,7 +121,7 @@ func printSummary(records []Record, metric Tier, elapsed time.Duration) {
 	fmt.Printf("Run:        %d   (expect errors: %d, expect clean: %d)\n", run, expErrors, expClean)
 	fmt.Printf("Skipped:    %d%s\n", skipped, formatCounts(skipReasons))
 	fmt.Printf("Timeouts:   %d   Crashes: %d   Panics: %d   Harness errors: %d\n", timeouts, crashes, panics, errs)
-	fmt.Printf("Parse errors: %d tests also type-checked (parse+check), %d parse-only (checker panicked on the partial AST)\n", parseCheck, parseOnly)
+	fmt.Printf("Parse errors: %d tests also type-checked (parse+check)\n", parseCheck)
 	if unmatched > 0 {
 		fmt.Printf("Variants without a baseline although the test has baselines for other variants (treated as clean): %d\n", unmatched)
 	}

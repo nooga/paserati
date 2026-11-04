@@ -51,7 +51,7 @@ type Record struct {
 	ExpectedGlobal     []Diag              `json:"expectedGlobal,omitempty"`
 	Actual             []Diag              `json:"actual"`
 	ParseErrors        int                 `json:"parseErrors"`
-	ParseCheck         string              `json:"parseCheck,omitempty"` // "" (no parse errors) | parse+check | parse-only
+	ParseCheck         string              `json:"parseCheck,omitempty"` // "" (no parse errors) | parse+check (a checker panic is status panic)
 	Tiers              map[Tier]TierResult `json:"tiers,omitempty"`
 	UnsupportedOptions []string            `json:"unsupportedOptions,omitempty"`
 	DurationMs         float64             `json:"durationMs"`
@@ -353,13 +353,8 @@ func buildRecord(tc testCase, oc jobOutcome) Record {
 		rec.Actual = oc.Resp.Actual
 	}
 	rec.ParseErrors = oc.Resp.ParseErrors
-	switch {
-	case oc.Resp.ParseErrors == 0:
-	case oc.Resp.CheckRan:
+	if oc.Resp.ParseErrors > 0 {
 		rec.ParseCheck = "parse+check"
-	default:
-		rec.ParseCheck = "parse-only"
-		rec.Detail = "checker panicked after parse errors: " + oc.Resp.CheckPanic
 	}
 	// tsc reports diagnostics in position order; the checker's own order varies
 	// between runs (map iteration), so normalise it before anything else sees it.
