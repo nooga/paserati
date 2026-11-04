@@ -1,6 +1,8 @@
 package checker
 
 import (
+	"strings"
+
 	"github.com/nooga/paserati/pkg/modules"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -52,11 +54,37 @@ func (g *GlobalDeclarations) ambientModuleFor(name string) *ambientModule {
 func (g *GlobalDeclarations) AmbientExports(specifier string) map[string]types.Type {
 	g.mu.Lock()
 	m := g.ambient[specifier]
+	if m == nil {
+		m = g.patternAmbientModule(specifier)
+	}
 	g.mu.Unlock()
 	if m == nil {
 		return nil
 	}
 	return m.exports()
+}
+
+// patternAmbientModule is the module of the pattern ambient module
+// declaration (`declare module "*.css"`, one "*") specifier matches, the one
+// with the longest prefix as in tsc's findBestPatternMatch. Called with g.mu
+// held.
+func (g *GlobalDeclarations) patternAmbientModule(specifier string) *ambientModule {
+	var best *ambientModule
+	bestPrefix := -1
+	for name, m := range g.ambient {
+		star := strings.IndexByte(name, '*')
+		if star < 0 || strings.IndexByte(name[star+1:], '*') >= 0 {
+			continue
+		}
+		prefix, suffix := name[:star], name[star+1:]
+		if len(specifier) < len(prefix)+len(suffix) || !strings.HasPrefix(specifier, prefix) || !strings.HasSuffix(specifier, suffix) {
+			continue
+		}
+		if len(prefix) > bestPrefix || len(prefix) == bestPrefix && name < best.ns.Name {
+			best, bestPrefix = m, len(prefix)
+		}
+	}
+	return best
 }
 
 // exports lists the module's exports the way a checked module's record does:

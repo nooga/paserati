@@ -10,6 +10,7 @@ import (
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/checker"
 	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/modules"
 	"github.com/nooga/paserati/pkg/nodemodules"
 	"github.com/nooga/paserati/pkg/parser"
 )
@@ -113,6 +114,7 @@ func tscCheckOptions(opts Options) driver.CheckOptions {
 			p.SetExperimentalDecorators(experimental)
 		},
 		CheckAfterParseErrors: true,
+		ScriptsFirst:          true,
 	}
 }
 
@@ -165,6 +167,7 @@ func runMultiJob(conformanceDir string, req workerReq, source string, resp *work
 	pas := driver.NewPaseratiWithInitializersAndBaseDir(tscInitializers(), disk("/.src"))
 	defer pas.Cleanup()
 	pas.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types}))
+	pas.AddResolver(&rootedResolver{root: root, fs: modules.NewOSFileSystemResolver(root)})
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -197,4 +200,21 @@ func runMultiJob(conformanceDir string, req workerReq, source string, resp *work
 		}
 	}
 	resp.Actual = dedupeDiags(resp.Actual)
+}
+
+// rootedResolver resolves rooted specifiers (`/// <reference
+// path="/.lib/react.d.ts" />`, `import "/a"`) in the scratch directory that
+// stands for the harness's virtual file system root.
+type rootedResolver struct {
+	root string
+	fs   *modules.FileSystemResolver
+}
+
+func (r *rootedResolver) Name() string  { return "TestRoot" }
+func (r *rootedResolver) Priority() int { return 10 }
+func (r *rootedResolver) CanResolve(specifier string) bool {
+	return strings.HasPrefix(specifier, "/") && !strings.HasPrefix(specifier, r.root+"/")
+}
+func (r *rootedResolver) Resolve(specifier, fromPath string) (*modules.ResolvedModule, error) {
+	return r.fs.Resolve(filepath.Join(r.root, filepath.FromSlash(specifier)), fromPath)
 }

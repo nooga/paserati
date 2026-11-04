@@ -6824,6 +6824,10 @@ func (c *Checker) getNextAnonymousId() int {
 
 // programHasModuleSyntax reports whether the program has top-level import or
 // export syntax, which makes it a module (its declarations are module-scoped).
+// IsModuleProgram reports whether a parsed file is a module (has an import or
+// export), not a script whose top-level declarations are global.
+func IsModuleProgram(program *parser.Program) bool { return programHasModuleSyntax(program) }
+
 func programHasModuleSyntax(program *parser.Program) bool {
 	for _, stmt := range program.Statements {
 		switch stmt.(type) {

@@ -247,6 +247,13 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	// Resolve the module
 	resolved, err := ml.resolveModule(specifier, fromPath)
 	if err != nil {
+		// A relative specifier no file answers can still match a pattern
+		// ambient module (`declare module "*!text"`), as in tsc.
+		if ml.ambient != nil && (strings.HasPrefix(specifier, ".") || strings.HasPrefix(specifier, "/")) {
+			if exports := ml.ambient(specifier); exports != nil {
+				return &ModuleRecord{Specifier: specifier, ResolvedPath: "ambient:" + specifier, State: ModuleCompiled, LoadTime: time.Now(), Exports: exports}, nil
+			}
+		}
 		return nil, err
 	}
 

@@ -11,7 +11,9 @@ import (
 	"github.com/nooga/paserati/pkg/checker"
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/modules"
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/source"
 )
 
 // FileDiagnostics is the type-checking result of one file.
@@ -52,6 +54,11 @@ type CheckOptions struct {
 	// CheckAfterParseErrors type-checks files with syntax errors too, as
 	// tsc does, reporting both kinds of diagnostic.
 	CheckAfterParseErrors bool
+	// ScriptsFirst checks the files that are scripts (no import or export)
+	// before the modules, in the order given: tsc binds every file's
+	// globals before it checks any, so a module sees the globals of a
+	// script listed after it.
+	ScriptsFirst bool
 }
 
 // DefaultCheckOptions are tsc's defaults (TypeScript 6: the strict family on).
@@ -167,6 +174,17 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 			loadErrors = append(loadErrors, FileDiagnostics{Path: spec, LoadError: fmt.Errorf("cannot find type definition file for '%s': %w", spec, err)})
 		}
 	}
+	if opts.ScriptsFirst {
+		var scripts, rest []root
+		for _, r := range roots {
+			if isScriptFile(r.abs) {
+				scripts = append(scripts, r)
+			} else {
+				rest = append(rest, r)
+			}
+		}
+		roots = append(scripts, rest...)
+	}
 	for _, r := range roots {
 		if _, err := p.moduleLoader.LoadModule(r.spec, from); err != nil {
 			loadErrors = append(loadErrors, FileDiagnostics{Path: r.abs, LoadError: err})
@@ -195,6 +213,18 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Path < results[j].Path })
 	return results
+}
+
+// isScriptFile reports whether the file at path parses as a script (no
+// import or export).
+func isScriptFile(path string) bool {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	src := &source.SourceFile{Name: path, Path: path, Content: string(content)}
+	prog, _ := parser.NewParser(lexer.NewLexerWithSource(src)).ParseProgram()
+	return prog != nil && !checker.IsModuleProgram(prog)
 }
 
 // isLibraryFile reports whether path is a declaration file or lives under
