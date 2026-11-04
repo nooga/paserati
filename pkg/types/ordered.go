@@ -159,3 +159,32 @@ func orderedPropertyNames(o *ObjectType, props map[string]Type) []string {
 	sort.Strings(rest)
 	return append(names, rest...)
 }
+
+// MemberOrderNames returns own and inherited property names in the order
+// tsc's resolved members list them: the type's own members in declaration
+// order, then those it inherits that it does not redeclare, base by base.
+func (ot *ObjectType) MemberOrderNames() []string {
+	var names []string
+	seen := make(map[*ObjectType]bool)
+	added := make(map[string]bool)
+	var walk func(o *ObjectType)
+	walk = func(o *ObjectType) {
+		if seen[o] {
+			return
+		}
+		seen[o] = true
+		for _, n := range o.PropertyNames() {
+			if !added[n] {
+				added[n] = true
+				names = append(names, n)
+			}
+		}
+		for _, bt := range o.Bases() {
+			if baseObj, ok := resolveBaseType(bt).(*ObjectType); ok {
+				walk(baseObj)
+			}
+		}
+	}
+	walk(ot)
+	return names
+}

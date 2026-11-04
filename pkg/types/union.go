@@ -154,6 +154,7 @@ func displayUnionMembers(ts []Type) []Type {
 		}
 		out = append(out, t)
 	}
+	sortClassesByDeclaration(others)
 	out = append(out, others...)
 	if hasNull {
 		out = append(out, Null)
@@ -411,4 +412,29 @@ func RemoveNullUndefined(t Type) Type {
 
 	// Not a union and not null/undefined, return as-is
 	return t
+}
+
+// sortClassesByDeclaration orders union members that are all instances of
+// classes declared in one file by declaration position: tsc lists a union's
+// members by type id, and a class's type is made when its declaration is
+// bound, in source order. Mixed members keep their order.
+func sortClassesByDeclaration(ts []Type) {
+	if len(ts) < 2 {
+		return
+	}
+	file := ""
+	for i, t := range ts {
+		obj, ok := t.(*ObjectType)
+		if !ok || obj.ClassMeta == nil || obj.ClassMeta.DeclPos == 0 {
+			return
+		}
+		if i == 0 {
+			file = obj.ClassMeta.DeclPosFile
+		} else if obj.ClassMeta.DeclPosFile != file {
+			return
+		}
+	}
+	sort.SliceStable(ts, func(i, j int) bool {
+		return ts[i].(*ObjectType).ClassMeta.DeclPos < ts[j].(*ObjectType).ClassMeta.DeclPos
+	})
 }
