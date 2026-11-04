@@ -3791,6 +3791,14 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 				p.addGrammarErrorWithCode(asteriskTok, "TS1222", "An overload signature cannot be declared as a generator.")
 			}
 		}
+		if p.tscDiagnostics && p.canRecover() {
+			// checkParameter: an initializer needs a body.
+			for _, param := range lit.Parameters {
+				if param != nil && param.DefaultValue != nil {
+					p.addSemanticErrorWithCode(param.Token, "TS2371", "A parameter initializer is only allowed in a function or constructor implementation.")
+				}
+			}
+		}
 		sig := &FunctionSignature{
 			Token:                lit.Token,
 			Name:                 lit.Name,
@@ -8795,6 +8803,16 @@ func (p *Parser) parseObjectLiteral() Expression {
 	objLit.Token = p.curToken // The '{' token
 	objLit.Properties = []*ObjectProperty{}
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
+		if p.tscDiagnostics && p.canRecover() && !startsObjectLiteralMember(p.peekToken) {
+			// abortParsingListOrMoveToNextToken: TS1136, then the list ends
+			// at a token an enclosing construct can use, else it is skipped.
+			p.addErrorWithCode(p.peekToken, "TS1136", "Property assignment expected.")
+			if listAbortsAt(p.peekToken) {
+				break
+			}
+			p.nextToken()
+			continue
+		}
 		p.nextToken() // Consume '{' or ',' to get to the key
 		if p.tscDiagnostics && p.curTokenIs(lexer.PRIVATE_IDENT) {
 			// checkGrammarObjectLiteralExpression
@@ -9731,6 +9749,17 @@ func (p *Parser) parseObjectLiteral() Expression {
 	return objLit
 }
 
+// startsObjectLiteralMember is tsc's isListElement for ObjectLiteralMembers
+// (a private name is let through to its own grammar error).
+func startsObjectLiteralMember(t *lexer.Token) bool {
+	switch t.Type {
+	case lexer.LBRACKET, lexer.ASTERISK, lexer.SPREAD, lexer.DOT, lexer.PRIVATE_IDENT,
+		lexer.STRING, lexer.NUMBER, lexer.BIGINT, lexer.ILLEGAL:
+		return true
+	}
+	return isWordToken(t)
+}
+
 // parseShorthandMethod parses a shorthand method like methodName() { ... }
 func (p *Parser) parseShorthandMethod() *MethodDefinition {
 	methodToken := p.curToken
@@ -9981,6 +10010,7 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 	// Check for shorthand method syntax first (identifier, keyword, or string literal as property name)
 	propName := p.parsePropertyName()
 	var prop *InterfaceProperty
+	p.reportPrivateTypeMemberName(propName)
 
 	if propName != nil {
 		prop = &InterfaceProperty{
@@ -10514,6 +10544,18 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			objType.Properties = append(objType.Properties, prop)
 		} else {
 			// Regular property or method signature - try to parse property name (allowing keywords and string literals)
+			// tsc parses modifiers on any type member and refuses them in the
+			// checker (TS1070).
+			if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) ||
+				p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.STATIC) ||
+				p.curTokenIs(lexer.OVERRIDE)) &&
+				!p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.QUESTION) && !p.peekTokenIs(lexer.LBRACKET) &&
+				!p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.COMMA) &&
+				!p.peekTokenIs(lexer.LT) && !p.peekTokenIs(lexer.RBRACE) && p.peekToken.Line == p.curToken.Line {
+				modTok := p.curToken
+				p.nextToken()
+				p.addError(modTok, fmt.Sprintf("'%s' modifier cannot appear on a type member.", modTok.Literal))
+			}
 			isReadonly := false
 			if p.curTokenIs(lexer.READONLY) && !p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.QUESTION) &&
 				!p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.LT) &&
@@ -10524,6 +10566,7 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 
 			propName := p.parsePropertyName()
 			var prop *ObjectTypeProperty
+			p.reportPrivateTypeMemberName(propName)
 
 			if propName != nil {
 				prop = &ObjectTypeProperty{
@@ -10614,11 +10657,16 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 		} else if p.peekTokenIs(lexer.RBRACE) {
 			// End of object type, will be consumed by outer loop condition
 			break
-		} else if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
+		} else if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) || p.peekTokenIs(lexer.PRIVATE_IDENT) ||
 			p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) || p.peekTokenIs(lexer.NEW) ||
 			p.peekTokenIs(lexer.READONLY) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type) {
 			// ASI: next token can start a new property, treat newline as separator
 			if p.peekToken.Line == p.curToken.Line {
+				if p.tscDiagnostics && p.canRecover() {
+					// parseTypeMemberSemicolon: report and parse the next member.
+					p.addErrorWithCode(p.peekToken, errors.TS1005, "';' expected.")
+					continue
+				}
 				p.addError(p.peekToken, "expected ';', ',' or '}' after object type property")
 				return nil
 			}
@@ -10635,6 +10683,14 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 
 	flushDoc()
 	return objType
+}
+
+// reportPrivateTypeMemberName is checkPropertySignature/checkMethodDeclaration:
+// a type member cannot be named by a private identifier (TS18016).
+func (p *Parser) reportPrivateTypeMemberName(name *Identifier) {
+	if p.tscDiagnostics && name != nil && name.Token.Type == lexer.PRIVATE_IDENT && p.canRecover() {
+		p.addSemanticErrorWithCode(name.Token, "TS18016", "Private identifiers are not allowed outside class bodies.")
+	}
 }
 
 // parsePropertyName parses a property name, allowing keywords to be used as identifiers

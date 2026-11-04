@@ -106,6 +106,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 	}
 	p.nextToken() // first token of first parameter
 
+	reported1015 := false
 	for {
 		if p.curTokenIs(lexer.RPAREN) { // trailing comma
 			return res, true
@@ -148,6 +149,9 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 			return res, true
 		}
 
+		paramStart := p.curToken
+		paramIndex := len(res.params)
+		var nameTok *lexer.Token
 		if p.tscDiagnostics {
 			// tsc parses parameter-property modifiers here too and refuses
 			// them in the checker.
@@ -190,6 +194,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 			p.nextToken()
 		case p.isTypeParamNameToken(p.curToken):
 			isIdent := p.curTokenIs(lexer.IDENT)
+			nameTok = p.curToken
 			if p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) || (isIdent && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN))) {
 				name = p.curToken.Literal
 			}
@@ -205,7 +210,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 				if p.peekTokenIs(lexer.COLON) {
 					p.nextToken()
 					p.nextToken()
-				} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
+				} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) || (p.tscDiagnostics && p.peekTokenIs(lexer.ASSIGN)) {
 					// `(x?)`: optional, untyped (implicitly any)
 					res.params = append(res.params, &Identifier{
 						Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
@@ -218,7 +223,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 					p.addError(p.peekToken, "':' expected.")
 					return res, false
 				}
-			} else if isIdent && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN)) {
+			} else if isIdent && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) || (p.tscDiagnostics && p.peekTokenIs(lexer.ASSIGN))) {
 				// bare name: an untyped (implicitly any) parameter
 				bare = true
 				res.bareName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -242,6 +247,26 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 			res.paramNames = append(res.paramNames, name)
 		}
 	next:
+		if p.tscDiagnostics && p.peekTokenIs(lexer.ASSIGN) {
+			// tsc parses an initializer on any parameter; a signature without
+			// a body refuses it (checkGrammarParameterList's TS1015 first,
+			// then checkParameter's TS2371).
+			p.nextToken()
+			p.nextToken()
+			if p.parseExpression(COMMA) == nil {
+				return res, false
+			}
+			if len(res.optional) > paramIndex {
+				res.optional[paramIndex] = true // an initializer makes it optional
+			}
+			if p.canRecover() {
+				if optional && nameTok != nil && !reported1015 {
+					reported1015 = true
+					p.addGrammarErrorWithCode(nameTok, "TS1015", "Parameter cannot have question mark and initializer.")
+				}
+				p.addSemanticErrorWithCode(paramStart, "TS2371", "A parameter initializer is only allowed in a function or constructor implementation.")
+			}
+		}
 		if p.peekTokenIs(lexer.COMMA) {
 			p.nextToken()
 			p.nextToken()
