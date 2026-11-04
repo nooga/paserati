@@ -2600,6 +2600,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				c.deferredContextDepth--
 			}
 			c.typeOnlyUseAllowed = savedTypeOnly
+			c.reportClassUseInOwnComputedName(check.expr, check.className)
 			c.currentThisType = savedThis
 			if check.typeLiteral {
 				continue

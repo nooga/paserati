@@ -44,7 +44,7 @@ func (c *Checker) checkDefiniteAssignment(program *parser.Program) {
 	if c.skipDefiniteAssignment || program == nil {
 		return
 	}
-	c.analyzeDefiniteAssignmentScope(program.Statements)
+	c.analyzeDefiniteAssignmentScopeAt(program.Statements, true)
 }
 
 // collectUnassignedReads runs the definite assignment walk before checking
@@ -61,7 +61,7 @@ func (c *Checker) collectUnassignedReads(program *parser.Program) {
 	c.everWritten = map[string]bool{}
 	collectAnyWrites(c.everWritten, program)
 	c.daCollectOnly = true
-	c.analyzeDefiniteAssignmentScope(program.Statements)
+	c.analyzeDefiniteAssignmentScopeAt(program.Statements, true)
 	c.daCollectOnly = false
 }
 
@@ -78,7 +78,7 @@ func (c *Checker) readDeclaredTypeIfUnassigned(id *parser.Identifier) (types.Typ
 		return types.Undefined, true
 	}
 	t := declaredVarType(d)
-	if t == nil || d.TypeAnnotation == nil || strictInitTypePermits(t) {
+	if t == nil || d.TypeAnnotation == nil || unassignedReadTypePermits(t) {
 		return nil, false
 	}
 	return t, true
@@ -88,7 +88,13 @@ func (c *Checker) readDeclaredTypeIfUnassigned(id *parser.Identifier) (types.Typ
 // statement list plus every nested function body it contains, each as its own
 // independent scope.
 func (c *Checker) analyzeDefiniteAssignmentScope(stmts []parser.Statement) {
-	a := &definiteAssignment{c: c, candidates: map[string]bool{}, collectOnly: c.daCollectOnly}
+	c.analyzeDefiniteAssignmentScopeAt(stmts, false)
+}
+
+// analyzeDefiniteAssignmentScopeAt is analyzeDefiniteAssignmentScope; global
+// marks the program's top level, whose vars merge with the runtime's globals.
+func (c *Checker) analyzeDefiniteAssignmentScopeAt(stmts []parser.Statement, global bool) {
+	a := &definiteAssignment{c: c, candidates: map[string]bool{}, collectOnly: c.daCollectOnly, global: global}
 
 	for _, s := range stmts {
 		a.collectCandidates(s)
@@ -123,6 +129,10 @@ type definiteAssignment struct {
 	collectOnly bool
 	// decls maps each candidate name to its declarator.
 	decls map[string]*parser.VarDeclarator
+	// global is set for the program's top level.
+	global bool
+	// letNames holds the names declared with let in this scope.
+	letNames map[string]bool
 }
 
 // --- Candidate collection -------------------------------------------------
@@ -169,13 +179,23 @@ func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarato
 		}
 		name := d.Name.Value
 		if _, seen := a.candidates[name]; seen {
-			// Redeclared in this scope — stop tracking it entirely.
-			a.candidates[name] = false
+			// `var` redeclarations are one symbol whose first declaration
+			// decides (tsc's valueDeclaration); a `let` shadowing by name
+			// makes the state ambiguous — stop tracking it entirely.
+			if !isVar || a.letNames[name] {
+				a.candidates[name] = false
+			}
 			continue
 		}
-		// A `var` that shadows a name the runtime already provides merges with
-		// that ambient declaration, which is already initialized.
-		if a.c.preexistingGlobals[name] {
+		if !isVar {
+			if a.letNames == nil {
+				a.letNames = map[string]bool{}
+			}
+			a.letNames[name] = true
+		}
+		// A top-level `var` that shadows a name the runtime already provides
+		// merges with that ambient declaration, which is already initialized.
+		if a.global && a.c.preexistingGlobals[name] {
 			a.candidates[name] = false
 			continue
 		}
@@ -197,7 +217,7 @@ func (a *definiteAssignment) collectFromDeclarators(decls []*parser.VarDeclarato
 		}
 		if a.loopHeadVars[d] && d.TypeAnnotation == nil {
 			t := declaredVarType(d)
-			a.candidates[name] = t != nil && !strictInitTypePermits(t)
+			a.candidates[name] = t != nil && !unassignedReadTypePermits(t)
 			continue
 		}
 		a.candidates[name] = !ambient && (definiteAssignmentEligible(d) || isVar && initializedVarEligible(d))
@@ -212,7 +232,7 @@ func definiteAssignmentEligible(d *parser.VarDeclarator) bool {
 	}
 	// strictInitTypePermits covers `any` and anything admitting `undefined`,
 	// which are exactly the types TS lets go uninitialized.
-	return !strictInitTypePermits(declaredVarType(d))
+	return !unassignedReadTypePermits(declaredVarType(d))
 }
 
 // initializedVarEligible covers a `var` with an initializer: it is hoisted, so
@@ -223,7 +243,7 @@ func initializedVarEligible(d *parser.VarDeclarator) bool {
 		return false
 	}
 	t := declaredVarType(d)
-	return t != nil && !strictInitTypePermits(t)
+	return t != nil && !unassignedReadTypePermits(t)
 }
 
 // declaredVarType returns the resolved type of a declarator. Function-scoped
@@ -491,7 +511,9 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 	// --- skips it, so its reads see the enclosing flow.
 	case *parser.CallExpression:
 		body, isIIFE := nestedFunctionBody(n.Function)
-		if !isIIFE {
+		if !isIIFE || isAsyncOrGeneratorFunction(n.Function) {
+			// An async or generator function expression does not run its
+			// body to completion inline, so tsc does not inline its flow.
 			forEachChildInScope(node, func(child parser.Node) {
 				a.walk(child, assigned)
 			})
@@ -1175,4 +1197,40 @@ func iifeDeclaredNames(fn parser.Expression, body parser.Node) map[string]bool {
 		})
 	}
 	return names
+}
+
+// unassignedReadTypePermits reports whether a variable of declared type t may
+// be read before it is assigned. tsc assumes such a variable initialized when
+// its type is any, unknown or void, and otherwise reports TS2454 unless the
+// type's falsy part includes undefined (so `string | void` is still an error).
+func unassignedReadTypePermits(t types.Type) bool {
+	if t == nil || t == types.Any || t == types.Unknown || t == types.Void {
+		return true
+	}
+	return admitsUndefinedMember(t)
+}
+
+func admitsUndefinedMember(t types.Type) bool {
+	if t == types.Undefined || t == types.Any || t == types.Unknown {
+		return true
+	}
+	if u, ok := t.(*types.UnionType); ok {
+		for _, m := range u.Types {
+			if admitsUndefinedMember(m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isAsyncOrGeneratorFunction reports an async or generator function literal.
+func isAsyncOrGeneratorFunction(fn parser.Expression) bool {
+	switch f := fn.(type) {
+	case *parser.FunctionLiteral:
+		return f.IsAsync || f.IsGenerator
+	case *parser.ArrowFunctionLiteral:
+		return f.IsAsync
+	}
+	return false
 }
