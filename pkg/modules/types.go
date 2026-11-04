@@ -77,17 +77,17 @@ type ModuleRecord struct {
 	LinkSummary any
 
 	// Type information
-	Exports       map[string]types.Type // Exported types
+	Exports map[string]types.Type // Exported types
 	// Diagnostics is every type-checking diagnostic of the module (Error
 	// keeps only the first, for loading); see Paserati.CheckFiles.
 	Diagnostics []errors.PaseratiError
 	// parseDiagnostics are the parse errors of a module checked despite
 	// them (LoaderConfig.CheckAfterParseErrors).
 	parseDiagnostics []errors.PaseratiError
-	ExportValues  map[string]vm.Value   // Exported runtime values
-	ExportIndices map[string]uint16     // Export name to global heap index mapping (for dynamic import)
-	ReExports     map[string]vm.ModuleReExport
-	Namespace     vm.Value              // Module namespace object
+	ExportValues     map[string]vm.Value // Exported runtime values
+	ExportIndices    map[string]uint16   // Export name to global heap index mapping (for dynamic import)
+	ReExports        map[string]vm.ModuleReExport
+	Namespace        vm.Value // Module namespace object
 
 	// Compilation results
 	CompiledChunk *vm.Chunk // Compiled bytecode chunk for execution

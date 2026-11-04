@@ -1052,7 +1052,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	for _, prop := range body.Properties {
 		if prop.IsStatic {
 			if computedKey, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), propertyKey: computedKey, static: true})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), propertyKey: computedKey, static: true, typeOnlyOK: prop.IsDeclare || prop.IsAbstract || c.currentClassAmbient})
 			}
 		}
 	}
@@ -1205,7 +1205,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	for _, methodSig := range body.MethodSigs {
 		if !methodSig.IsStatic {
 			if computedKey, isComputed := methodSig.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className)})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), typeOnlyOK: methodSig.IsAbstract || c.currentClassAmbient})
 			}
 			methodName := c.extractPropertyName(methodSig.Key)
 			c.setClassContext(className, types.AccessContextInstanceMethod)
@@ -1258,7 +1258,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 			// Check if this is a computed property
 			if computedKey, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
-				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), propertyKey: computedKey})
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env, classCtx: c.computedKeyClassContext(className), propertyKey: computedKey, typeOnlyOK: prop.IsDeclare || prop.IsAbstract || c.currentClassAmbient})
 				// Try to extract constant property name
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific property
