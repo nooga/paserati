@@ -3981,11 +3981,39 @@ func (c *Checker) withReturnContextInferences(callNode *parser.CallExpression, g
 	if len(subst) == 0 {
 		return paramType
 	}
+	// The inferences from the return type are the callback's context, its
+	// parameters' included: tsc makes them (at ReturnType priority) before
+	// fixing the type parameters a context-sensitive argument's parameters
+	// mention, so with nothing else inferred they type those parameters
+	// (`observable((observer) => ...)` returned as Observable<V, E>).
+	changed := false
+	cp := *sig
 	ret := c.substituteTypes(sig.ReturnType, subst)
-	if ret == sig.ReturnType {
+	if ret != sig.ReturnType {
+		cp.ReturnType = ret
+		changed = true
+	}
+	var params []types.Type
+	for i, p := range sig.ParameterTypes {
+		if np := c.substituteTypes(p, subst); np != p {
+			if params == nil {
+				params = append([]types.Type(nil), sig.ParameterTypes...)
+			}
+			params[i] = np
+		}
+	}
+	if params != nil {
+		cp.ParameterTypes = params
+		changed = true
+	}
+	if sig.RestParameterType != nil {
+		if rp := c.substituteTypes(sig.RestParameterType, subst); rp != sig.RestParameterType {
+			cp.RestParameterType = rp
+			changed = true
+		}
+	}
+	if !changed {
 		return paramType
 	}
-	cp := *sig
-	cp.ReturnType = ret
 	return types.NewObjectType().WithCallSignature(&cp)
 }
