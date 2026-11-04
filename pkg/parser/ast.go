@@ -340,6 +340,9 @@ type Parameter struct {
 	DefaultValue    Expression // Default value expression (param = defaultValue)
 	IsThis          bool       // Whether this is an explicit 'this' parameter
 	IsDestructuring bool       // Whether this parameter uses destructuring pattern
+	// SourcePattern is the destructuring pattern a synthesized parameter
+	// (`__destructured_param_N`) stands for; signatures print it as the name.
+	SourcePattern Expression
 
 	// Parameter property modifiers (only valid in constructor context)
 	IsPublic    bool // true if marked with 'public' (constructor parameter property)
@@ -2391,8 +2394,11 @@ type FunctionTypeExpression struct {
 	Parameters     []Expression     // Slice of Expression nodes representing parameter types
 	OptionalParams []bool           // Tracks optional parameters in method/call signatures
 	RestParameter  Expression       // Optional rest parameter type (e.g., ...args: string[])
-	ThisType       Expression       // Optional explicit `this` parameter type
-	ReturnType     Expression       // Expression node for the return type
+	// ParameterNames is each parameter's written name, then the rest
+	// parameter's (types.Signature.ParameterNames convention).
+	ParameterNames []string
+	ThisType       Expression // Optional explicit `this` parameter type
+	ReturnType     Expression // Expression node for the return type
 	// IsMethodSignature marks `m(x: T): U` members of type literals and
 	// interfaces, whose parameters stay bivariant under strictFunctionTypes.
 	IsMethodSignature bool
@@ -3161,6 +3167,7 @@ type ConstructorTypeExpression struct {
 	Parameters     []Expression     // Parameter types for the constructor
 	OptionalParams []bool           // Which parameters were written `name?: T`
 	RestParameter  Expression       // Rest parameter type for variadic constructors
+	ParameterNames []string         // as FunctionTypeExpression.ParameterNames
 	ReturnType     Expression       // The constructed type (T in `new (): T`)
 	IsAbstract     bool             // `abstract new (...) => T`
 }

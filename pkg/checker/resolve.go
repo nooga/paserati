@@ -1185,7 +1185,7 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 
 	// Create signature
 	sig := &types.Signature{
-		ParameterNames:    functionTypeParameterNameStrings(node.Parameters),
+		ParameterNames:    node.ParameterNames,
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    node.OptionalParams,
@@ -1274,7 +1274,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 	// Create the function signature
 	sig := &types.Signature{
 		TypeParameters:    typeParams,
-		ParameterNames:    functionTypeParameterNameStrings(node.Parameters),
+		ParameterNames:    node.ParameterNames,
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    node.OptionalParams,
@@ -1420,6 +1420,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 				KeyType:   keyType,
 				ValueType: valueType,
 				Readonly:  prop.Readonly,
+				ParamName: identName(prop.KeyName),
 			}
 
 			// We'll add this to the ObjectType's IndexSignatures field
@@ -1646,6 +1647,7 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 	// Create signature
 	sig := &types.Signature{
 		TypeParameters:    sigTypeParams,
+		ParameterNames:    node.ParameterNames,
 		ParameterTypes:    paramTypes,
 		ReturnType:        constructedType,
 		OptionalParams:    node.OptionalParams,
@@ -1837,7 +1839,7 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 
 	// Return a unified Signature
 	sig := &types.Signature{
-		ParameterNames:    parameterNameStrings(node.Parameters),
+		ParameterNames:    parameterNameStrings(node.Parameters, node.RestParameter),
 		ParameterTypes:    paramTypes,
 		ReturnType:        resolvedReturnType, // Use the value assigned outside the if
 		OptionalParams:    optionalParams,
@@ -1848,9 +1850,6 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 	return sig
 }
 
-func functionTypeParameterNameStrings(params []parser.Expression) []string {
-	return nil
-}
 
 // instantiateGenericType creates a concrete type by substituting type arguments
 // into a GenericType's body type
@@ -3874,7 +3873,7 @@ func (c *Checker) mappedIndexSignatures(mt *types.MappedType, source *types.Obje
 		case "-":
 			readonly = false
 		}
-		sigs = append(sigs, &types.IndexSignature{KeyType: sig.KeyType, ValueType: value, Readonly: readonly})
+		sigs = append(sigs, &types.IndexSignature{KeyType: sig.KeyType, ValueType: value, Readonly: readonly, ParamName: sig.ParamName})
 	}
 	if sigs == nil {
 		return []*types.IndexSignature{}
@@ -4041,6 +4040,7 @@ func cloneObjectTypeWithTypesNotify(obj *types.ObjectType, rewrite func(types.Ty
 				continue
 			}
 			result.IndexSigs()[i] = &types.IndexSignature{
+				ParamName:      sig.ParamName,
 				KeyType:        rewrite(sig.KeyType),
 				ValueType:      rewrite(sig.ValueType),
 				IsMapped:       sig.IsMapped,
@@ -6110,6 +6110,7 @@ func (c *Checker) substituteMembers(typ, result *types.ObjectType, substitution 
 		index := make([]*types.IndexSignature, len(sigs))
 		for i, sig := range sigs {
 			index[i] = &types.IndexSignature{
+				ParamName:      sig.ParamName,
 				KeyType:        sub(sig.KeyType),
 				ValueType:      sub(sig.ValueType),
 				IsMapped:       sig.IsMapped,

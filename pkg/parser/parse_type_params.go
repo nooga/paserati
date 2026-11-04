@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"strings"
+
 	"github.com/nooga/paserati/pkg/lexer"
 )
 
@@ -69,10 +71,13 @@ func (p *Parser) skipBalancedPattern() {
 // typeSigParams is the result of parsing the parameter list of a function
 // type or method signature.
 type typeSigParams struct {
-	params   []Expression
-	names    []*Identifier // the named parameters, for duplicate checks
-	optional []bool
-	rest     Expression
+	params []Expression
+	names  []*Identifier // the named parameters, for duplicate checks
+	// paramNames is the written name of each of params ("" when the list
+	// gives only a type), then, when there is a rest parameter, its name.
+	paramNames []string
+	optional   []bool
+	rest       Expression
 	// this is the type of an explicit `this` parameter, which is not part of
 	// the call signature.
 	this Expression
@@ -108,12 +113,22 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 
 		if p.curTokenIs(lexer.SPREAD) {
 			restTok := p.curToken
+			restName := ""
+			if p.peekToken != nil {
+				switch {
+				case p.isTypeParamNameToken(p.peekToken):
+					restName = p.peekToken.Literal
+				case p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE):
+					restName = "__pattern"
+				}
+			}
 			rest := p.parseRestParameterType()
 			if rest == nil {
 				return res, false
 			}
 			if res.rest == nil {
 				res.rest = rest
+				res.paramNames = append(res.paramNames[:len(res.params):len(res.params)], restName)
 			}
 			if p.curTokenIs(lexer.RPAREN) {
 				return res, true
@@ -152,6 +167,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 		}
 		bare := false
 		optional := false
+		name := ""
 		switch {
 		case p.curTokenIs(lexer.THIS) && p.peekTokenIs(lexer.COLON):
 			// `this: T` is not part of the call signature; keep it apart.
@@ -163,7 +179,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 			}
 			goto next
 		case (p.curTokenIs(lexer.LBRACKET) || p.curTokenIs(lexer.LBRACE)) && p.scanBindingPatternThenColon():
-			p.skipBalancedPattern()
+			name = p.bindingPatternText()
 			if p.peekTokenIs(lexer.QUESTION) {
 				p.nextToken()
 				optional = true
@@ -174,6 +190,9 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 			p.nextToken()
 		case p.isTypeParamNameToken(p.curToken):
 			isIdent := p.curTokenIs(lexer.IDENT)
+			if p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) || (isIdent && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN))) {
+				name = p.curToken.Literal
+			}
 			if p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) || (isIdent && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN))) {
 				res.names = append(res.names, &Identifier{Token: p.curToken, Value: p.curToken.Literal})
 			}
@@ -193,6 +212,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 						Value: "any",
 					})
 					res.optional = append(res.optional, true)
+					res.paramNames = append(res.paramNames, name)
 					goto next
 				} else {
 					p.addError(p.peekToken, "':' expected.")
@@ -207,6 +227,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 					Value: "any",
 				})
 				res.optional = append(res.optional, false)
+				res.paramNames = append(res.paramNames, name)
 				goto next
 			}
 		}
@@ -218,6 +239,7 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 			}
 			res.params = append(res.params, t)
 			res.optional = append(res.optional, optional)
+			res.paramNames = append(res.paramNames, name)
 		}
 	next:
 		if p.peekTokenIs(lexer.COMMA) {
@@ -234,4 +256,46 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 		return res, false
 	}
 	return res, true
+}
+
+// bindingPatternText consumes a bracketed binding pattern naming a parameter
+// (cur at the opening bracket on entry, at the closing one on exit) and
+// returns it as tsc prints such a name: `{ a, b }`, `[x, y]`.
+func (p *Parser) bindingPatternText() string {
+	var b strings.Builder
+	depth := 0
+	prev := lexer.TokenType("")
+	for !p.curTokenIs(lexer.EOF) {
+		tok := p.curToken
+		switch tok.Type {
+		case lexer.RBRACE:
+			if prev != lexer.LBRACE {
+				b.WriteString(" ")
+			}
+		case lexer.COMMA, lexer.RBRACKET, lexer.RPAREN, lexer.COLON:
+		default:
+			switch prev {
+			case "", lexer.LBRACKET, lexer.LPAREN, lexer.SPREAD:
+			case lexer.LBRACE, lexer.COMMA, lexer.COLON, lexer.ASSIGN:
+				b.WriteString(" ")
+			default:
+				if tok.Type == lexer.ASSIGN {
+					b.WriteString(" ")
+				}
+			}
+		}
+		b.WriteString(tok.Literal)
+		switch tok.Type {
+		case lexer.LBRACKET, lexer.LBRACE, lexer.LPAREN:
+			depth++
+		case lexer.RBRACKET, lexer.RBRACE, lexer.RPAREN:
+			depth--
+		}
+		prev = tok.Type
+		if depth == 0 {
+			return b.String()
+		}
+		p.nextToken()
+	}
+	return b.String()
 }

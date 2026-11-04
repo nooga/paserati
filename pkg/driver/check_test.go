@@ -579,7 +579,7 @@ func TestCheckFilesModuleLoadedDuringCycleDeclaration(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"t.ts TS2322 Type '{ value: string } | { error: string }' is not assignable to type 'number'.",
+		"t.ts TS2322 Type '{ value: string; } | { error: string; }' is not assignable to type 'number'.",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("diagnostics:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

@@ -2559,6 +2559,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		// Create the FINAL ObjectType with updated signature
 		finalSignature := &types.Signature{
 			TypeParameters:    funcSignature.TypeParameters,
+			ParameterNames:    funcSignature.ParameterNames,
 			ParameterTypes:    funcSignature.ParameterTypes,
 			ReturnType:        actualReturnType,
 			OptionalParams:    funcSignature.OptionalParams,
@@ -4819,6 +4820,7 @@ func (c *Checker) visit(node parser.Node) {
 
 		// 7. Create the final function type with optional parameters using unified ObjectType
 		methodSignature := &types.Signature{
+			ParameterNames:    parameterNameStrings(node.Parameters, node.RestParameter),
 			ParameterTypes:    paramTypes,
 			ReturnType:        actualReturnType,
 			OptionalParams:    optionalParams,

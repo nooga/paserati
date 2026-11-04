@@ -332,7 +332,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 
 	signature := &types.Signature{
 		TypeParameters:    c.signatureTypeParameters(ctx.TypeParameters),
-		ParameterNames:    parameterNameStrings(ctx.Parameters),
+		ParameterNames:    parameterNameStrings(ctx.Parameters, ctx.RestParameter),
 		ParameterTypes:    paramTypes,
 		ReturnType:        expectedReturnType,
 		OptionalParams:    optionalParams,
@@ -487,7 +487,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 
 	// 5. Create preliminary signature
 	signature := &types.Signature{
-		ParameterNames:    parameterNameStrings(ctx.Parameters),
+		ParameterNames:    parameterNameStrings(ctx.Parameters, ctx.RestParameter),
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    optionalParams,
@@ -833,7 +833,7 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 	// Create final signature
 	sig := &types.Signature{
 		TypeParameters:    c.signatureTypeParameters(ctx.TypeParameters),
-		ParameterNames:    parameterNameStrings(ctx.Parameters),
+		ParameterNames:    parameterNameStrings(ctx.Parameters, ctx.RestParameter),
 		ParameterTypes:    paramTypes,
 		ReturnType:        finalReturnType,
 		OptionalParams:    optionalParams,
@@ -846,17 +846,81 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 	return types.NewFunctionType(sig)
 }
 
-func parameterNameStrings(params []*parser.Parameter) []string {
-	if len(params) == 0 {
+func parameterNameStrings(params []*parser.Parameter, rest *parser.RestParameter) []string {
+	if len(params) == 0 && rest == nil {
 		return nil
 	}
-	names := make([]string, len(params))
+	names := make([]string, len(params), len(params)+1)
 	for i, param := range params {
-		if param != nil && param.Name != nil {
+		if param != nil && param.SourcePattern != nil {
+			names[i] = bindingNameText(param.SourcePattern)
+		} else if param != nil && param.Name != nil {
 			names[i] = param.Name.Value
+		} else if param != nil && param.Pattern != nil {
+			names[i] = bindingNameText(param.Pattern)
 		}
 	}
+	// The rest parameter's name follows (types.Signature.ParameterNames).
+	if rest != nil && rest.Name != nil {
+		names = append(names, rest.Name.Value)
+	} else if rest != nil && rest.Pattern != nil {
+		names = append(names, bindingNameText(rest.Pattern))
+	}
 	return names
+}
+
+// bindingNameText prints a parameter's binding name as tsc does in a
+// signature: a destructuring pattern without its initializers, `{ a, b: c }`
+// or `[x, ...y]`.
+func bindingNameText(e parser.Expression) string {
+	element := func(target parser.Expression, isRest bool) string {
+		s := bindingNameText(target)
+		if isRest {
+			s = "..." + s
+		}
+		return s
+	}
+	switch p := e.(type) {
+	case nil:
+		return ""
+	case *parser.Identifier:
+		return p.Value
+	case *parser.ObjectParameterPattern:
+		parts := make([]string, 0, len(p.Properties)+1)
+		for _, prop := range p.Properties {
+			if prop == nil {
+				continue
+			}
+			key := bindingNameText(prop.Key)
+			if k, ok := prop.Key.(*parser.Identifier); ok {
+				key = k.Value
+			}
+			target := bindingNameText(prop.Target)
+			if prop.Target == nil || target == key {
+				parts = append(parts, key)
+			} else {
+				parts = append(parts, key+": "+target)
+			}
+		}
+		if p.RestProperty != nil {
+			parts = append(parts, element(p.RestProperty.Target, true))
+		}
+		if len(parts) == 0 {
+			return "{}"
+		}
+		return "{ " + strings.Join(parts, ", ") + " }"
+	case *parser.ArrayParameterPattern:
+		parts := make([]string, 0, len(p.Elements))
+		for _, el := range p.Elements {
+			if el == nil {
+				parts = append(parts, "")
+				continue
+			}
+			parts = append(parts, element(el.Target, el.IsRest))
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	}
+	return e.String()
 }
 
 func (c *Checker) signatureTypeParameters(typeParamNodes []*parser.TypeParameter) []*types.TypeParameter {

@@ -1,4 +1,4 @@
-// expect_compile_error: Object literal may only specify known properties, but 'itm' does not exist in type '{ item: string }'.
+// expect_compile_error: Object literal may only specify known properties, but 'itm' does not exist in type '{ item: string; }'.
 class X {
     a(): void {}
 }

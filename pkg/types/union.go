@@ -1,6 +1,11 @@
 package types
 
-import "github.com/nooga/paserati/pkg/vm"
+import (
+	"sort"
+	"strings"
+
+	"github.com/nooga/paserati/pkg/vm"
+)
 
 // --- Union Types ---
 
@@ -18,19 +23,122 @@ func (ut *UnionType) String() string {
 	if ut.Origin != nil {
 		return ut.Origin.String()
 	}
-	typesStr := ""
-	for i, t := range ut.Types {
+	members := displayUnionMembers(ut.Types)
+	var b strings.Builder
+	for i, t := range members {
 		if i > 0 {
-			typesStr += " | "
+			b.WriteString(" | ")
 		}
-		if _, isIntersection := t.(*IntersectionType); isIntersection {
-			// tsc parenthesizes an intersection constituent of a union.
-			typesStr += "(" + t.String() + ")"
+		b.WriteString(unionMemberString(t))
+	}
+	return b.String()
+}
+
+// intrinsicOrder ranks the intrinsic types tsc creates first, in creation
+// (type id) order: a union lists its members by id, so these come first.
+func intrinsicOrder(t Type) (int, bool) {
+	switch t {
+	case Any:
+		return 0, true
+	case Unknown:
+		return 1, true
+	case String:
+		return 4, true
+	case Number:
+		return 5, true
+	case BigInt:
+		return 6, true
+	case Boolean:
+		return 7, true
+	case Symbol:
+		return 9, true
+	case Void:
+		return 10, true
+	case Never:
+		return 11, true
+	case NonPrimitive:
+		return 12, true
+	}
+	if lt, ok := t.(*LiteralType); ok && lt.Value.Type() == vm.TypeBoolean {
+		if lt.Value.AsBoolean() {
+			return 8, true
+		}
+		return 7, true
+	}
+	return 0, false
+}
+
+// displayUnionMembers orders union members as tsc's typeToString shows
+// them: intrinsic types by id, then the others in the order they were made
+// (approximated by their order in the union), `false | true` as `boolean`,
+// and null and undefined last (tsc's formatUnionTypes).
+func displayUnionMembers(ts []Type) []Type {
+	var hasNull, hasUndefined, hasFalse, hasTrue bool
+	intrinsics := make([]Type, 0, len(ts))
+	others := make([]Type, 0, len(ts))
+	for _, t := range ts {
+		switch t {
+		case Null:
+			hasNull = true
+			continue
+		case Undefined:
+			hasUndefined = true
 			continue
 		}
-		typesStr += t.String()
+		if lt, ok := t.(*LiteralType); ok && lt.Value.Type() == vm.TypeBoolean {
+			if lt.Value.AsBoolean() {
+				hasTrue = true
+			} else {
+				hasFalse = true
+			}
+		}
+		if _, ok := intrinsicOrder(t); ok {
+			intrinsics = append(intrinsics, t)
+		} else {
+			others = append(others, t)
+		}
 	}
-	return typesStr
+	sort.SliceStable(intrinsics, func(i, j int) bool {
+		a, _ := intrinsicOrder(intrinsics[i])
+		b, _ := intrinsicOrder(intrinsics[j])
+		return a < b
+	})
+	out := make([]Type, 0, len(ts))
+	for _, t := range intrinsics {
+		if lt, ok := t.(*LiteralType); ok && lt.Value.Type() == vm.TypeBoolean && hasFalse && hasTrue {
+			if lt.Value.AsBoolean() {
+				continue // printed as boolean with false
+			}
+			out = append(out, Boolean)
+			continue
+		}
+		out = append(out, t)
+	}
+	out = append(out, others...)
+	if hasNull {
+		out = append(out, Null)
+	}
+	if hasUndefined {
+		out = append(out, Undefined)
+	}
+	return out
+}
+
+// unionMemberString prints a union member, parenthesized where tsc's printer
+// would: function and constructor types, and conditional types.
+func unionMemberString(t Type) string {
+	s := t.String()
+	switch m := t.(type) {
+	case *ObjectType:
+		if strings.HasPrefix(s, "(") || strings.HasPrefix(s, "<") || strings.HasPrefix(s, "new ") || strings.HasPrefix(s, "abstract new ") {
+			if len(m.Props()) == 0 && len(m.IndexSigs()) == 0 && m.DisplayName == "" && m.GenericName == "" {
+				return "(" + s + ")"
+			}
+		}
+	case *ConditionalType, *IntersectionType:
+		return "(" + s + ")"
+	}
+	return s
 }
 func (ut *UnionType) typeNode() {}
 func (ut *UnionType) Equals(other Type) bool {

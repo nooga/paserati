@@ -242,6 +242,7 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		// Copy index signatures
 		for _, indexSig := range t.IndexSigs() {
 			newIndexSig := &IndexSignature{
+				ParamName: indexSig.ParamName,
 				KeyType:   substituteTypeMemo(indexSig.KeyType, substitutions, memo),
 				ValueType: substituteTypeMemo(indexSig.ValueType, substitutions, memo),
 			}
