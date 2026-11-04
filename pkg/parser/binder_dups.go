@@ -179,20 +179,7 @@ func (b *binder) declare(table bindTable, name string, tok *lexer.Token, flags, 
 		table[name] = sym
 		b.syms = append(b.syms, sym)
 	} else if sym.flags&excludes != 0 {
-		code, msg := tsCodeTwoThreeHundred, fmt.Sprintf("Duplicate identifier '%s'.", name)
-		if sym.flags&sfBlockScopedVariable != 0 {
-			code, msg = tsCodeCannotRedeclare, fmt.Sprintf("Cannot redeclare block-scoped variable '%s'.", name)
-		}
-		if sym.flags&sfEnum != 0 || flags&sfEnum != 0 {
-			code, msg = tsCodeEnumMerge, "Enum declarations can only merge with namespace or other enum declarations."
-		}
-		if d.isDefault && len(sym.decls) > 0 {
-			code, msg = "TS2528", "A module cannot have multiple default exports."
-		}
-		for _, prev := range sym.decls {
-			b.report(prev.tok, code, msg)
-		}
-		b.report(tok, code, msg)
+		b.reportConflict(sym, name, tok, flags, d)
 		// Like tsc, the conflicting declaration joins a fresh orphan symbol
 		// and does not change the table.
 		orphan := &bindSymbol{name: name, flags: flags, decls: []*bindDecl{d}}
@@ -201,6 +188,25 @@ func (b *binder) declare(table bindTable, name string, tok *lexer.Token, flags, 
 	sym.flags |= flags
 	sym.decls = append(sym.decls, d)
 	return sym
+}
+
+// reportConflict reports a declaration of name (at tok, with flags) that the
+// existing symbol excludes, at every declaration involved.
+func (b *binder) reportConflict(sym *bindSymbol, name string, tok *lexer.Token, flags symFlags, d *bindDecl) {
+	code, msg := tsCodeTwoThreeHundred, fmt.Sprintf("Duplicate identifier '%s'.", name)
+	if sym.flags&sfBlockScopedVariable != 0 {
+		code, msg = tsCodeCannotRedeclare, fmt.Sprintf("Cannot redeclare block-scoped variable '%s'.", name)
+	}
+	if sym.flags&sfEnum != 0 || flags&sfEnum != 0 {
+		code, msg = tsCodeEnumMerge, "Enum declarations can only merge with namespace or other enum declarations."
+	}
+	if d.isDefault && len(sym.decls) > 0 {
+		code, msg = "TS2528", "A module cannot have multiple default exports."
+	}
+	for _, prev := range sym.decls {
+		b.report(prev.tok, code, msg)
+	}
+	b.report(tok, code, msg)
 }
 
 const (
@@ -409,6 +415,24 @@ func (b *binder) bindStmt(s Statement, sc *bindScope) {
 	b.bindDeclaration(s, sc, false)
 }
 
+// declareMember is tsc's declareModuleMember: an exported member of a module
+// or namespace is declared in the exports, and also gets a local symbol
+// carrying the same excludes (but no meaning of its own), so it conflicts
+// with a non-exported local of the same name (`enum E {}` + `export type E`).
+func (b *binder) declareMember(sc *bindScope, exported bool, own bindTable, name string, tok *lexer.Token, flags, excludes symFlags, d *bindDecl) *bindSymbol {
+	if exported && sc.exports != nil && own != nil && name != "" && tok != nil {
+		shadow := &bindDecl{tok: tok, pos: tok.StartPos, kind: d.kind, isDefault: d.isDefault}
+		if sym := own[name]; sym == nil {
+			own[name] = &bindSymbol{name: name, decls: []*bindDecl{shadow}}
+		} else if sym.flags&excludes != 0 {
+			b.reportConflict(sym, name, tok, flags, shadow)
+		} else {
+			sym.decls = append(sym.decls, shadow)
+		}
+	}
+	return b.declare(b.tableFor(sc, exported, own), name, tok, flags, excludes, d)
+}
+
 func (b *binder) tableFor(sc *bindScope, exported bool, own bindTable) bindTable {
 	if exported && sc.exports != nil {
 		return sc.exports
@@ -430,15 +454,15 @@ func (b *binder) bindDeclaration(s Statement, sc *bindScope, exported bool) {
 	case *LetStatement, *ConstStatement:
 		names, _ := declaredNameIdents(n)
 		for _, id := range names {
-			b.declare(b.tableFor(sc, exported, sc.locals), id.Value, id.Token, sfBlockScopedVariable, exBlockScopedVariable, &bindDecl{})
+			b.declareMember(sc, exported, sc.locals, id.Value, id.Token, sfBlockScopedVariable, exBlockScopedVariable, &bindDecl{})
 		}
 	case *VarStatement, *ArrayDestructuringDeclaration, *ObjectDestructuringDeclaration, *DeclarationGroup:
 		names, isVar := declaredNameIdents(n)
 		for _, id := range names {
 			if isVar {
-				b.declare(b.tableFor(sc, exported, sc.varTable), id.Value, id.Token, sfFunctionScopedVariable, exFunctionScopedVariable, &bindDecl{})
+				b.declareMember(sc, exported, sc.varTable, id.Value, id.Token, sfFunctionScopedVariable, exFunctionScopedVariable, &bindDecl{})
 			} else {
-				b.declare(b.tableFor(sc, exported, sc.locals), id.Value, id.Token, sfBlockScopedVariable, exBlockScopedVariable, &bindDecl{})
+				b.declareMember(sc, exported, sc.locals, id.Value, id.Token, sfBlockScopedVariable, exBlockScopedVariable, &bindDecl{})
 			}
 		}
 	case *ClassDeclaration:
@@ -447,13 +471,13 @@ func (b *binder) bindDeclaration(s Statement, sc *bindScope, exported bool) {
 		}
 	case *InterfaceDeclaration:
 		if n != nil && n.Name != nil {
-			sym := b.declare(b.tableFor(sc, exported, sc.locals), n.Name.Value, n.Name.Token, sfInterface, exInterface, &bindDecl{})
+			sym := b.declareMember(sc, exported, sc.locals, n.Name.Value, n.Name.Token, sfInterface, exInterface, &bindDecl{})
 			b.bindTypeParams(n.TypeParameters)
 			b.bindInterfaceMembers(n, sym)
 		}
 	case *TypeAliasStatement:
 		if n != nil && n.Name != nil {
-			b.declare(b.tableFor(sc, exported, sc.locals), n.Name.Value, n.Name.Token, sfTypeAlias, exTypeAlias, &bindDecl{})
+			b.declareMember(sc, exported, sc.locals, n.Name.Value, n.Name.Token, sfTypeAlias, exTypeAlias, &bindDecl{})
 			b.bindTypeParams(n.TypeParameters)
 		}
 	case *NamespaceDeclaration:
@@ -604,7 +628,7 @@ func (b *binder) bindFunctionDecl(fl *FunctionLiteral, sig *FunctionSignature, s
 		return
 	}
 	d := &bindDecl{kind: dkFunction, hasBody: hasBody, ambient: ambient}
-	b.declare(b.tableFor(sc, exported, sc.locals), name.Value, name.Token, sfFunction, exFunction, d)
+	b.declareMember(sc, exported, sc.locals, name.Value, name.Token, sfFunction, exFunction, d)
 	if fl != nil {
 		b.bindFunctionBody(fl.TypeParameters, fl.Parameters, fl.RestParameter, fl.Body, nil)
 	} else if sig != nil {
@@ -713,7 +737,7 @@ func (b *binder) bindClassDecl(cd *ClassDeclaration, sc *bindScope, exported boo
 	var sym *bindSymbol
 	if cd.Name != nil {
 		d := &bindDecl{kind: dkClass, ambient: cd.Declare}
-		sym = b.declare(b.tableFor(sc, exported, sc.locals), cd.Name.Value, cd.Name.Token, sfClass, exClass, d)
+		sym = b.declareMember(sc, exported, sc.locals, cd.Name.Value, cd.Name.Token, sfClass, exClass, d)
 	} else {
 		sym = &bindSymbol{}
 	}
@@ -1055,7 +1079,7 @@ func (b *binder) bindEnum(en *EnumDeclaration, sc *bindScope, exported bool) {
 		flags, excl = sfConstEnum, exConstEnum
 	}
 	d := &bindDecl{kind: dkEnum, isConst: en.IsConst}
-	sym := b.declare(b.tableFor(sc, exported, sc.locals), en.Name.Value, en.Name.Token, flags, excl, d)
+	sym := b.declareMember(sc, exported, sc.locals, en.Name.Value, en.Name.Token, flags, excl, d)
 	members := sym.exportsTable()
 	for _, m := range en.Members {
 		if m == nil || m.Name == nil {
@@ -1132,7 +1156,7 @@ func (b *binder) bindNamespace(n *NamespaceDeclaration, sc *bindScope, exported 
 		flags, excl = sfValueModule, exValueModule
 	}
 	d := &bindDecl{kind: dkNamespace, ambient: n.Declare}
-	sym := b.declare(b.tableFor(sc, exported || n.IsExported, sc.varTable), n.Name.Value, n.Name.Token, flags, excl, d)
+	sym := b.declareMember(sc, exported || n.IsExported, sc.varTable, n.Name.Value, n.Name.Token, flags, excl, d)
 	if n.Body == nil {
 		return
 	}
@@ -1199,8 +1223,12 @@ func (p *Parser) finishBinding(program *Program) {
 		return
 	}
 	// With real syntax errors the recovered tree can invent declarations (a
-	// stray `, foo(x) {}` becoming a second declarator), so only the early-error
-	// re-labelling below is trusted, not new diagnostics.
+	// stray `, foo(x) {}` becoming a second declarator), so outside tsc mode
+	// only the early-error re-labelling below is trusted, not new diagnostics.
+	// tsc reports its binder's diagnostics whatever the parse errors, so tsc
+	// mode does too.
+	// FIXME: where our recovery differs from tsc's (an invented member in a
+	// type literal, `(x = 1);` in an interface) this reports bogus TS2300s.
 	syntaxErrors := len(p.errors) - len(p.redeclarationErrors)
 	covered := map[int]bool{}
 	for _, e := range p.redeclarationErrors {
@@ -1213,7 +1241,7 @@ func (p *Parser) finishBinding(program *Program) {
 		}
 	}
 	for _, d := range diags {
-		if syntaxErrors > 0 {
+		if syntaxErrors > 0 && !p.tscDiagnostics {
 			break
 		}
 		if covered[d.tok.StartPos] && (d.code == "TS2300" || d.code == "TS2451") {
