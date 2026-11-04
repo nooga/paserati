@@ -3660,11 +3660,8 @@ func (c *Checker) nullishDiscriminantGuard(member parser.Expression, value types
 	}
 	unit := false
 	for _, m := range u.Types {
-		obj, ok := c.resolveObjectTypeForNarrowing(m)
-		if !ok {
-			return nil
-		}
-		pt, has := obj.Props()[prop.Value]
+		// A member may be an intersection (X & { a: undefined }).
+		pt, _, has := c.discriminantProperty(m, prop.Value)
 		if !has {
 			return nil
 		}

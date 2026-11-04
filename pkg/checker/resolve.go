@@ -5400,6 +5400,17 @@ func (c *Checker) structuralObject(t types.Type) (*types.ObjectType, bool) {
 			for _, name := range obj.PropertyNames() {
 				prop := obj.Props()[name]
 				if prev, exists := merged.Props()[name]; exists {
+					// An optional member reads as T | undefined, so where
+					// optionality differs the required side's type decides
+					// whether undefined survives (tsc intersects the
+					// declared types of the properties).
+					if c.strictNullChecks && optional[name] != obj.OptionalProps()[name] {
+						if optional[name] {
+							prev = types.NewUnionType(prev, types.Undefined)
+						} else {
+							prop = types.NewUnionType(prop, types.Undefined)
+						}
+					}
 					merged.SetProperty(name, types.NewIntersectionType(prev, prop))
 					optional[name] = optional[name] && obj.OptionalProps()[name]
 					readonly[name] = readonly[name] && obj.ReadOnlyProps()[name]
