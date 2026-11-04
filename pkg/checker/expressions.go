@@ -117,6 +117,10 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 	if checkerDebug {
 		debugPrintf("// [Checker ArrayLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
 	}
+	if tuples := unionTupleMembers(expectedType); len(tuples) > 1 && !hasTopLevelSpread(node) {
+		c.checkArrayLiteralInTupleUnion(node, tuples)
+		return
+	}
 
 	// Check if expected type is a tuple type
 	if tupleType, isTuple := expectedType.(*types.TupleType); isTuple {
@@ -349,6 +353,69 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 	// For other expected types, fall back to regular array literal checking
 	debugPrintf("// [Checker ArrayLitContext] Expected type is not array or tuple (%T). Using regular array checking.\n", expectedType)
 	c.checkArrayLiteral(node)
+}
+
+// unionTupleMembers is the tuple types (readonly unwrapped) of a union
+// context whose members other than null and undefined are all tuples, or nil.
+func unionTupleMembers(t types.Type) []*types.TupleType {
+	u, ok := t.(*types.UnionType)
+	if !ok {
+		return nil
+	}
+	var tuples []*types.TupleType
+	for _, m := range u.Types {
+		if m == types.Null || m == types.Undefined {
+			continue
+		}
+		if ro, isRO := m.(*types.ReadonlyType); isRO {
+			m = ro.InnerType
+		}
+		tt, isTuple := m.(*types.TupleType)
+		if !isTuple {
+			return nil
+		}
+		tuples = append(tuples, tt)
+	}
+	return tuples
+}
+
+// checkArrayLiteralInTupleUnion types an array literal whose context is a
+// union of tuple types as a tuple, each element contextually typed by the
+// union of the members' element types at its position (tsc's
+// getContextualTypeForElementExpression over the union).
+func (c *Checker) checkArrayLiteralInTupleUnion(node *parser.ArrayLiteral, tuples []*types.TupleType) {
+	elemTypes := make([]types.Type, len(node.Elements))
+	for i, elemNode := range node.Elements {
+		var ctxParts []types.Type
+		for _, tt := range tuples {
+			switch {
+			case i < len(tt.ElementTypes):
+				ctxParts = append(ctxParts, tt.ElementTypes[i])
+			case tt.RestElementType != nil:
+				if arr, ok := tt.RestElementType.(*types.ArrayType); ok {
+					ctxParts = append(ctxParts, arr.ElementType)
+				} else {
+					ctxParts = append(ctxParts, tt.RestElementType)
+				}
+			}
+		}
+		var ctx types.Type
+		if len(ctxParts) > 0 {
+			ctx = types.NewUnionType(ctxParts...)
+			c.visitWithContext(elemNode, &ContextualType{ExpectedType: ctx, IsContextual: true})
+		} else {
+			c.visit(elemNode)
+		}
+		et := elemNode.GetComputedType()
+		if et == nil {
+			et = types.Any
+		}
+		if lit, ok := et.(*types.LiteralType); ok && !literalKeptByContext(lit, ctx) {
+			et = c.rel.GetWidenedType(lit)
+		}
+		elemTypes[i] = et
+	}
+	node.SetComputedType(&types.TupleType{ElementTypes: elemTypes})
 }
 
 // soleArrayMember is the array type a union context names besides nullish

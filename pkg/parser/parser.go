@@ -536,7 +536,9 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.READONLY, func() Expression {          // 'readonly T[]' (readonly array type)
 		tok := p.curToken
 		p.nextToken() // consume 'readonly', parse the inner type
-		inner := p.parseTypeExpressionRecursive(TYPE_LOWEST)
+		// A type operator binds tighter than & and |: `readonly T[] | U`
+		// is (readonly T[]) | U.
+		inner := p.parseTypeExpressionRecursive(TYPE_INTERSECTION)
 		if inner == nil {
 			return nil
 		}
@@ -12597,8 +12599,10 @@ func (p *Parser) parseKeyofTypeExpression() Expression {
 	// Move to the type expression after 'keyof'
 	p.nextToken()
 
-	// Parse the type that we're getting keys from
-	kte.Type = p.parseTypeExpression()
+	// Parse the type that we're getting keys from. A type operator binds
+	// tighter than & and |: `keyof T & string` is (keyof T) & string, while
+	// `keyof T[]` is keyof (T[]).
+	kte.Type = p.parseTypeExpressionRecursive(TYPE_INTERSECTION)
 	if kte.Type == nil {
 		p.addError(p.curToken, "expected type expression after 'keyof'")
 		return nil

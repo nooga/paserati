@@ -244,6 +244,11 @@ func (kt *KeyofType) String() string {
 	operandStr := "unknown"
 	if kt.OperandType != nil {
 		operandStr = kt.OperandType.String()
+		switch kt.OperandType.(type) {
+		case *UnionType, *IntersectionType, *ConditionalType:
+			// keyof binds tighter than | and &.
+			operandStr = "(" + operandStr + ")"
+		}
 	}
 	return fmt.Sprintf("keyof %s", operandStr)
 }
