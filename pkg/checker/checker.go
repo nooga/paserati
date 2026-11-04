@@ -396,6 +396,10 @@ type Checker struct {
 	// spelling suggestions (TS2552) once this reaches 10.
 	nameNotFoundCount int
 
+	// shorthandRefs holds the value identifiers of shorthand object literal
+	// properties (`{ x }`): an unresolved one is TS18004, not TS2304.
+	shorthandRefs map[*parser.Identifier]bool
+
 	// Set by the namespace pre-pass: the nested namespace declaration about to
 	// be checked is exported.
 	nsDeclExported bool
