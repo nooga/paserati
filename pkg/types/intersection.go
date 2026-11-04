@@ -22,7 +22,7 @@ func (it *IntersectionType) String() string {
 			typesStr += "(" + t.String() + ")"
 			continue
 		}
-		typesStr += t.String()
+		typesStr += unionMemberString(t)
 	}
 	return typesStr
 }

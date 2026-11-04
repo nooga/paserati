@@ -1833,7 +1833,7 @@ func (c *Checker) createConstructorSignatures(body *parser.ClassBody, instanceTy
 		signatures := make([]*types.Signature, 0, len(body.ConstructorSigs))
 		for _, sig := range body.ConstructorSigs {
 			signatures = append(signatures, &types.Signature{
-				ParameterNames:    parameterNameStrings(sig.Parameters),
+				ParameterNames:    parameterNameStrings(sig.Parameters, sig.RestParameter),
 				ParameterTypes:    c.extractParameterTypesFromSignature(sig),
 				ReturnType:        instanceType,
 				OptionalParams:    c.extractOptionalParamsFromSignature(sig),
@@ -1864,6 +1864,7 @@ func (c *Checker) createConstructorSignatures(body *parser.ClassBody, instanceTy
 			constructor.Value.RestParameter != nil, isVariadic, restParamType)
 
 		return []*types.Signature{{
+			ParameterNames:    parameterNameStrings(constructor.Value.Parameters, constructor.Value.RestParameter),
 			ParameterTypes:    paramTypes,
 			ReturnType:        instanceType,
 			OptionalParams:    optionalParams,
@@ -1897,6 +1898,7 @@ func (c *Checker) createConstructorSignatures(body *parser.ClassBody, instanceTy
 		}
 		// Otherwise the default constructor accepts any arguments
 		return []*types.Signature{{
+			ParameterNames:    []string{"args"},
 			ParameterTypes:    []types.Type{},
 			ReturnType:        instanceType,
 			OptionalParams:    []bool{},
@@ -1972,7 +1974,7 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 	restParameterType := c.extractRestParameterType(method.Value)
 
 	signature := &types.Signature{
-		ParameterNames:    parameterNameStrings(method.Value.Parameters),
+		ParameterNames:    parameterNameStrings(method.Value.Parameters, method.Value.RestParameter),
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    optionalParams,

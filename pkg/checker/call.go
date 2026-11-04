@@ -3118,6 +3118,7 @@ func (c *Checker) fillSubstitutedMembers(typ, newObj *types.ObjectType, solution
 			continue
 		}
 		newObj.IndexSignatures = append(newObj.IndexSignatures, &types.IndexSignature{
+			ParamName:      indexSig.ParamName,
 			KeyType:        substitute(indexSig.KeyType),
 			ValueType:      substitute(indexSig.ValueType),
 			IsMapped:       indexSig.IsMapped,

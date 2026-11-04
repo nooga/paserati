@@ -345,7 +345,7 @@ func (c *Checker) addClassIndexSignatures(body *parser.ClassBody, target *types.
 		if valueType == nil {
 			valueType = types.Any
 		}
-		indexSig := &types.IndexSignature{KeyType: keyType, ValueType: valueType, Readonly: sig.Readonly}
+		indexSig := &types.IndexSignature{KeyType: keyType, ValueType: valueType, Readonly: sig.Readonly, ParamName: identName(sig.KeyName)}
 		c.reportDuplicateIndexSignature(sig.KeyName, declared, indexSig)
 		declared = append(declared, indexSig)
 	}
@@ -642,4 +642,12 @@ func interfaceDisplayName(node *parser.InterfaceDeclaration) string {
 		name += "<" + strings.Join(params, ", ") + ">"
 	}
 	return name
+}
+
+// identName is id's name, or "" for a nil identifier.
+func identName(id *parser.Identifier) string {
+	if id == nil {
+		return ""
+	}
+	return id.Value
 }

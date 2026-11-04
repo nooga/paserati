@@ -2,8 +2,10 @@ package types
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 // stringifyVisited tracks types being stringified to prevent infinite recursion
@@ -86,50 +88,95 @@ type Signature struct {
 }
 
 func (sig *Signature) String() string {
-	var params strings.Builder
-	params.WriteString("(")
+	return sig.format(true)
+}
+
+// MemberString prints sig as a member of an object type literal does:
+// `<T>(x: T): R`.
+func (sig *Signature) MemberString() string {
+	return sig.format(false)
+}
+
+// paramName is the name parameter i prints with; ParameterNames carries the
+// rest parameter's name after the others'.
+func (sig *Signature) paramName(i int, rest bool) string {
+	if i < len(sig.ParameterNames) && sig.ParameterNames[i] != "" {
+		return sig.ParameterNames[i]
+	}
+	if rest {
+		return "args"
+	}
+	return fmt.Sprintf("arg%d", i)
+}
+
+// format prints sig as tsc's typeToString does: as a function type
+// `<T>(x: T, y?: U, ...rest: V[]) => R` (arrow) or as a call signature
+// member `<T>(x: T): R`.
+func (sig *Signature) format(arrow bool) string {
+	var b strings.Builder
+	if len(sig.TypeParameters) > 0 {
+		b.WriteString("<")
+		for i, tp := range sig.TypeParameters {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(tp.String())
+		}
+		b.WriteString(">")
+	}
+	b.WriteString("(")
+	first := true
+	sep := func() {
+		if !first {
+			b.WriteString(", ")
+		}
+		first = false
+	}
+	typeStr := func(t Type) string {
+		if t == nil {
+			return "any"
+		}
+		return t.String()
+	}
+	if sig.ThisType != nil {
+		sep()
+		b.WriteString("this: ")
+		b.WriteString(typeStr(sig.ThisType))
+	}
 	numParams := len(sig.ParameterTypes)
 	for i, p := range sig.ParameterTypes {
-		if sig.IsVariadic && i == numParams-1 {
-			params.WriteString("...")
-			if p != nil {
-				params.WriteString(p.String())
-			} else {
-				params.WriteString("<nil>")
-			}
+		sep()
+		if sig.IsVariadic && sig.RestParameterType == nil && i == numParams-1 {
+			b.WriteString("...")
+			b.WriteString(sig.paramName(i, true))
 		} else {
-			if p != nil {
-				params.WriteString(p.String())
-			} else {
-				params.WriteString("<nil>")
-			}
-			// Add optional marker if this parameter is optional
+			b.WriteString(sig.paramName(i, false))
 			if i < len(sig.OptionalParams) && sig.OptionalParams[i] {
-				params.WriteString("?")
+				b.WriteString("?")
 			}
 		}
-		if i < numParams-1 {
-			params.WriteString(", ")
-		}
+		b.WriteString(": ")
+		b.WriteString(typeStr(p))
 	}
-
-	// Add rest parameter if present
 	if sig.RestParameterType != nil {
-		if numParams > 0 {
-			params.WriteString(", ")
-		}
-		params.WriteString("...")
-		params.WriteString(sig.RestParameterType.String())
+		sep()
+		b.WriteString("...")
+		b.WriteString(sig.paramName(numParams, true))
+		b.WriteString(": ")
+		b.WriteString(sig.RestParameterType.String())
 	}
-
-	params.WriteString(")")
-
-	retTypeStr := "void"
+	b.WriteString(")")
+	if arrow {
+		b.WriteString(" => ")
+	} else {
+		b.WriteString(": ")
+	}
 	if sig.ReturnType != nil {
-		retTypeStr = sig.ReturnType.String()
+		b.WriteString(sig.ReturnType.String())
+	} else {
+		b.WriteString("void")
 	}
-
-	return fmt.Sprintf("%s => %s", params.String(), retTypeStr)
+	return b.String()
 }
 
 func (sig *Signature) Equals(other *Signature) bool {
@@ -198,6 +245,9 @@ type IndexSignature struct {
 	KeyType   Type // The type of the key (e.g., string, number, symbol)
 	ValueType Type // The type of the value
 	Readonly  bool // `readonly [k: K]: V` only permits reading
+	// ParamName is the declared key parameter's name (`key` in
+	// `[key: string]: V`), for printing; "" prints as tsc's default `x`.
+	ParamName string
 
 	// For mapped types: [P in K]: V
 	IsMapped       bool   // Whether this is a mapped type pattern
@@ -223,7 +273,7 @@ func (is *IndexSignature) String() string {
 		return fmt.Sprintf("[%s in %s]: %s", is.TypeParameter, constraintStr, valueStr)
 	}
 
-	// Regular index signature: [key: string]: Type
+	// Regular index signature, as tsc prints it: `readonly [x: string]: T`.
 	keyStr := "unknown"
 	if is.KeyType != nil {
 		keyStr = is.KeyType.String()
@@ -232,7 +282,15 @@ func (is *IndexSignature) String() string {
 	if is.ValueType != nil {
 		valueStr = is.ValueType.String()
 	}
-	return fmt.Sprintf("[key: %s]: %s", keyStr, valueStr)
+	name := is.ParamName
+	if name == "" {
+		name = "x"
+	}
+	prefix := ""
+	if is.Readonly {
+		prefix = "readonly "
+	}
+	return fmt.Sprintf("%s[%s: %s]: %s", prefix, name, keyStr, valueStr)
 }
 
 func (is *IndexSignature) Equals(other *IndexSignature) bool {
@@ -369,53 +427,105 @@ func (ot *ObjectType) String() string {
 		return ot.GenericName + "<" + strings.Join(args, ", ") + ">"
 	}
 
-	// If this is a pure function (callable with no properties), show it as a function signature
-	if ot.IsPureFunction() && len(ot.CallSigs()) == 1 {
-		return ot.CallSigs()[0].String()
+	// A lone call or construct signature prints as a function or
+	// constructor type, as tsc does.
+	if len(ot.Props()) == 0 && len(ot.IndexSigs()) == 0 {
+		if len(ot.CallSigs()) == 1 && len(ot.ConstructSigs()) == 0 {
+			return ot.CallSigs()[0].String()
+		}
+		if len(ot.CallSigs()) == 0 && len(ot.ConstructSigs()) == 1 {
+			sig := ot.ConstructSigs()[0]
+			if sig.IsAbstract {
+				return "abstract new " + sig.String()
+			}
+			return "new " + sig.String()
+		}
 	}
 
-	// If this is a pure constructor, show it as a constructor signature
-	if len(ot.Props()) == 0 && len(ot.CallSigs()) == 0 && len(ot.ConstructSigs()) == 1 {
-		return fmt.Sprintf("new %s", ot.ConstructSigs()[0].String())
+	// An object type literal, as tsc prints it: call signatures, construct
+	// signatures, index signatures, then properties, each ended by `;`.
+	var b strings.Builder
+	b.WriteString("{")
+	member := func(text string) {
+		b.WriteString(" ")
+		b.WriteString(text)
+		b.WriteString(";")
 	}
-
-	// Build object type representation
-	var parts []string
-
-	// Add call signatures
 	for _, sig := range ot.CallSigs() {
-		parts = append(parts, sig.String())
+		member(sig.MemberString())
 	}
-
-	// Add constructor signatures
 	for _, sig := range ot.ConstructSigs() {
-		parts = append(parts, fmt.Sprintf("new %s", sig.String()))
+		member("new " + sig.MemberString())
 	}
-
-	// Add properties
-	for _, name := range SortedPropertyNames(ot.Props()) {
+	for _, indexSig := range ot.IndexSigs() {
+		member(indexSig.String())
+	}
+	for _, name := range ot.PropertyNames() {
 		typ := ot.Props()[name]
 		typStr := "<nil>"
 		if typ != nil {
 			typStr = typ.String()
 		}
-		optional := ""
-		if ot.OptionalProps() != nil && ot.OptionalProps()[name] {
-			optional = "?"
+		var m strings.Builder
+		if ot.ReadOnlyProps() != nil && ot.ReadOnlyProps()[name] {
+			m.WriteString("readonly ")
 		}
-		parts = append(parts, fmt.Sprintf("%s%s: %s", name, optional, typStr))
+		m.WriteString(PropertyNameText(name))
+		if ot.OptionalProps() != nil && ot.OptionalProps()[name] {
+			m.WriteString("?")
+		}
+		m.WriteString(": ")
+		m.WriteString(typStr)
+		member(m.String())
 	}
-
-	// Add index signatures
-	for _, indexSig := range ot.IndexSigs() {
-		parts = append(parts, indexSig.String())
-	}
-
-	if len(parts) == 0 {
+	if b.Len() == 1 {
 		return "{}"
 	}
+	b.WriteString(" }")
+	return b.String()
+}
 
-	return fmt.Sprintf("{ %s }", strings.Join(parts, "; "))
+// PropertyNameText is how a property key prints in a type: an identifier or
+// numeric name as written, a well-known symbol as `[Symbol.iterator]`, any
+// other name quoted.
+func PropertyNameText(name string) string {
+	switch {
+	case name == "__COMPUTED_PROPERTY__":
+		return "[Symbol.iterator]"
+	case strings.HasPrefix(name, "@@symbol:"):
+		return "[Symbol." + strings.TrimPrefix(name, "@@symbol:") + "]"
+	case isIdentifierName(name) || isCanonicalNumberName(name):
+		return name
+	case strings.HasPrefix(name, "#") && isIdentifierName(name[1:]):
+		return name
+	}
+	return strconv.Quote(name)
+}
+
+func isIdentifierName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r == '_' || r == '$' || unicode.IsLetter(r) || (i > 0 && unicode.IsDigit(r)) || (i > 0 && (r == '\u200c' || r == '\u200d')) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// isCanonicalNumberName reports a name that is the canonical text of a non-negative
+// number (`0`, `1.5`), which tsc prints unquoted.
+func isCanonicalNumberName(s string) bool {
+	if s == "" {
+		return false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || f < 0 || s[0] == '+' || s[0] == '.' {
+		return false
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64) == s
 }
 func (ot *ObjectType) typeNode() {}
 func (ot *ObjectType) Equals(other Type) bool {

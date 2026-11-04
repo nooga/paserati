@@ -49,6 +49,8 @@ type Parser struct {
 	funcTypeOptional []bool
 	// funcTypeThis is the explicit `this` type of the same parameter list.
 	funcTypeThis Expression
+	// funcTypeNames is the parameter names of the same parameter list.
+	funcTypeNames []string
 
 	l      *lexer.Lexer
 	source *source.SourceFile // cached from lexer
@@ -2154,6 +2156,7 @@ func (p *Parser) parseFunctionTypeExpression() Expression {
 		funcType.RestParameter = restParam
 		funcType.OptionalParams = sig.optional
 		funcType.ThisType = sig.this
+		funcType.ParameterNames = sig.paramNames
 
 		p.nextToken() // Consume '=>'
 		p.nextToken() // Move to the return type
@@ -2189,6 +2192,7 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 	res, ok := p.parseTypeSignatureParams()
 	p.funcTypeOptional = res.optional
 	p.funcTypeThis = res.this
+	p.funcTypeNames = res.paramNames
 	if !ok {
 		return nil, nil, errParamListReported
 	}
@@ -4620,6 +4624,7 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
+				SourcePattern:   param.Pattern,
 			}
 			newParams = append(newParams, newParam)
 
@@ -4738,6 +4743,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
+				SourcePattern:   param.Pattern,
 			}
 			newParams = append(newParams, newParam)
 
@@ -4876,6 +4882,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
+				SourcePattern:   param.Pattern,
 			}
 			newParams = append(newParams, newParam)
 
@@ -10313,6 +10320,7 @@ func (p *Parser) parseConstructorTypeExpression() Expression {
 	// Parse parameter types (similar to function type parameters)
 	params, restParam, err := p.parseFunctionTypeParameterList()
 	cte.OptionalParams = append([]bool(nil), p.funcTypeOptional...)
+	cte.ParameterNames = p.funcTypeNames
 	if err != nil {
 		return nil
 	}
@@ -10368,6 +10376,7 @@ func (p *Parser) parseInterfaceConstructorSignature() Expression {
 	// Parse parameter types (similar to function type parameters)
 	params, restParam, err := p.parseFunctionTypeParameterList()
 	cte.OptionalParams = append([]bool(nil), p.funcTypeOptional...)
+	cte.ParameterNames = p.funcTypeNames
 	if err != nil {
 		return nil
 	}
@@ -11826,6 +11835,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 		Parameters:        params,
 		OptionalParams:    optionalParams,
 		RestParameter:     restParam,
+		ParameterNames:    sig.paramNames,
 		ThisType:          sig.this,
 		ReturnType:        returnType,
 		IsMethodSignature: true,
@@ -12260,6 +12270,7 @@ func (p *Parser) parseGenericFunctionTypeExpression() Expression {
 	params, restParam, parseErr := p.parseFunctionTypeParameterList()
 	genericOptionals := append([]bool(nil), p.funcTypeOptional...)
 	genericThis := p.funcTypeThis
+	genericNames := p.funcTypeNames
 	if parseErr != nil {
 		return nil
 	}
@@ -12284,6 +12295,7 @@ func (p *Parser) parseGenericFunctionTypeExpression() Expression {
 		Parameters:     params,
 		OptionalParams: genericOptionals,
 		RestParameter:  restParam,
+		ParameterNames: genericNames,
 		ThisType:       genericThis,
 		ReturnType:     returnType,
 	}

@@ -487,6 +487,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				KeyType:   keyType,
 				ValueType: valueType,
 				Readonly:  prop.Readonly,
+				ParamName: identName(prop.KeyName),
 			}
 			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, indexSignature)
 			indexSignatures = append(indexSignatures, indexSignature)
@@ -879,6 +880,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			indexSignature := &types.IndexSignature{
 				KeyType:   keyType,
 				ValueType: valueType,
+				ParamName: identName(prop.KeyName),
 			}
 			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, indexSignature)
 			indexSignatures = append(indexSignatures, indexSignature)
@@ -1127,6 +1129,7 @@ func (c *Checker) rebindThisType(t types.Type, rb *thisRebind) types.Type {
 			result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSigs()))
 			for i, sig := range typ.IndexSigs() {
 				result.IndexSigs()[i] = &types.IndexSignature{
+					ParamName:      sig.ParamName,
 					KeyType:        c.rebindThisType(sig.KeyType, rb),
 					ValueType:      c.rebindThisType(sig.ValueType, rb),
 					IsMapped:       sig.IsMapped,
