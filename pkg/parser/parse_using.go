@@ -143,28 +143,6 @@ func (p *Parser) startsAwaitUsingDeclaration() bool {
 	return true
 }
 
-// tscAwaitUsingForHeadAt is tsc's for-head test for an `await using`
-// declaration at lookahead position at (0 = the current token): `await using`
-// followed on the same line by a binding name, `of` included, or `{`.
-func (p *Parser) tscAwaitUsingForHeadAt(at int) bool {
-	if !p.tscDiagnostics {
-		return false
-	}
-	aw, using, name := p.lookAheadFrom(at), p.lookAheadFrom(at+1), p.lookAheadFrom(at+2)
-	if aw.Type != lexer.AWAIT || using.Type != lexer.IDENT || using.Literal != "using" || using.Line != aw.Line || name.Line != using.Line {
-		return false
-	}
-	return name.Type == lexer.IDENT || name.Type == lexer.OF || name.Type == lexer.LBRACE || p.isKeywordThatCanBeIdentifier(name.Type)
-}
-
-// lookAheadFrom is lookAhead counted from the current token (0 = cur).
-func (p *Parser) lookAheadFrom(at int) lexer.Token {
-	if at == 0 {
-		return *p.curToken
-	}
-	return p.lookAhead(at - 1)
-}
-
 // parseUsingStatement parses `using x = expr, y = expr;`. Current token is the
 // `using` keyword. startToken is the token the statement is reported at — the
 // `await` for an `await using`, otherwise `using` itself.
