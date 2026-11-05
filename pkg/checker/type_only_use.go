@@ -58,20 +58,29 @@ func (c *Checker) declaresLocalValue(name string) bool {
 // sourceExportTypeOnly is how the export name of the module spec (as
 // imported here) is type-only, "" if it is not.
 func (c *Checker) sourceExportTypeOnly(spec, name string) string {
-	if c.moduleEnv == nil || c.moduleEnv.ModuleLoader == nil || name == "*" {
+	if name == "*" {
 		return ""
+	}
+	return c.sourceTypeOnlyExports(spec)[name]
+}
+
+// sourceTypeOnlyExports are the exports of the module spec (as imported
+// here) that only name a type.
+func (c *Checker) sourceTypeOnlyExports(spec string) map[string]string {
+	if c.moduleEnv == nil || c.moduleEnv.ModuleLoader == nil {
+		return nil
 	}
 	rec := c.moduleEnv.ModuleLoader.GetModule(spec, c.moduleEnv.ModulePath)
 	if rec == nil {
 		if _, err := c.moduleEnv.ModuleLoader.LoadModule(spec, c.moduleEnv.ModulePath); err != nil {
-			return ""
+			return nil
 		}
 		rec = c.moduleEnv.ModuleLoader.GetModule(spec, c.moduleEnv.ModulePath)
 	}
 	if rec == nil {
-		return ""
+		return nil
 	}
-	return rec.TypeOnlyExports[name]
+	return rec.TypeOnlyExports
 }
 
 // TypeOnlyExports implements modules.TypeOnlyExportsProvider: the module's
