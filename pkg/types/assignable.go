@@ -1956,7 +1956,8 @@ func (r *Relation) apparentMembersAssignable(source Type, tgt *ObjectType) bool 
 
 // sameGenericWithLooserArgs reports whether source is assignable to target
 // without a structural walk because both instantiate the same generic:
-// source itself with every target argument any, unknown or identical, or a
+// source itself with every target argument any, unknown or identical (or
+// the source argument any), or a
 // base class of source with every target argument any or unknown (a derived
 // class may override members incompatibly, which only the structural check
 // sees). ZodString to ZodTypeAny = ZodType<any, any, any> is the case this
@@ -1970,6 +1971,12 @@ func sameGenericWithLooserArgs(source, target *ObjectType, depth int) bool {
 	if source.Instantiates == g && len(source.GenericArgs) == len(target.GenericArgs) {
 		for i, ta := range target.GenericArgs {
 			if ta == Any || ta == Unknown {
+				continue
+			}
+			// An any argument relates to every other but never in either
+			// direction, whatever the parameter's variance (tsc relates two
+			// references to one generic by their arguments).
+			if depth == 0 && source.GenericArgs[i] == Any && ta != Never {
 				continue
 			}
 			if depth > 0 || (ta != source.GenericArgs[i] && !ta.Equals(source.GenericArgs[i])) {
