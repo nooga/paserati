@@ -16,7 +16,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		// The property exists from its first assignment on; its type is
 		// filled in below from the assigned value.
 		if _, has := expando.Props()[expandoName]; !has {
-			expando.WithProperty(expandoName, types.Any)
+			setExpandoProperty(expando, expandoName, types.Any)
 		}
 	}
 
@@ -57,7 +57,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		if prev := expando.Props()[expandoName]; prev != nil && prev != types.Any {
 			widened = types.NewUnionType(prev, widened)
 		}
-		expando.WithProperty(expandoName, widened)
+		setExpandoProperty(expando, expandoName, widened)
 		node.SetComputedType(rhsType)
 		return
 	}
@@ -741,9 +741,17 @@ func collectExpandoNames(program *parser.Program) map[string]map[string]bool {
 					}
 				}
 			}
+		case *parser.ClassDeclaration:
+			if js && d.Name != nil {
+				declare(d.Name.Value)
+			}
 		case *parser.ConstStatement:
 			for _, decl := range d.Declarations {
 				switch decl.Value.(type) {
+				case *parser.ClassExpression, *parser.ObjectLiteral:
+					if js && decl.Name != nil {
+						declare(decl.Name.Value)
+					}
 				case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
 					if decl.Name != nil {
 						declare(decl.Name.Value)
@@ -760,7 +768,7 @@ func collectExpandoNames(program *parser.Program) map[string]map[string]bool {
 			}
 			for _, decl := range decls {
 				switch decl.Value.(type) {
-				case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
+				case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral, *parser.ClassExpression, *parser.ObjectLiteral:
 					if js && decl.Name != nil {
 						declare(decl.Name.Value)
 					}
@@ -783,7 +791,7 @@ func collectExpandoNames(program *parser.Program) map[string]map[string]bool {
 // function body reading its own expando property).
 func (c *Checker) declareExpandoRead(node parser.Expression) {
 	objName, propName, ok := expandoMember(node)
-	if !ok || !c.expandoNames[objName][propName] {
+	if !ok || !c.expandoNames[objName][propName] || strings.HasPrefix(propName, "#") || (c.jsSource && propName == "prototype") {
 		return
 	}
 	t, _, found := c.env.Resolve(objName)
@@ -791,11 +799,11 @@ func (c *Checker) declareExpandoRead(node parser.Expression) {
 		return
 	}
 	ot, ok := t.(*types.ObjectType)
-	if !ok || !ot.IsCallable() || ot.IsClassConstructor() {
+	if !ok || !c.canHoldExpandos(ot) {
 		return
 	}
 	if _, has := ot.Props()[propName]; !has {
-		ot.WithProperty(propName, types.Any)
+		setExpandoProperty(ot, propName, types.Any)
 		if c.expandoProps == nil {
 			c.expandoProps = map[expandoKey]bool{}
 		}
@@ -812,7 +820,7 @@ func (c *Checker) expandoAssignmentTarget(node *parser.AssignmentExpression) (*t
 		return nil, ""
 	}
 	objName, propName, ok := expandoMember(node.Left)
-	if !ok {
+	if !ok || strings.HasPrefix(propName, "#") || (c.jsSource && propName == "prototype") {
 		return nil, ""
 	}
 	if c.expandoNames[objName] == nil {
@@ -823,7 +831,7 @@ func (c *Checker) expandoAssignmentTarget(node *parser.AssignmentExpression) (*t
 		return nil, ""
 	}
 	ot, ok := t.(*types.ObjectType)
-	if !ok || !ot.IsCallable() || ot.IsClassConstructor() {
+	if !ok || !c.canHoldExpandos(ot) {
 		return nil, ""
 	}
 	if pt, has := ot.Props()[propName]; has && pt != types.Any && !c.expandoProps[expandoKey{ot, propName}] {
@@ -859,4 +867,23 @@ func expandoMember(e parser.Expression) (obj, prop string, ok bool) {
 type expandoKey struct {
 	fn   *types.ObjectType
 	name string
+}
+
+// canHoldExpandos reports whether assignments `x.prop = value` add members to
+// a variable's type: a function, and in JavaScript also a class or an object.
+func (c *Checker) canHoldExpandos(ot *types.ObjectType) bool {
+	if c.jsSource {
+		return true
+	}
+	return ot.IsCallable() && !ot.IsClassConstructor()
+}
+
+// setExpandoProperty adds an expando member; on a class it is a public
+// static member, so the class's access checks know it.
+func setExpandoProperty(ot *types.ObjectType, name string, t types.Type) {
+	if ot.IsClassConstructor() {
+		ot.WithClassMember(name, t, types.AccessPublic, true, false)
+		return
+	}
+	ot.WithProperty(name, t)
 }

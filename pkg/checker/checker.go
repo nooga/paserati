@@ -281,6 +281,7 @@ type Checker struct {
 
 	// jsCtors and jsFuncThis model JavaScript constructor functions (see
 	// js_constructors.go); only set for JavaScript sources.
+	jsSource     bool
 	jsCtors      map[string]*jsCtor
 	jsFuncThis   map[*parser.FunctionLiteral]types.Type
 	expandoProps map[expandoKey]bool
@@ -1758,7 +1759,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.constAliases = collectConstAliases(program)
 	c.expandoNames = collectExpandoNames(program)
 	c.jsCtors, c.jsFuncThis = nil, nil
-	if program.Source != nil && parser.IsJavaScriptName(program.Source.Name) {
+	c.jsSource = program.Source != nil && parser.IsJavaScriptName(program.Source.Name)
+	if c.jsSource {
 		c.collectJSConstructors(program)
 	}
 	c.source = program.Source           // Cache source for error reporting
