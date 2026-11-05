@@ -24,10 +24,9 @@ func isJSFileName(name string) bool {
 }
 
 var (
-	jsdocArrayDot  = regexp.MustCompile(`\b(Array|Promise|Set|Map)\.<`)
-	jsdocObjectGen = regexp.MustCompile(`\bObject\.?<\s*([^,<>]+?)\s*,\s*([^<>]+?)\s*>`)
-	jsdocBareObj   = regexp.MustCompile(`(^|[^.\w$'"])Object\b([^<]|$)`)
-	jsdocWrapper   = regexp.MustCompile(`(^|[^.\w$'"])(String|Number|Boolean)\b`)
+	jsdocArrayDot = regexp.MustCompile(`\b(Array|Promise|Set|Map)\.<`)
+	jsdocBareObj  = regexp.MustCompile(`(^|[^.\w$'"])Object\b([^<]|$)`)
+	jsdocWrapper  = regexp.MustCompile(`(^|[^.\w$'"])(String|Number|Boolean)\b`)
 )
 
 // jsdocTypeToTS rewrites a JSDoc type into TypeScript syntax, reporting
@@ -51,7 +50,7 @@ func jsdocTypeToTS(s string) (out string, optional, rest bool) {
 	}
 	s = jsdocClosureFns(s)
 	s = jsdocArrayDot.ReplaceAllString(s, "$1<")
-	s = jsdocObjectGen.ReplaceAllString(s, "{ [x: $1]: $2 }")
+	s = jsdocObjectGenerics(s)
 	s = jsdocBareObj.ReplaceAllString(s, "${1}any$2")
 	s = jsdocWrapper.ReplaceAllStringFunc(s, func(m string) string {
 		i := strings.IndexAny(m, "SNB")
@@ -136,6 +135,60 @@ func jsdocClosureFns(s string) string {
 	return out.String()
 }
 
+// jsdocObjectGenerics rewrites `Object<K, V>` / `Object.<K, V>` into the index
+// signature type `{ [x: K]: V }`, nested forms and `=>` included.
+func jsdocObjectGenerics(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); {
+		j := i + len("Object")
+		if !strings.HasPrefix(s[i:], "Object") || i > 0 && (isIdentByte(s[i-1]) || s[i-1] == '.') {
+			out.WriteByte(s[i])
+			i++
+			continue
+		}
+		if j < len(s) && s[j] == '.' {
+			j++
+		}
+		if j >= len(s) || s[j] != '<' {
+			out.WriteByte(s[i])
+			i++
+			continue
+		}
+		depth, end := 0, -1
+		for k := j; k < len(s) && end < 0; k++ {
+			switch s[k] {
+			case '<', '(', '[', '{':
+				depth++
+			case '>':
+				if s[k-1] == '=' {
+					continue
+				}
+				depth--
+				if depth == 0 {
+					end = k
+				}
+			case ')', ']', '}':
+				depth--
+			}
+		}
+		if end < 0 {
+			out.WriteString(s[i:])
+			return out.String()
+		}
+		args := splitTopLevel(strings.ReplaceAll(s[j+1:end], "=>", "=\x00"))
+		if len(args) != 2 {
+			out.WriteString(s[i : end+1])
+			i = end + 1
+			continue
+		}
+		k := strings.ReplaceAll(strings.TrimSpace(args[0]), "=\x00", "=>")
+		v := strings.ReplaceAll(strings.TrimSpace(args[1]), "=\x00", "=>")
+		out.WriteString("{ [x: " + jsdocObjectGenerics(k) + "]: " + jsdocObjectGenerics(v) + " }")
+		i = end + 1
+	}
+	return out.String()
+}
+
 func isIdentByte(c byte) bool {
 	return c == '_' || c == '$' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
@@ -176,6 +229,9 @@ func splitTopLevel(s string) []string {
 	}
 	return append(parts, s[start:])
 }
+
+// jsdocStringLit matches a string literal type, whose words name no type.
+var jsdocStringLit = regexp.MustCompile(`"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'`)
 
 var jsdocIdent = regexp.MustCompile(`[A-Za-z_$][\w$]*`)
 
@@ -244,6 +300,7 @@ func (p *Parser) fileTemplateNames() map[string]bool {
 
 func (p *Parser) jsdocNamesResolvable(s string, locals map[string]bool) bool {
 	tmpl := p.fileTemplateNames()
+	s = jsdocStringLit.ReplaceAllStringFunc(s, func(m string) string { return strings.Repeat(" ", len(m)) })
 	for _, loc := range jsdocIdent.FindAllStringIndex(s, -1) {
 		id := s[loc[0]:loc[1]]
 		if locals[id] {
