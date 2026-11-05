@@ -203,7 +203,14 @@ func applyJSDocToFunction(doc string, params []*Parameter, ret *Expression) {
 				if rest {
 					break
 				}
-				if ty := parseJSDocType(src); ty != nil {
+				ty := parseJSDocType(src)
+				if ty == nil && strings.TrimSpace(src) != "" {
+					// A type that names a @typedef, @callback, @import or class
+					// of the file (not modelled yet) still makes the parameter
+					// annotated: it is any rather than an implicit any (TS7006).
+					ty = parseJSDocType("any")
+				}
+				if ty != nil {
 					prm.TypeAnnotation = ty
 					if opt || t.optional {
 						prm.Optional = true
