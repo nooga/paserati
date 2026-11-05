@@ -33,7 +33,7 @@ func (ut *UnionType) String() string {
 	// formatUnionTypes folds it.
 	var whole map[*EnumType]bool
 	for _, t := range members {
-		if em, ok := t.(*EnumMemberType); ok && em.Parent != nil && len(em.Parent.Members) > 1 && whole[em.Parent] == false {
+		if em, ok := t.(*EnumMemberType); ok && em.Parent != nil && len(em.Parent.Members) > 1 && !whole[em.Parent] {
 			if whole == nil {
 				whole = make(map[*EnumType]bool)
 			}
