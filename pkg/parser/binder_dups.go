@@ -147,8 +147,11 @@ type binder struct {
 	diags     []bindDiag
 	seen      map[string]bool
 	syms      []*bindSymbol
-	src       interface{}
-	module    bool
+	// mergeLists are the module and namespace bodies checked for export
+	// agreement once every other conflict has been reported.
+	mergeLists [][]Statement
+	src        interface{}
+	module     bool
 }
 
 func (b *binder) report(tok *lexer.Token, code, msg string) {
@@ -235,7 +238,11 @@ func bindDeclarations(program *Program) []bindDiag {
 		sc.exports = bindTable{}
 	}
 	b.bindList(program.Statements, sc)
+	b.mergeLists = append(b.mergeLists, program.Statements)
 	b.finish()
+	for _, stmts := range b.mergeLists {
+		b.checkExportsOnMerged(stmts)
+	}
 	program.DeclaredTypeNames = b.typeNames
 	return b.diags
 }
@@ -1162,6 +1169,9 @@ func (b *binder) bindNamespace(n *NamespaceDeclaration, sc *bindScope, exported 
 	}
 	locals := bindTable{}
 	b.bindList(n.Body.Statements, &bindScope{locals: locals, varTable: locals, exports: sym.exportsTable()})
+	if !n.Declare {
+		b.mergeLists = append(b.mergeLists, n.Body.Statements)
+	}
 }
 
 // --- export default -------------------------------------------------------------
