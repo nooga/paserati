@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -48,6 +49,7 @@ func jsdocTypeToTS(s string) (out string, optional, rest bool) {
 	if strings.HasPrefix(s, "?") {
 		s = "(" + s[1:] + ") | null"
 	}
+	s = jsdocClosureFns(s)
 	s = jsdocArrayDot.ReplaceAllString(s, "$1<")
 	s = jsdocObjectGen.ReplaceAllString(s, "{ [x: $1]: $2 }")
 	s = jsdocBareObj.ReplaceAllString(s, "${1}any$2")
@@ -56,6 +58,123 @@ func jsdocTypeToTS(s string) (out string, optional, rest bool) {
 		return m[:i] + strings.ToLower(m[i:])
 	})
 	return s, optional, rest
+}
+
+// jsdocClosureFns rewrites Closure `function(A, B=, ...C): R` types into
+// `(p1: A, p2?: B, ...p3: C[]) => R`. A `new:` signature, or text it cannot
+// split, is left untouched (and so stays unparsed).
+func jsdocClosureFns(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); {
+		if !strings.HasPrefix(s[i:], "function(") || i > 0 && isIdentByte(s[i-1]) {
+			out.WriteByte(s[i])
+			i++
+			continue
+		}
+		open := i + len("function")
+		end := matchParen(s, open)
+		if end < 0 {
+			out.WriteString(s[i:])
+			return out.String()
+		}
+		args := splitTopLevel(s[open+1 : end])
+		var ps []string
+		ok := true
+		for n, a := range args {
+			a = strings.TrimSpace(a)
+			switch {
+			case a == "":
+			case strings.HasPrefix(a, "new:"):
+				ok = false
+			case strings.HasPrefix(a, "this:"):
+				ps = append(ps, "this: "+jsdocClosureFns(strings.TrimSpace(a[5:])))
+			case strings.HasPrefix(a, "..."):
+				ps = append(ps, fmt.Sprintf("...p%d: (%s)[]", n+1, jsdocClosureFns(strings.TrimSpace(a[3:]))))
+			case strings.HasSuffix(a, "="):
+				ps = append(ps, fmt.Sprintf("p%d?: %s", n+1, jsdocClosureFns(strings.TrimSpace(strings.TrimSuffix(a, "=")))))
+			default:
+				ps = append(ps, fmt.Sprintf("p%d: %s", n+1, jsdocClosureFns(a)))
+			}
+		}
+		if !ok {
+			out.WriteString(s[i : end+1])
+			i = end + 1
+			continue
+		}
+		j := end + 1
+		ret := "any"
+		if rest := strings.TrimLeft(s[j:], " "); strings.HasPrefix(rest, ":") {
+			k := len(s) - len(rest) + 1
+			e := k
+			depth := 0
+		scan:
+			for ; e < len(s); e++ {
+				switch s[e] {
+				case '(', '<', '[', '{':
+					depth++
+				case ')', '>', ']', '}':
+					if depth == 0 {
+						break scan
+					}
+					depth--
+				case ',':
+					if depth == 0 {
+						break scan
+					}
+				}
+			}
+			ret = jsdocClosureFns(strings.TrimSpace(s[k:e]))
+			j = e
+		}
+		fn := "(" + strings.Join(ps, ", ") + ") => " + ret
+		if i > 0 || j < len(s) {
+			fn = "(" + fn + ")"
+		}
+		out.WriteString(fn)
+		i = j
+	}
+	return out.String()
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || c == '$' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// matchParen returns the index of the parenthesis closing the one at open.
+func matchParen(s string, open int) int {
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// splitTopLevel splits on the commas outside any bracket pair.
+func splitTopLevel(s string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(', '<', '[', '{':
+			depth++
+		case ')', '>', ']', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, s[start:])
 }
 
 var jsdocIdent = regexp.MustCompile(`[A-Za-z_$][\w$]*`)
@@ -276,6 +395,93 @@ func (p *Parser) applyJSDocToFunction(rng [2]int, params *[]*Parameter, ret *Exp
 	}
 }
 
+// leadingTypeParams names the type parameters of a `<T, U extends X>(...)`
+// signature type.
+func leadingTypeParams(s string) map[string]bool {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "<") {
+		return nil
+	}
+	names := map[string]bool{}
+	depth := 0
+	add := func(rest string) {
+		rest = strings.TrimLeft(rest, " ")
+		if m := jsdocIdent.FindString(rest); m != "" && strings.HasPrefix(rest, m) {
+			names[m] = true
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '<', '(', '[', '{':
+			depth++
+			if depth == 1 {
+				add(s[i+1:])
+			}
+		case '>', ')', ']', '}':
+			depth--
+			if depth == 0 {
+				return names
+			}
+		case ',':
+			if depth == 1 {
+				add(s[i+1:])
+			}
+		}
+	}
+	return names
+}
+
+// applyJSDocTypeSignature gives a documented function declaration the
+// signature of its `@type {(a: A) => R}` tag like tsc's type-tag signature:
+// the parameters it leaves unannotated and its return type take the tag's
+// types, as do its type parameters and `this`. Explicit `@param`/`@returns`
+// tags win, handled before. A tag naming a type alias is not resolved here.
+// FIXME: `@type {Alias}` on a function declaration needs the checker.
+func (p *Parser) applyJSDocTypeSignature(rng [2]int, fl *FunctionLiteral) {
+	for _, t := range p.docTags(rng) {
+		if t.name != "type" || t.typOff < 0 {
+			continue
+		}
+		src, _, _ := jsdocTypeToTS(t.typ)
+		parsed := p.parseJSDocTypeIn(src, docPad(p.l.Input(), t.typOff), leadingTypeParams(src))
+		if obj, isObj := parsed.(*ObjectTypeExpression); isObj && obj != nil && len(obj.Properties) == 1 && obj.Properties[0].IsCallSignature {
+			parsed = obj.Properties[0].Type // `{(s: string): void}`
+		}
+		ft, ok := parsed.(*FunctionTypeExpression)
+		if !ok || ft == nil {
+			return
+		}
+		if len(fl.TypeParameters) == 0 {
+			fl.TypeParameters = ft.TypeParameters
+		}
+		hasThis := len(fl.Parameters) > 0 && fl.Parameters[0].IsThis
+		if ft.ThisType != nil && !hasThis {
+			thisTok := &lexer.Token{Type: lexer.THIS, Literal: "this"}
+			fl.Parameters = append([]*Parameter{{Token: thisTok, IsThis: true, TypeAnnotation: ft.ThisType}}, fl.Parameters...)
+		}
+		i := 0
+		for _, prm := range fl.Parameters {
+			if prm.IsThis {
+				continue
+			}
+			if i < len(ft.Parameters) && prm.TypeAnnotation == nil && prm.Pattern == nil {
+				prm.TypeAnnotation = ft.Parameters[i]
+				if i < len(ft.OptionalParams) && ft.OptionalParams[i] {
+					prm.Optional = true
+				}
+			}
+			i++
+		}
+		if fl.RestParameter != nil && fl.RestParameter.TypeAnnotation == nil && ft.RestParameter != nil && i >= len(ft.Parameters) {
+			fl.RestParameter.TypeAnnotation = ft.RestParameter
+		}
+		if fl.ReturnTypeAnnotation == nil {
+			fl.ReturnTypeAnnotation = ft.ReturnType
+		}
+		return
+	}
+}
+
 // applyJSDocToStatement is the JS-file hook run on every documented statement.
 func (p *Parser) applyJSDocToStatement(stmt Statement, rng [2]int) {
 	switch n := stmt.(type) {
@@ -287,6 +493,7 @@ func (p *Parser) applyJSDocToStatement(stmt Statement, rng [2]int) {
 		if n != nil {
 			if fl, ok := n.Expression.(*FunctionLiteral); ok && fl != nil {
 				p.applyJSDocToFunction(rng, &fl.Parameters, &fl.ReturnTypeAnnotation, &fl.TypeParameters)
+				p.applyJSDocTypeSignature(rng, fl)
 			}
 		}
 	case *VarStatement:
