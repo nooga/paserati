@@ -8,6 +8,18 @@ import "github.com/nooga/paserati/pkg/types"
 // only the arguments. One whose arguments do not change is kept as it is,
 // and a copy with substituted arguments is still an instantiation of the
 // generic (assignability relates two by their arguments).
+//
+// Closedness also decides what becomes of the instantiations made while the
+// generic was still being declared (`use(): ProcedureBuilder<...>` inside
+// ProcedureBuilder, or a module in an import cycle naming it before its
+// declaration is done): completeGeneric refills a closed generic's from the
+// final body, and substitution copies of them stay instantiations (and so
+// get re-instantiated from the complete generic). An open generic's keep the
+// members declared before them, and every copy inherits the gap. So the walk
+// below must not call a generic open for what substitution replaces anyway:
+// a lazily substituted member (`caller: CallerOverride<TContext>` copies the
+// alias body, which names the alias's own TContext) binds the names its
+// substitution replaces.
 
 // instantiationUnchanged reports whether substitution leaves typ, an
 // instantiation of a closed generic, as it is.
@@ -69,7 +81,7 @@ type closedWalk struct {
 // are bound by name. Kinds it does not know count as foreign.
 func (w *closedWalk) foreign(t types.Type, names []string) bool {
 	switch tt := t.(type) {
-	case nil, *types.Primitive, *types.LiteralType, *types.ForwardReferenceType, *types.TypeofType:
+	case nil, *types.Primitive, *types.LiteralType, *types.ForwardReferenceType, *types.TypeAliasForwardReference, *types.TypeofType:
 		return false
 	case *types.TypeParameterType:
 		if tt.Parameter == nil {
@@ -110,6 +122,8 @@ func (w *closedWalk) foreign(t types.Type, names []string) bool {
 		return false
 	case *types.StringMappingType:
 		return w.foreign(tt.Type, names)
+	case *types.TypePredicateType:
+		return w.foreign(tt.Type, names)
 	case *types.TemplateLiteralType:
 		for _, p := range tt.Parts {
 			if w.foreign(p.Type, names) {
@@ -137,12 +151,17 @@ func (w *closedWalk) foreign(t types.Type, names []string) bool {
 			// Its members will be source's, substituted: reading them would
 			// fill them in, and a generic naming itself with growing
 			// arguments (`next(): Grow<Wrap<T>>`) has no last instantiation.
-			for _, v := range subst {
+			// The source's names subst replaces (an alias's own parameters:
+			// `caller: CallerOverride<TContext>` copies the alias body) are
+			// bound by it.
+			inner := names[:len(names):len(names)]
+			for name, v := range subst {
 				if w.foreign(v, names) {
 					return true
 				}
+				inner = append(inner, name)
 			}
-			return w.foreign(source, names)
+			return w.foreign(source, inner)
 		}
 		for _, p := range tt.Props() {
 			if w.foreign(p, names) {
