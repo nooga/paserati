@@ -1355,6 +1355,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	c.recordClassMemberKinds(body, instanceType)
 	c.deferRelationCheck(func() {
 		c.checkClassMembersAgainstBase(className, body, instanceType)
+		c.checkClassIndexAgainstBase(classNameNode, body, instanceType)
 		c.checkPropertyAccessorOverrides(className, body, instanceType)
 	})
 
