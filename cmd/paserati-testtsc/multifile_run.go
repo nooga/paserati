@@ -187,7 +187,6 @@ func runMultiJob(conformanceDir string, req workerReq, source string, resp *work
 		}
 	}()
 	results := pas.CheckFilesWithOptions(files, tscCheckOptions(opts))
-	resp.CheckRan = true
 	for _, res := range results {
 		rel, err := filepath.Rel(root, res.Path)
 		if err != nil || strings.HasPrefix(rel, "..") {
