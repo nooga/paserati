@@ -110,9 +110,7 @@ func jsdocTypeToTS(s string) (out string, optional, rest bool) {
 	if s == "*" || s == "?" {
 		return "any", optional, rest
 	}
-	if strings.HasPrefix(s, "!") {
-		s = s[1:]
-	}
+	s = strings.TrimPrefix(s, "!")
 	if strings.HasPrefix(s, "?") {
 		s = "(" + s[1:] + ") | null"
 	}
