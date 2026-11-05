@@ -632,6 +632,10 @@ type Checker struct {
 	// noPropertyAccessFromIndexSignature: see
 	// SetNoPropertyAccessFromIndexSignature.
 	noPropertyAccessFromIndexSignature bool
+	// noImplicitReturns / noFallthroughCasesInSwitch: see
+	// SetNoImplicitReturns and SetNoFallthroughCasesInSwitch.
+	noImplicitReturns          bool
+	noFallthroughCasesInSwitch bool
 	// contextualThisBodies: see hasContextualThis.
 	contextualThisBodies  map[parser.Node]bool
 	contextualThisProgram *parser.Program
@@ -2537,6 +2541,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				debugPrintf("// [Checker Pass 3] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
 			}
 		}
+		c.checkImplicitReturns(functionErrorNode(funcLit), funcLit.ReturnTypeAnnotation, funcSignature.ReturnType, actualReturnType, funcLit.Body, funcLit.IsAsync, funcLit.IsGenerator)
 
 		// Handle async generator functions (both flags) first
 		if funcLit.IsGenerator && funcSignature.ReturnType != nil {
@@ -4646,6 +4651,7 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.SwitchStatement: // Added
 		c.checkSwitchStatement(node)
+		c.checkSwitchFallthrough(node)
 
 	// --- Parameter (visited within function context) ---
 	case *parser.Parameter:
@@ -4842,6 +4848,7 @@ func (c *Checker) visit(node parser.Node) {
 				debugPrintf("// [Checker ShorthandMethod] Inferred return type for '%s': %s\n", methodNameForLog, actualReturnType.String())
 			}
 		}
+		c.checkImplicitReturns(node.Name, node.ReturnTypeAnnotation, resolvedReturnType, actualReturnType, node.Body, false, false)
 
 		// 7. Create the final function type with optional parameters using unified ObjectType
 		methodSignature := &types.Signature{
@@ -5152,6 +5159,9 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 
 	// Extract element types based on the destructure type
 	var elementTypes []types.Type
+	// FIXME: a union of tuples destructures through the iterable path below
+	// (elements any) rather than per position as tsc does; the precise
+	// types need tsc's narrowing of dependent destructured variables first.
 	if arrayType, ok := destructureType.(*types.ArrayType); ok {
 		// For arrays, all elements have the same type
 		for range node.Elements {
@@ -5834,6 +5844,7 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			// Create a modified arrow function context with inferred parameter types
 			ctx := &FunctionCheckContext{
 				FunctionName:             "<arrow>",
+				ErrorNode:                node,
 				TypeParameters:           node.TypeParameters,
 				Parameters:               node.Parameters,
 				RestParameter:            node.RestParameter,

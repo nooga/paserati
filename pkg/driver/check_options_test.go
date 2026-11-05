@@ -55,6 +55,33 @@ func TestCheckFilesStrictFamilyDefaults(t *testing.T) {
 	}
 }
 
+// noImplicitReturns (TS7030) and noFallthroughCasesInSwitch (TS7029); an
+// exhaustive switch over a literal union ends no path.
+func TestCheckFilesNoImplicitReturnsAndFallthrough(t *testing.T) {
+	src := "function f1(x: boolean) { if (x) return 1; }\n" +
+		"function f2(x: boolean): number | undefined { if (x) return 1; }\n" +
+		"function f3(x: boolean) { if (x) return; }\n" +
+		"function f4(x: 'a' | 'b') { switch (x) { case 'a': return 1; case 'b': return 2; } }\n" +
+		"const a = (x: boolean) => { if (x) return 's'; };\n" +
+		"function f5(x: number) {\n" +
+		"  switch (x) {\n" +
+		"    case 1: x++;\n" +
+		"    case 2: case 3: x--; break;\n" +
+		"    default: x++;\n" +
+		"  }\n" +
+		"}\n" +
+		"export {};\n"
+	opts := DefaultCheckOptions()
+	opts.NoImplicitReturns = true
+	opts.NoFallthroughCasesInSwitch = true
+	if got, want := checkSource(t, src, opts), "1 TS7030, 2 TS7030, 5 TS7030, 8 TS7029"; got != want {
+		t.Errorf("diagnostics = %q, want %q", got, want)
+	}
+	if got := checkSource(t, src, DefaultCheckOptions()); got != "" {
+		t.Errorf("options off: diagnostics = %q, want none", got)
+	}
+}
+
 // noPropertyAccessFromIndexSignature: a property only an index signature
 // provides must be read with brackets (TS4111); declared properties, Object's
 // members and Paserati's permissive Error signature are exempt.

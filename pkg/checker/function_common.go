@@ -164,6 +164,10 @@ type FunctionCheckContext struct {
 	// MayReturnNever: a body that cannot complete and has no return
 	// statement returns never (see inferBodyReturnType).
 	MayReturnNever bool
+	// ErrorNode is where a diagnostic about the whole function goes (tsc's
+	// getErrorSpanForNode): its name, else the function itself. nil for
+	// signatures without a body.
+	ErrorNode parser.Node
 }
 
 // resolveFunctionParameters resolves parameter types and creates the parameter environment setup
@@ -768,6 +772,14 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	} else {
 		// Regular function - use normal inference
 		finalReturnType = c.inferBodyReturnType(ctx, expectedReturnType)
+	}
+
+	if block, ok := ctx.Body.(*parser.BlockStatement); ok && !c.uncheckedReturns {
+		var inferred types.Type
+		if ctx.ReturnTypeAnnotation == nil {
+			inferred = finalReturnType
+		}
+		c.checkImplicitReturns(ctx.ErrorNode, ctx.ReturnTypeAnnotation, expectedReturnType, inferred, block, ctx.IsAsync, ctx.IsGenerator)
 	}
 
 	// Restore return context, this context, and async/generator context

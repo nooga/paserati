@@ -424,6 +424,7 @@ var supportedOptions = map[string]bool{
 	"alwaysstrict": true, "strictfunctiontypes": true, "strictbindcallapply": true,
 	"noimplicitany": true, "noimplicitthis": true, "useunknownincatchvariables": true,
 	"noimplicitoverride": true, "allowunreachablecode": true, "nopropertyaccessfromindexsignature": true,
+	"noimplicitreturns": true, "nofallthroughcasesinswitch": true,
 	"experimentaldecorators": true, "usedefineforclassfields": true,
 	"target": true, "module": true,
 }
@@ -432,7 +433,6 @@ var supportedOptions = map[string]bool{
 // diagnostics and that Paserati does not model. Directives that only affect
 // emit (sourceMap, outFile, ...) are not listed.
 var unmodeledOptions = map[string]bool{
-	"noimplicitreturns":           true,
 	"strictbuiltiniteratorreturn": true,
 	"exactoptionalpropertytypes":  true, "nouncheckedindexedaccess": true,
 	"nolib": true, "lib": true, "moduleresolution": true,
@@ -441,8 +441,8 @@ var unmodeledOptions = map[string]bool{
 	"allowjs": true, "checkjs": true, "maxnodemodulejsdepth": true,
 	"declaration": true, "isolateddeclarations": true, "isolatedmodules": true,
 	"verbatimmodulesyntax": true, "nounusedlocals": true, "nounusedparameters": true,
-	"nofallthroughcasesinswitch": true, "allowsyntheticdefaultimports": true,
-	"esmoduleinterop": true, "downleveliteration": true,
+	"allowsyntheticdefaultimports": true,
+	"esmoduleinterop":              true, "downleveliteration": true,
 	"importhelpers": true, "noemithelpers": true, "resolvejsonmodule": true,
 	"preserveconstenums": true, "noresolve": true, "types": true, "typeroots": true,
 	"paths": true, "baseurl": true, "rootdirs": true, "allowarbitraryextensions": true,
