@@ -6521,6 +6521,10 @@ func (c *Checker) bindImport(localName string, importType ImportBindingType, isT
 				// exported type T (z.infer<typeof S>), so the type side is a
 				// namespace. The value side is the plain object.
 				ns := moduleNamespace(localName, objType.Props())
+				// A type-only export is no member of the namespace object.
+				for name := range c.sourceTypeOnlyExports(c.moduleEnv.ImportedNames[localName].SourceModule) {
+					delete(ns.ValueShape.Properties, name)
+				}
 				typeAliasValue, valueType = ns, ns.ValueShape
 			}
 			c.env.DefineTypeAlias(localName, typeAliasValue)
