@@ -553,6 +553,8 @@ type Checker struct {
 	// sourceFileName is the checked file's base name, for self-imports;
 	// moduleKind is --module, lower case ("" when unset).
 	sourceFileName, moduleKind string
+	// nodeModuleResolution applies node16/nodenext import rules.
+	nodeModuleResolution, nodeRequireESMError bool
 	pendingSelfImports         []*parser.ImportDeclaration
 	// currentClassAmbient: the class being checked is ambient (declare).
 	currentClassAmbient bool
@@ -7121,9 +7123,15 @@ func (c *Checker) reportUnresolvedModule(source *parser.StringLiteral) {
 	if source == nil || c.moduleLoader == nil || c.isSelfModule(source.Value) {
 		return
 	}
-	if _, err := c.moduleLoader.LoadModule(source.Value, c.currentFilePath()); err != nil {
-		c.addErrorWithCode(source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", source.Value))
+	loaded, err := c.moduleLoader.LoadModule(source.Value, c.currentFilePath())
+	if c.checkNodeImportExtension(source, loaded) {
+		return
 	}
+	if err != nil {
+		c.addErrorWithCode(source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", source.Value))
+		return
+	}
+	c.checkNodeImportFormat(source, loaded)
 }
 
 // mergedTupleContext is the tuple whose element at each position is the

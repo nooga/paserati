@@ -87,6 +87,7 @@ func configureTscChecker(c *checker.Checker, opts Options) {
 	c.SetTarget(targetLevel(opts))
 	c.SetLegacyModuleFormat(legacyModuleFormat(opts))
 	c.SetEmitStandardClassFields(useDefineForClassFieldsEnabled(opts) && targetLevel(opts) >= 2022)
+	c.SetNodeModuleResolution(nodeFormatResolution(opts), opts.moduleIs("node16", "node18"))
 	c.SetModuleKind(strings.ToLower(strings.TrimSpace(opts["module"])))
 	experimental, _ := opts.boolOpt("experimentaldecorators")
 	c.SetExperimentalDecorators(experimental)

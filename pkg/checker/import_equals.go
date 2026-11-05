@@ -87,6 +87,7 @@ func (c *Checker) bindRequireImport(node *parser.ImportEqualsDeclaration, name s
 		}
 		if loaded, err := c.moduleLoader.LoadModule(spec, from); err == nil {
 			rec, _ = loaded.(*modules.ModuleRecord)
+			c.checkNodeImportFormat(node.Require, loaded)
 		}
 	}
 	if rec == nil {
