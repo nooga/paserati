@@ -75,6 +75,9 @@ type Parser struct {
 
 	// JS redeclaration early errors, re-labelled by finishBinding.
 	redeclarationErrors []*errors.SyntaxError
+	// varShadowErrors are the redeclaration errors raised for a var against a
+	// lexical name (see varShadowError), with the name.
+	varShadowErrors map[*errors.SyntaxError]string
 	// classBodyName names the class whose body is about to be parsed, for
 	// diagnostics that quote it.
 	classBodyName string
