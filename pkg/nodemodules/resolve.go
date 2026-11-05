@@ -48,6 +48,8 @@ type Options struct {
 	// NoHashSlashImports rejects "#/..." specifiers, which only node20 and
 	// later resolution (not node16 or node18) allows.
 	NoHashSlashImports bool
+	// AllowJS lets an exports or imports target resolve to a JavaScript file.
+	AllowJS bool
 
 	// fs, when set, caches directory listings across resolutions.
 	fs *fsCache
@@ -287,7 +289,7 @@ func resolveInPackage(pkgDir, subpath string, opts Options) (string, error) {
 			// With an exports map, nothing outside it is reachable.
 			return "", fmt.Errorf("%q is not exported by %s", key, pkgDir)
 		}
-		return entryFile(opts.fs, pkgDir, target, opts.Mode)
+		return entryFileOpt(opts.fs, pkgDir, target, opts.Mode, opts.exactMode())
 	}
 	if subpath != "" {
 		if path, ok := tryFile(opts.fs, pkgDir, subpath, opts.Mode); ok {
@@ -317,8 +319,12 @@ func resolveInPackage(pkgDir, subpath string, opts Options) (string, error) {
 // entryFile maps a package-relative target to a file on disk. In Types mode a
 // JavaScript target stands for its declaration file next to it.
 func entryFile(c *fsCache, pkgDir, target string, mode Mode) (string, error) {
+	return entryFileOpt(c, pkgDir, target, mode, probe)
+}
+
+func entryFileOpt(c *fsCache, pkgDir, target string, mode Mode, exact exactMode) (string, error) {
 	rel := strings.TrimPrefix(filepath.ToSlash(target), "./")
-	if path, ok := tryFile(c, pkgDir, rel, mode); ok {
+	if path, ok := tryFileOpt(c, pkgDir, rel, mode, exact); ok {
 		return path, nil
 	}
 	return "", fmt.Errorf("entry %q does not exist in %s", target, pkgDir)
@@ -352,6 +358,31 @@ func isDeclarationOrTS(rel string) bool {
 }
 
 func tryFile(c *fsCache, pkgDir, rel string, mode Mode) (string, bool) {
+	return tryFileOpt(c, pkgDir, rel, mode, probe)
+}
+
+// exactMode says how a target file is looked up: probe adds extensions and
+// index files, exact takes the target as written, exactJS also accepts a
+// JavaScript file (allowJs).
+type exactMode int
+
+const (
+	probe exactMode = iota
+	exact
+	exactJS
+)
+
+func (o Options) exactMode() exactMode {
+	if o.AllowJS {
+		return exactJS
+	}
+	return exact
+}
+
+// tryFileOpt is tryFile; exact stops it adding extensions or index files, as
+// an exports or imports target is taken (a ".js" target still stands for its
+// TypeScript source).
+func tryFileOpt(c *fsCache, pkgDir, rel string, mode Mode, exact exactMode) (string, bool) {
 	var candidates []string
 	if mode == Types {
 		if isDeclarationOrTS(rel) {
@@ -367,11 +398,17 @@ func tryFile(c *fsCache, pkgDir, rel string, mode Mode) (string, bool) {
 			}
 			candidates = append(candidates, dts, base+src)
 		}
-		for _, ext := range typesExts {
-			candidates = append(candidates, rel+ext)
-		}
-		for _, idx := range typesIdx {
-			candidates = append(candidates, filepath.ToSlash(filepath.Join(rel, idx)))
+		if exact != probe {
+			if strings.HasSuffix(rel, ".json") || exact == exactJS && isJSFile(rel) {
+				candidates = append(candidates, rel)
+			}
+		} else {
+			for _, ext := range typesExts {
+				candidates = append(candidates, rel+ext)
+			}
+			for _, idx := range typesIdx {
+				candidates = append(candidates, filepath.ToSlash(filepath.Join(rel, idx)))
+			}
 		}
 	} else {
 		for _, ext := range runtimeExts {
@@ -430,6 +467,19 @@ func ExportsTarget(exports json.RawMessage, key string, opts Options) (string, b
 		}
 	}
 	if bestKey == "" {
+		// A folder mapping ("./": "./lib/") maps every path below it.
+		folder := ""
+		for _, k := range keys {
+			if strings.HasSuffix(k, "/") && strings.HasPrefix(key, k) && len(k) > len(folder) {
+				folder = k
+			}
+		}
+		if folder != "" {
+			target, ok, err := resolveTarget(m[folder], "", opts)
+			if ok && err == nil && strings.HasSuffix(target, "/") {
+				return target + key[len(folder):], true, nil
+			}
+		}
 		return "", false, nil
 	}
 	return resolveTarget(m[bestKey], bestStar, opts)
@@ -600,7 +650,7 @@ func resolveImports(specifier, fromDir string, opts Options) (string, error) {
 		// An import mapped to a package name resolves like a bare import.
 		return Resolve(target, dir, opts)
 	}
-	path, err := entryFile(opts.fs, dir, target, opts.Mode)
+	path, err := entryFileOpt(opts.fs, dir, target, opts.Mode, opts.exactMode())
 	if err != nil {
 		return "", err
 	}
@@ -625,4 +675,12 @@ func importerRequires(c *fsCache, fromPath string) bool {
 // other file follows its nearest package.json "type".
 func IsESMFile(path string) bool {
 	return !importerRequires(nil, path)
+}
+
+func isJSFile(rel string) bool {
+	switch filepath.Ext(rel) {
+	case ".js", ".mjs", ".cjs", ".jsx":
+		return true
+	}
+	return false
 }
