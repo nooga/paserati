@@ -2137,6 +2137,8 @@ type ImportDeclaration struct {
 	// ClauseToken is the first token after `import` (tsc's import clause
 	// start), where grammar errors about the clause are reported.
 	ClauseToken *lexer.Token
+	// AttributesToken is the `with` keyword of the attributes, if any.
+	AttributesToken *lexer.Token
 }
 
 func (id *ImportDeclaration) statementNode()       {}
@@ -2273,6 +2275,9 @@ type ExportNamedDeclaration struct {
 	Specifiers  []ExportSpecifier // Named exports: export { x, y }
 	Source      *StringLiteral    // Re-export source: export { x } from "mod"
 	IsTypeOnly  bool              // true for "export type" statements
+	// Attributes are the import attributes of `export { x } from "m" with {...}`.
+	Attributes      map[string]string
+	AttributesToken *lexer.Token // the `with` keyword of the attributes, if any
 }
 
 func (end *ExportNamedDeclaration) statementNode()       {}
@@ -2340,6 +2345,8 @@ type ExportAllDeclaration struct {
 	Source     *StringLiteral    // The module source
 	IsTypeOnly bool              // true for "export type * from" statements
 	Attributes map[string]string // Optional import attributes (e.g., { type: "json" })
+	// AttributesToken is the `with` keyword of the attributes, if any.
+	AttributesToken *lexer.Token
 }
 
 func (ead *ExportAllDeclaration) statementNode()       {}

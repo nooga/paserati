@@ -1,12 +1,18 @@
 package checker
 
-import "github.com/nooga/paserati/pkg/parser"
+import (
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+)
 
 // checkImportCallGrammar mirrors tsc's checkGrammarImportCallExpression for a
 // dynamic import(): the module kind decides whether the call, or a second
 // argument, is allowed, and the argument list must be a specifier, optional
 // attributes and no spread. Only the first problem is reported.
 func (c *Checker) checkImportCallGrammar(node *parser.DynamicImportExpression) {
+	if c.grammarErrorsSuppressed() {
+		return
+	}
 	switch c.moduleKind {
 	case "es6", "es2015":
 		c.addErrorWithCode(node, "TS1323", "Dynamic imports are only supported when the '--module' flag is set to 'es2020', 'es2022', 'esnext', 'commonjs', 'amd', 'system', 'umd', 'node16', 'node18', 'node20', or 'nodenext'.")
@@ -35,7 +41,7 @@ func (c *Checker) checkImportCallGrammar(node *parser.DynamicImportExpression) {
 // `import defer`: only a namespace binding is allowed, and only under
 // --module esnext or preserve.
 func (c *Checker) checkDeferredImportClause(node *parser.ImportDeclaration) {
-	if !node.IsDeferred || node.ClauseToken == nil {
+	if !node.IsDeferred || node.ClauseToken == nil || c.grammarErrorsSuppressed() {
 		return
 	}
 	at := &parser.Identifier{Token: node.ClauseToken}
@@ -57,9 +63,45 @@ func (c *Checker) checkDeferredImportClause(node *parser.ImportDeclaration) {
 // checkDeferredModuleKind reports TS18060 for a deferred import under a
 // --module that cannot express it. An unset --module is left alone.
 func (c *Checker) checkDeferredModuleKind(node parser.Node) {
+	if c.grammarErrorsSuppressed() {
+		return
+	}
 	switch c.moduleKind {
 	case "", "esnext", "preserve":
 		return
 	}
 	c.addErrorWithCode(node, "TS18060", "Deferred imports are only supported when the '--module' flag is set to 'esnext' or 'preserve'.")
+}
+
+// checkImportAttributesModule mirrors the module-kind part of tsc's
+// checkImportAttributes for an import or export declaration with a `with`
+// clause: TS2823 when --module cannot carry attributes, TS2857 when the
+// declaration is type-only.
+func (c *Checker) checkImportAttributesModule(with *lexer.Token, typeOnly bool, attrs map[string]string) {
+	if with == nil || c.grammarErrorsSuppressed() {
+		return
+	}
+	// A type-only import or export may carry a resolution-mode attribute
+	// (and then the other attribute rules do not apply).
+	if _, ok := attrs["resolution-mode"]; ok && typeOnly {
+		return
+	}
+	at := &parser.Identifier{Token: with}
+	switch c.moduleKind {
+	case "":
+		return
+	case "esnext", "node18", "node20", "nodenext", "preserve":
+	default:
+		c.addErrorWithCode(at, "TS2823", "Import attributes are only supported when the '--module' option is set to 'esnext', 'node18', 'node20', 'nodenext', or 'preserve'.")
+		return
+	}
+	if typeOnly {
+		c.addErrorWithCode(at, "TS2857", "Import attributes cannot be used with type-only imports or exports.")
+	}
+}
+
+// grammarErrorsSuppressed reports whether tsc's grammarErrorOnNode would stay
+// silent: it reports nothing in a file that has parse diagnostics.
+func (c *Checker) grammarErrorsSuppressed() bool {
+	return c.program != nil && c.program.HasParseDiagnostics
 }
