@@ -3917,6 +3917,7 @@ func (c *Checker) visit(node parser.Node) {
 		debugPrintf("// [Checker NewTargetExpr] Typed as undefined (TODO: implement proper constructor context)\n")
 
 	case *parser.ImportMetaExpression:
+		c.checkImportMetaFormat(node)
 		// import.meta is an object containing module metadata
 		// For now, we'll type it as any
 		// TODO: Create proper ImportMeta type with url property etc.

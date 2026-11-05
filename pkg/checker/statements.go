@@ -1567,6 +1567,9 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		}
 	}
 
+	if node.IsAsync {
+		c.checkForAwaitFormat(node)
+	}
 	// for-await-of can only be used in async contexts
 	if node.IsAsync && !c.isInAsyncContext() {
 		debugPrintf("// [Checker ForOfStmt] IsAsync check: node.IsAsync=%v, c.inAsyncFunction=%v, c.inGeneratorFunction=%v\n", node.IsAsync, c.inAsyncFunction, c.inGeneratorFunction)

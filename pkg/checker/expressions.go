@@ -4318,6 +4318,7 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 // getContextualTypeForAwaitOperand does: `const t: [A, B] = await run(async
 // () => [a, b])` types the returned literal as the tuple.
 func (c *Checker) checkAwaitExpressionIn(node *parser.AwaitExpression, expected types.Type) {
+	c.checkTopLevelAwaitFormat(node)
 	// 1. Check the argument expression
 	if node.Argument != nil {
 		if expected != nil && types.PromiseLikeGeneric != nil {

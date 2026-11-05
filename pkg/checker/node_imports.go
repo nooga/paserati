@@ -110,3 +110,52 @@ func (c *Checker) checkDynamicImportSpecifier(source *parser.StringLiteral) {
 		c.addErrorWithCode(source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", source.Value))
 	}
 }
+
+// inCommonJSFormat reports whether node16-style module resolution is on and
+// the file being checked will build into CommonJS output (tsc's
+// impliedNodeFormat === CommonJS).
+func (c *Checker) inCommonJSFormat() bool {
+	if !c.nodeModuleResolution {
+		return false
+	}
+	path := c.currentFilePath()
+	return path != "" && !nodemodules.IsESMFile(path)
+}
+
+// checkTopLevelAwaitFormat reports TS1309 for a top-level await (or
+// for-await) in a module file that builds into CommonJS output. at is the
+// node whose first token is the await keyword.
+func (c *Checker) checkTopLevelAwaitFormat(at parser.Node) {
+	if c.functionNestingDepth != 0 || !c.isModule || !c.inCommonJSFormat() {
+		return
+	}
+	c.addErrorWithCode(at, "TS1309", "The current file is a CommonJS module and cannot use 'await' at the top level.")
+}
+
+// checkForAwaitFormat is checkTopLevelAwaitFormat for `for await`, whose
+// diagnostic sits on the await keyword after the for token.
+func (c *Checker) checkForAwaitFormat(node *parser.ForOfStatement) {
+	if c.functionNestingDepth != 0 || !c.isModule || !c.inCommonJSFormat() || node.Token == nil || c.source == nil {
+		return
+	}
+	content := c.source.Content
+	pos := node.Token.EndPos
+	for pos < len(content) && strings.ContainsRune(" \t\r\n", rune(content[pos])) {
+		pos++
+	}
+	if !strings.HasPrefix(content[pos:], "await") {
+		return
+	}
+	tok := *node.Token
+	tok.Column += pos - node.Token.StartPos
+	tok.StartPos, tok.EndPos = pos, pos+len("await")
+	c.addErrorWithCode(&parser.AwaitExpression{Token: &tok}, "TS1309", "The current file is a CommonJS module and cannot use 'await' at the top level.")
+}
+
+// checkImportMetaFormat reports TS1470 for import.meta in a file that builds
+// into CommonJS output.
+func (c *Checker) checkImportMetaFormat(node *parser.ImportMetaExpression) {
+	if c.inCommonJSFormat() {
+		c.addErrorWithCode(node, "TS1470", "The 'import.meta' meta-property is not allowed in files which will build into CommonJS output.")
+	}
+}
