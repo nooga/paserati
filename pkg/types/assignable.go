@@ -640,6 +640,20 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 					continue
 				}
 			}
+			// tsc skips the weak-type check for a member of an intersection
+			// target (it applies to the whole target, weak only when every
+			// member is).
+			exempt, _ := tType.(*ObjectType)
+			if exempt != nil && !allWeakMembers(targetIntersection) {
+				prev := r.weakExempt
+				r.weakExempt = exempt
+				ok := r.isAssignable(source, tType)
+				r.weakExempt = prev
+				if !ok {
+					return false
+				}
+				continue
+			}
 			if !r.isAssignable(source, tType) {
 				return false
 			}
@@ -647,15 +661,36 @@ func (r *Relation) isAssignableStep(source, target Type) bool {
 		return true
 	} else if sourceIsIntersection {
 		// At least one type in source intersection must be assignable to target
+		// (tsc relates each part with the weak-type check back on; only the
+		// whole intersection is exempt as a member of an intersection target.)
+		exempt := r.weakExempt
+		r.weakExempt = nil
 		for _, sType := range sourceIntersection.Types {
 			if r.isAssignable(sType, target) {
+				r.weakExempt = exempt
 				return true
 			}
 		}
+		r.weakExempt = exempt
 		// Otherwise the members' combined structure may satisfy an object
 		// target ({a} & {b} is assignable to {a; b}).
 		if tgtObj, ok := target.(*ObjectType); ok {
-			if merged := mergeIntersectionObjects(sourceIntersection); merged != nil {
+			merged := mergeIntersectionObjects(sourceIntersection)
+			if merged == nil && exempt != nil {
+				// The apparent type of an unconstrained type parameter
+				// member adds no members (U & { x: "hi" }).
+				var objs []Type
+				for _, m := range sourceIntersection.Types {
+					if tp, ok := m.(*TypeParameterType); ok && tp.Parameter != nil && (tp.Parameter.Constraint == nil || tp.Parameter.Constraint == Unknown || tp.Parameter.Constraint == Any) {
+						continue
+					}
+					objs = append(objs, m)
+				}
+				if len(objs) < len(sourceIntersection.Types) {
+					merged = mergeIntersectionObjects(&IntersectionType{Types: objs})
+				}
+			}
+			if merged != nil {
 				return r.objectAssignable(merged, tgtObj, true)
 			}
 		}
@@ -1360,7 +1395,7 @@ func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak 
 
 	// Weak type detection: a target whose properties are all optional
 	// demands that the source share at least one of them.
-	if checkWeak && IsWeakObject(targetObj) && ObjectHasMembers(sourceObj) && !ObjectsShareProperty(sourceObj, targetObj) {
+	if checkWeak && targetObj != r.weakExempt && IsWeakObject(targetObj) && ObjectHasMembers(sourceObj) && !ObjectsShareProperty(sourceObj, targetObj) {
 		return false
 	}
 
@@ -2345,4 +2380,16 @@ func booleanHalves(obj *ObjectType) []*ObjectType {
 		return halves
 	}
 	return nil
+}
+
+// allWeakMembers reports whether every member of an intersection is a weak
+// object type (tsc's isWeakType of an intersection).
+func allWeakMembers(t *IntersectionType) bool {
+	for _, m := range t.Types {
+		o, ok := GetEffectiveType(m).(*ObjectType)
+		if !ok || !IsWeakObject(o) {
+			return false
+		}
+	}
+	return true
 }
