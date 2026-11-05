@@ -101,6 +101,16 @@ func scanDocTags(src string, start, end int) []jsdocRawTag {
 					restEnd = len(text) - i
 				}
 				tag.rest = strings.TrimSpace(text[i : i+restEnd])
+				if tag.typOff < 0 && (tag.name == "property" || tag.name == "prop" || tag.name == "param") {
+					// `@property name {type}`: the type follows the name.
+					line := text[i : i+restEnd]
+					if open := strings.IndexByte(line, '{'); open > 0 && strings.HasSuffix(strings.TrimSpace(line), "}") && jsdocWord.MatchString(strings.TrimSpace(line)) {
+						name := strings.TrimSpace(line[:open])
+						tag.typ = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line[open+1:]), "}"))
+						tag.typOff = start + i + open + 1
+						tag.rest = name
+					}
+				}
 				tags = append(tags, tag)
 			}
 		}

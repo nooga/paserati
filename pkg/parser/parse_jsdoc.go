@@ -177,12 +177,30 @@ func (p *Parser) parseJSDocTypeIn(s, pad string, locals map[string]bool) Express
 }
 
 // docTags scans the tags of the doc comment ending at the given source range.
-// A comment that declares a @typedef, @callback or @enum owns its tags.
+// A comment that declares a @callback or @enum owns its tags; one that
+// declares a @typedef keeps only the tags that do not belong to the typedef
+// (the @param of the function that follows it, say).
 func (p *Parser) docTags(rng [2]int) []jsdocRawTag {
-	if rng[1] <= rng[0] || jsdocOwnsTags(p.l.Input()[rng[0]:rng[1]]) {
+	if rng[1] <= rng[0] {
 		return nil
 	}
-	return scanDocTags(p.l.Input(), rng[0], rng[1])
+	raw := p.l.Input()[rng[0]:rng[1]]
+	if strings.Contains(raw, "@callback") || strings.Contains(raw, "@enum") {
+		return nil
+	}
+	tags := scanDocTags(p.l.Input(), rng[0], rng[1])
+	if !strings.Contains(raw, "@typedef") {
+		return tags
+	}
+	kept := tags[:0]
+	for _, t := range tags {
+		switch t.name {
+		case "typedef", "property", "prop", "template", "type":
+		default:
+			kept = append(kept, t)
+		}
+	}
+	return kept
 }
 
 // applyJSDocToFunction annotates the parameters and return type of a function
