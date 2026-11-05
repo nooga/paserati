@@ -97,6 +97,10 @@ func (c *Checker) checkImportAttributesModule(with *lexer.Token, typeOnly bool, 
 	}
 	if typeOnly {
 		c.addErrorWithCode(at, "TS2857", "Import attributes cannot be used with type-only imports or exports.")
+		return
+	}
+	if c.moduleKind != "esnext" && c.moduleKind != "preserve" && c.inCommonJSFormat() {
+		c.addErrorWithCode(at, "TS2856", "Import attributes are not allowed on statements that compile to CommonJS 'require' calls.")
 	}
 }
 
