@@ -1418,6 +1418,14 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 				}
 			}
 			return false
+		case *types.InstantiatedType:
+			// Promise<Out>: the arguments carry the parameters.
+			for _, typeArg := range typ.TypeArguments {
+				if containsTypeParameters(typeArg) {
+					return true
+				}
+			}
+			return false
 		// Add more type cases as needed
 		default:
 			return false
