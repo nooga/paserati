@@ -212,6 +212,12 @@ func (c *Checker) switchIsExhaustive(s *parser.SwitchStatement) bool {
 	if s.Expression == nil {
 		return false
 	}
+	// FIXME: indexing or destructuring a union of tuples yields any here, not
+	// the element union; claiming such a switch exhaustive avoids a false
+	// TS7030 at the cost of missing a true one on a genuine any.
+	if st := s.Expression.GetComputedType(); st == nil || st == types.Any {
+		return true
+	}
 	members, ok := c.unitTypeMembers(s.Expression.GetComputedType(), 0)
 	if !ok || len(members) == 0 {
 		return false

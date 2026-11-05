@@ -89,8 +89,34 @@ func (c *Checker) propertyFromIndexSignatureOnly(t types.Type, name string, dept
 				continue
 			}
 			if sig.KeyType == types.String || sig.KeyType == types.Any {
+				// FIXME: a property-less index-signature type of any, or of a union of functions
+				// and generic aliases, is mostly an
+				// imprecise stand-in for a generic type we did not resolve
+				// (tRPC contexts); tsc has real members there, so stay quiet.
+				if len(tt.Properties) == 0 && c.looksUnresolvedIndexValue(sig.ValueType) {
+					continue
+				}
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// looksUnresolvedIndexValue reports whether an index signature's value type
+// is any or a union mixing function types, which is how an unresolved
+// generic record (a mapped type over unknown keys) shows up here.
+func (c *Checker) looksUnresolvedIndexValue(v types.Type) bool {
+	if v == types.Any {
+		return true
+	}
+	u, ok := v.(*types.UnionType)
+	if !ok {
+		return false
+	}
+	for _, m := range u.Types {
+		if o, ok := m.(*types.ObjectType); ok && o.IsCallable() {
+			return true
 		}
 	}
 	return false
