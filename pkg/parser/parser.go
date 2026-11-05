@@ -4537,9 +4537,8 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 				Name:            &Identifier{Token: param.Token, Value: newParamName},
 				TypeAnnotation:  param.TypeAnnotation,
 				ComputedType:    param.ComputedType,
-				Optional:        false,          // Destructuring params can't be optional
-				OptionalPattern: param.Optional, // ...in an implementation (TS2463)
-				SourcePattern:   param.Pattern,
+				Optional:        false,              // Destructuring params can't be optional
+				OptionalPattern: param.Optional,     // ...in an implementation (TS2463)
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
@@ -4658,7 +4657,6 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 				ComputedType:    param.ComputedType,
 				Optional:        false,
 				OptionalPattern: param.Optional,
-				SourcePattern:   param.Pattern,
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
@@ -4797,7 +4795,6 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 				ComputedType:    param.ComputedType,
 				Optional:        false,
 				OptionalPattern: param.Optional,
-				SourcePattern:   param.Pattern,
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
