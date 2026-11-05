@@ -13,7 +13,16 @@ func (l *Lexer) recordDocComment(start, end int) {
 		l.docByEnd = make(map[int]string)
 	}
 	l.docByEnd[end] = cleanDocComment(raw)
+	l.docRanges = append(l.docRanges, [2]int{start, end})
+	if l.docStartByEnd == nil {
+		l.docStartByEnd = make(map[int]int)
+	}
+	l.docStartByEnd[end] = start
 }
+
+// DocRanges returns the [start, end) byte ranges of every JSDoc comment
+// scanned so far, in source order.
+func (l *Lexer) DocRanges() [][2]int { return l.docRanges }
 
 // DocBefore returns the JSDoc comment that sits directly before the token
 // starting at byte offset pos, with only whitespace in between. It returns ""
@@ -21,8 +30,24 @@ func (l *Lexer) recordDocComment(start, end int) {
 // of each line removed; tags such as `@default x` stay in the text, one per
 // line.
 func (l *Lexer) DocBefore(pos int) string {
+	_, end := l.docEndBefore(pos)
+	return l.docByEnd[end]
+}
+
+// DocRangeBefore is DocBefore's source range [start, end) of the raw comment;
+// ok is false when there is no such comment.
+func (l *Lexer) DocRangeBefore(pos int) (start, end int, ok bool) {
+	var e int
+	start, e = l.docEndBefore(pos)
+	if _, found := l.docByEnd[e]; !found {
+		return 0, 0, false
+	}
+	return start, e, true
+}
+
+func (l *Lexer) docEndBefore(pos int) (start, end int) {
 	if len(l.docByEnd) == 0 {
-		return ""
+		return 0, -1
 	}
 	i := pos
 	for i > 0 {
@@ -33,7 +58,7 @@ func (l *Lexer) DocBefore(pos int) string {
 		}
 		break
 	}
-	return l.docByEnd[i]
+	return l.docStartByEnd[i], i
 }
 
 func cleanDocComment(raw string) string {
