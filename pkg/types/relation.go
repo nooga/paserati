@@ -7,6 +7,10 @@ package types
 // can run on separate goroutines (#606) with their own options. A Relation is
 // used by one goroutine at a time.
 type Relation struct {
+	// weakExempt is the intersection-target member currently being related,
+	// which is exempt from the weak-type check.
+	weakExempt *ObjectType
+
 	// StrictNullChecks mirrors --strictNullChecks. When false null and
 	// undefined are assignable to every type and widen to any, as in
 	// TypeScript without the flag.
