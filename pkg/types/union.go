@@ -17,11 +17,16 @@ type UnionType struct {
 	// place: tsc keeps A & (B | C) as the origin of (A & B) | (A & C) when
 	// that is the shorter way to write it.
 	Origin Type
+	// Alias is the type alias this union was made by, which it prints as.
+	Alias *AliasRef
 }
 
 func (ut *UnionType) String() string {
 	if ut.Origin != nil {
 		return ut.Origin.String()
+	}
+	if ut.Alias != nil {
+		return ut.Alias.String()
 	}
 	members := displayUnionMembers(ut.Types)
 	// A union holding every member of an enum prints as the enum, as tsc's
@@ -177,6 +182,9 @@ func unionMemberString(t Type) string {
 			}
 		}
 	case *ConditionalType, *IntersectionType:
+		if TypeAliasOf(t) != nil {
+			return s
+		}
 		return "(" + s + ")"
 	}
 	return s

@@ -108,6 +108,12 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 		return
 	}
 
+	// A union, intersection, mapped or conditional type written as the
+	// alias's type prints as the alias (tsc's aliasSymbol).
+	if len(node.TypeParameters) == 0 && aliasNamesWrittenType(node.Type, aliasedType) {
+		types.SetTypeAlias(aliasedType, &types.AliasRef{Name: node.Name.Value})
+	}
+
 	// An alias of an object type literal names that type: it prints as the
 	// alias, as tsc does.
 	if _, isLiteral := node.Type.(*parser.ObjectTypeExpression); isLiteral {
@@ -2524,4 +2530,25 @@ func allTypeParametersDefaulted(params []*parser.TypeParameter) bool {
 		}
 	}
 	return true
+}
+
+// aliasNamesWrittenType reports whether a type alias's right-hand side, as
+// written, produced a fresh union, intersection, mapped or conditional type
+// that the alias should name (rather than a reference to another type).
+func aliasNamesWrittenType(written parser.Expression, resolved types.Type) bool {
+	switch written.(type) {
+	case *parser.UnionTypeExpression:
+		_, ok := resolved.(*types.UnionType)
+		return ok
+	case *parser.IntersectionTypeExpression:
+		_, ok := resolved.(*types.IntersectionType)
+		return ok
+	case *parser.MappedTypeExpression:
+		_, ok := resolved.(*types.MappedType)
+		return ok
+	case *parser.ConditionalTypeExpression:
+		_, ok := resolved.(*types.ConditionalType)
+		return ok
+	}
+	return false
 }

@@ -1,5 +1,7 @@
 package types
 
+import "strings"
+
 // --- Alias Types ---
 
 // AliasType represents a named type alias.
@@ -55,4 +57,73 @@ func GetEffectiveType(t Type) Type {
 		return GetEffectiveType(aliasType.ResolvedType)
 	}
 	return t
+}
+
+// AliasRef names a type by the type alias it was made from (`YesNo`,
+// `Partial<T>`), as tsc's aliasSymbol and aliasTypeArguments do. It affects
+// only printing: a union, intersection, mapped or conditional type made by
+// an alias declaration or instantiation prints as the alias.
+type AliasRef struct {
+	Name string
+	Args []Type
+}
+
+// String prints the alias reference: `Name` or `Name<A, B>`.
+func (a *AliasRef) String() string {
+	if len(a.Args) == 0 {
+		return a.Name
+	}
+	args := make([]string, len(a.Args))
+	for i, t := range a.Args {
+		if t == nil {
+			args[i] = "any"
+		} else {
+			args[i] = t.String()
+		}
+	}
+	return a.Name + "<" + strings.Join(args, ", ") + ">"
+}
+
+// TypeAliasOf returns the alias a type prints as, if any.
+func TypeAliasOf(t Type) *AliasRef {
+	switch tt := t.(type) {
+	case *UnionType:
+		return tt.Alias
+	case *IntersectionType:
+		return tt.Alias
+	case *MappedType:
+		return tt.Alias
+	case *ConditionalType:
+		return tt.Alias
+	case *ObjectType:
+		return tt.Alias
+	}
+	return nil
+}
+
+// SetTypeAlias makes t print as alias. It is a no-op for kinds that do not
+// carry an alias, and for a type that is already named.
+func SetTypeAlias(t Type, alias *AliasRef) {
+	switch tt := t.(type) {
+	case *UnionType:
+		if tt.Alias == nil {
+			tt.Alias = alias
+		}
+	case *IntersectionType:
+		if tt.Alias == nil {
+			tt.Alias = alias
+		}
+	case *MappedType:
+		if tt.Alias == nil {
+			tt.Alias = alias
+		}
+	case *ConditionalType:
+		if tt.Alias == nil {
+			tt.Alias = alias
+		}
+	case *ObjectType:
+		if tt.Alias == nil && tt.DisplayName == "" && tt.GenericName == "" && tt.LibName == "" && tt.ClassMeta == nil {
+			tt.Alias = alias
+		}
+	}
 }

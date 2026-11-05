@@ -379,6 +379,10 @@ type ObjectType struct {
 	// DisplayName. Unlike DisplayName it means nothing but its printing.
 	LibName string
 
+	// Alias is the type alias whose instantiation this object is (a mapped
+	// type expanded for concrete keys: `Required<Foo>`), printed as such.
+	Alias *AliasRef
+
 	// IsFunctionInterface marks the global Function interface, to which
 	// every function type is assignable.
 	IsFunctionInterface bool
@@ -442,6 +446,9 @@ func (ot *ObjectType) String() string {
 	}
 	if ot.LibName != "" {
 		return ot.LibName
+	}
+	if ot.Alias != nil {
+		return ot.Alias.String()
 	}
 
 	// A lone call or construct signature prints as a function or

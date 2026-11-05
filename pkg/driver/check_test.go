@@ -527,7 +527,7 @@ func TestCheckFilesImportCycle(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"b.ts TS2322 Type '\"z\"' is not assignable to type '\"x\" | \"y\"'.",
+		"b.ts TS2322 Type '\"z\"' is not assignable to type 'AKind'.",
 		"b.ts TS2322 Type 'string' is not assignable to type 'number'.",
 		"main.ts TS2322 Type 'string' is not assignable to type 'number'.",
 	}
