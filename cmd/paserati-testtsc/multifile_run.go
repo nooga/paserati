@@ -91,6 +91,10 @@ func configureTscChecker(c *checker.Checker, opts Options) {
 	c.SetModuleKind(strings.ToLower(strings.TrimSpace(opts["module"])))
 	experimental, _ := opts.boolOpt("experimentaldecorators")
 	c.SetExperimentalDecorators(experimental)
+	importHelpers, _ := opts.boolOpt("importhelpers")
+	c.SetImportHelpers(importHelpers)
+	interop, interopSet := opts.boolOpt("esmoduleinterop")
+	c.SetESModuleInteropOff(interopSet && !interop)
 }
 
 // tscCheckOptions are the driver's check options for a test variant.
@@ -180,6 +184,9 @@ func runMultiJob(conformanceDir string, req workerReq, source string, resp *work
 	pas := driver.NewPaseratiWithInitializersAndBaseDir(tscInitializers(), disk("/.src"))
 	defer pas.Cleanup()
 	pas.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types, ImporterFormat: nodeFormatResolution(opts), NoHashSlashImports: opts.moduleIs("node16", "node18"), AllowJS: allowJS}))
+	if strings.EqualFold(strings.TrimSpace(opts["moduleresolution"]), "classic") {
+		pas.AddResolver(&classicResolver{root: root, fs: modules.NewOSFileSystemResolver(root)})
+	}
 	pas.AddResolver(&rootedResolver{root: root, fs: modules.NewOSFileSystemResolver(root)})
 
 	defer func() {

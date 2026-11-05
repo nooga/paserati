@@ -486,6 +486,10 @@ type Checker struct {
 	strictBindCallApply bool
 	// experimentalDecorators: see SetExperimentalDecorators.
 	experimentalDecorators bool
+	// importHelpers and esModuleInteropOff: see SetImportHelpers; helperState
+	// is the check of the current file's helpers (emit_helpers.go).
+	importHelpers, esModuleInteropOff bool
+	helperState                       *emitHelperState
 	// varOnlyDecls maps names declared by a single `var` and nothing else
 	// to that declarator.
 	varOnlyDecls map[string]*parser.VarDeclarator
@@ -2720,6 +2724,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 	// --- Pass 4.5: Check decorator types (after all declarations are in scope) ---
 	c.checkAllDecorators(program)
+	c.checkExternalEmitHelpers(program)
 	c.checkTopLevelAwaitUsing(program)
 
 	// --- Pass 5: Final Check of Remaining Statements & Initializers ---

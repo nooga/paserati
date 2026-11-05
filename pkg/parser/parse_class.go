@@ -718,6 +718,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				// Private field: #fieldName
 				property := p.parsePrivateProperty(isStatic, isReadonly)
 				if property != nil {
+					property.IsAccessor = isAccessor
 					attachDecorators(property)
 					properties = append(properties, property)
 				}
