@@ -1079,6 +1079,15 @@ func (c *Checker) hasContextualThis(body parser.Node) bool {
 				}
 			case *parser.ShorthandMethod:
 				mark(e)
+			case *parser.CallExpression:
+				// FIXME: a function literal argument may get its this from
+				// the callee's parameter type (a listener's `this: Target`),
+				// which is not modelled here; stay quiet for method calls.
+				if _, isMember := e.Function.(*parser.MemberExpression); isMember {
+					for _, a := range e.Arguments {
+						mark(a)
+					}
+				}
 			case *parser.AssignmentExpression:
 				switch e.Left.(type) {
 				case *parser.MemberExpression, *parser.IndexExpression:
