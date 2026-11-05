@@ -222,6 +222,9 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 			c.deferredMethodBodies = append(c.deferredMethodBodies, deferredMethodBodyCheck{})
 		}
 		c.preprocessNamespaceTypes(node.Body, nsType)
+		if slot >= 0 {
+			slot = c.moveClassBodiesBeforeSlot(slot)
+		}
 		// Names the body's var statements declare must exist while the
 		// function signatures are hoisted (`typeof a` in a parameter type).
 		c.hoistAnnotatedNamespaceVars(node.Body, bodyEnv)
@@ -278,6 +281,34 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 
 	// 5. Restore env.
 	c.env = outerEnv
+}
+
+// moveClassBodiesBeforeSlot reorders the deferred queue so the method bodies of
+// the classes declared in a namespace body (queued while its types were
+// preprocessed, after the body's reserved slot) run before the body's own
+// statements. A statement such as `var c = new C(); c.get()` then sees the
+// return types inferred for C's accessors and methods, as tsc's lazy inference
+// gives it. It returns the slot's new index.
+func (c *Checker) moveClassBodiesBeforeSlot(slot int) int {
+	queue := c.deferredMethodBodies
+	var classes, rest []deferredMethodBodyCheck
+	for _, d := range queue[slot+1:] {
+		if d.run == nil && d.body != nil {
+			classes = append(classes, d)
+		} else {
+			rest = append(rest, d)
+		}
+	}
+	if len(classes) == 0 {
+		return slot
+	}
+	moved := append([]deferredMethodBodyCheck{}, queue[:slot]...)
+	moved = append(moved, classes...)
+	newSlot := len(moved)
+	moved = append(moved, queue[slot])
+	moved = append(moved, rest...)
+	c.deferredMethodBodies = moved
+	return newSlot
 }
 
 // preprocessNamespaceTypes does an early pass over the body that processes
