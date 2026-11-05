@@ -3980,6 +3980,9 @@ type PropertyDefinition struct {
 	IsAbstract         bool         // For abstract keyword
 	IsAccessor         bool         // For the auto-accessor `accessor` keyword
 	Decorators         []*Decorator // Decorators applied to this property
+	// FromThisAssignment marks a property synthesized in a JavaScript class
+	// from a `this.name = value` statement; it was not written in the source.
+	FromThisAssignment bool
 }
 
 func (pd *PropertyDefinition) TokenLiteral() string { return pd.Token.Literal }

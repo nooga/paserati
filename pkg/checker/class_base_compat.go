@@ -356,7 +356,7 @@ func (c *Checker) recordClassMemberKinds(body *parser.ClassBody, instanceType *t
 		kinds[name] = k
 	}
 	for _, prop := range body.Properties {
-		if prop != nil && !prop.IsStatic && !prop.IsPrivate {
+		if prop != nil && !prop.IsStatic && !prop.IsPrivate && !prop.FromThisAssignment {
 			add(prop.Key, classMemberKind{accessor: prop.IsAccessor, abstract: prop.IsAbstract})
 		}
 	}

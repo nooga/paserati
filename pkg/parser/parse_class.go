@@ -307,6 +307,10 @@ func (p *Parser) parseClassBody() *ClassBody {
 		switch {
 		case len(methods) > nMethods:
 			methods[nMethods].Doc = doc
+			if k := methods[nMethods].Kind; p.jsFile && methods[nMethods].Value != nil && (k == "method" || k == "constructor") {
+				fl := methods[nMethods].Value
+				applyJSDocToFunction(doc, fl.Parameters, &fl.ReturnTypeAnnotation)
+			}
 		case len(properties) > nProps:
 			properties[nProps].Doc = doc
 		case len(methodSigs) > nMethodSigs:
@@ -852,6 +856,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 	}
 	popScope()
 	p.checkClassBodyEarlyErrors(body, scope)
+	if p.jsFile {
+		declareThisAssignments(body)
+	}
 	return body
 }
 
