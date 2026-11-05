@@ -2134,6 +2134,9 @@ type ImportDeclaration struct {
 	IsDeferred bool              // true for "import defer * as ns" statements
 	IsSource   bool              // true for "import source x" (source phase) statements
 	Attributes map[string]string // Import attributes (e.g., { type: "json" })
+	// ClauseToken is the first token after `import` (tsc's import clause
+	// start), where grammar errors about the clause are reported.
+	ClauseToken *lexer.Token
 }
 
 func (id *ImportDeclaration) statementNode()       {}

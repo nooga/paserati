@@ -13453,6 +13453,7 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 
 	// Move to the next token to see what kind of import this is
 	p.nextToken()
+	stmt.ClauseToken = p.curToken
 
 	// Check for type-only import: import type { ... } from "module".
 	// `type` directly followed by `from` or `,` is a default binding named "type".
@@ -13464,7 +13465,7 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 	// Check for deferred namespace import: import defer * as ns from "module"
 	// Note: defer is a contextual keyword - only treated as keyword if followed by *
 	// If followed by anything else (e.g., 'from'), defer is an identifier (default binding name)
-	if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "defer" && p.peekToken.Type == lexer.ASTERISK {
+	if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "defer" && (p.peekToken.Type == lexer.ASTERISK || p.tscDeferPhaseClause()) {
 		stmt.IsDeferred = true
 		p.nextToken() // consume 'defer', now on '*'
 	}
