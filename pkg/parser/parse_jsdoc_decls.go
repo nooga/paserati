@@ -385,24 +385,29 @@ func (p *Parser) prependJSDocDeclarations(program *Program) {
 	program.Statements = append(decls, program.Statements...)
 }
 
-// applyJSDocCast reads `/** @type {T} */ (expr)` as the assertion `(expr as T)`.
+// applyJSDocCast reads `/** @type {T} */ (expr)` as the assertion `(expr as T)`
+// and `/** @satisfies {T} */ (expr)` as `(expr satisfies T)`.
 func (p *Parser) applyJSDocCast(start int, expr Expression) Expression {
-	switch expr.(type) {
-	case *ArrowFunctionLiteral, *FunctionLiteral, *TypeAssertionExpression:
-		return expr
-	}
 	ds, de, ok := p.l.DocRangeBefore(start)
 	if !ok {
 		return expr
 	}
+	isFn := false
+	switch expr.(type) {
+	case *ArrowFunctionLiteral, *FunctionLiteral, *TypeAssertionExpression:
+		isFn = true
+	}
 	for _, t := range p.docTags([2]int{ds, de}) {
-		if t.name != "type" || t.typOff < 0 {
+		if t.typOff < 0 || t.name != "type" && t.name != "satisfies" || t.name == "type" && isFn {
 			continue
 		}
 		src, _, _ := jsdocTypeToTS(t.typ)
 		ty := p.parseJSDocTypeIn(src, docPad(p.l.Input(), t.typOff), nil)
 		if ty == nil {
 			return expr
+		}
+		if t.name == "satisfies" {
+			return &SatisfiesExpression{Token: &lexer.Token{Type: lexer.SATISFIES, Literal: "satisfies"}, Expression: expr, TargetType: ty}
 		}
 		return &TypeAssertionExpression{Token: &lexer.Token{Type: lexer.AS, Literal: "as"}, Expression: expr, TargetType: ty}
 	}
