@@ -143,6 +143,7 @@ func (c *Checker) getAwaitedType(t types.Type) types.Type {
 
 // FunctionCheckContext holds the common context for function checking
 type FunctionCheckContext struct {
+	ThisType                 types.Type              // this of a JavaScript constructor function or prototype method
 	FunctionName             string                  // For logging and recursion
 	TypeParameters           []*parser.TypeParameter // Generic type parameters (if any)
 	Parameters               []*parser.Parameter     // Parameter nodes
@@ -653,7 +654,9 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 		}
 	}
 
-	if !hasExplicitThisParam {
+	if !hasExplicitThisParam && ctx.ThisType != nil && !ctx.IsArrow {
+		c.currentThisType = ctx.ThisType
+	} else if !hasExplicitThisParam {
 		// No explicit 'this' parameter - only set to 'any' if not already set by calling context
 		// (an arrow at the top level keeps the file's `this`).
 		if c.currentThisType == nil && !ctx.IsArrow {
