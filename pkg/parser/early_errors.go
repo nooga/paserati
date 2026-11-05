@@ -639,6 +639,7 @@ func (w *eeWalker) expr(e Expression, c eeCtx) {
 	case *DynamicImportExpression:
 		w.expr(t.Source, c)
 		w.expr(t.Options, c)
+		w.exprs(t.ExtraArgs, c)
 	case *DeferredImportExpression:
 		w.expr(t.Source, c)
 	}
