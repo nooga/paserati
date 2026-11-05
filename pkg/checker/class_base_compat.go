@@ -424,3 +424,53 @@ func (c *Checker) checkPropertyAccessorOverrides(className string, body *parser.
 		}
 	}
 }
+
+// checkClassIndexAgainstBase reports TS2415 when an index signature the class
+// declares is not assignable to the base class's applicable index signature
+// (indexSignaturesRelatedTo within checkTypeAssignableTo of the derived
+// instance type to the base type).
+func (c *Checker) checkClassIndexAgainstBase(name *parser.Identifier, body *parser.ClassBody, instanceType *types.ObjectType) {
+	if name == nil || body == nil || len(body.IndexSignatures) == 0 ||
+		instanceType == nil || len(instanceType.Bases()) == 0 {
+		return
+	}
+	baseObj, ok := c.resolveStructural(instanceType.Bases()[0]).(*types.ObjectType)
+	if !ok || baseObj.ClassMeta == nil {
+		return
+	}
+	var baseSigs []*types.IndexSignature
+	for obj, depth := baseObj, 0; obj != nil && depth < 32; depth++ {
+		baseSigs = append(baseSigs, obj.IndexSigs()...)
+		if len(obj.Bases()) == 0 {
+			break
+		}
+		obj, _ = c.resolveStructural(obj.Bases()[0]).(*types.ObjectType)
+	}
+	for _, own := range instanceType.IndexSigs() {
+		if own.Synthetic || (own.KeyType != types.String && own.KeyType != types.Number) {
+			continue
+		}
+		for _, base := range baseSigs {
+			// An own string signature applies to a base number one as well.
+			applies := own.KeyType == base.KeyType || (own.KeyType == types.String && base.KeyType == types.Number)
+			if !applies || own.ValueType == nil || base.ValueType == nil {
+				continue
+			}
+			if c.isAssignableWithExpansion(c.resolveTypeofDeep(own.ValueType, 0), c.resolveTypeofDeep(base.ValueType, 0)) {
+				continue
+			}
+			className := name.Value
+			if instanceType.ClassMeta != nil {
+				className = instanceType.ClassMeta.DisplayName()
+			}
+			keyName := "string"
+			if base.KeyType == types.Number {
+				keyName = "number"
+			}
+			c.addErrorAtStart(name, errors.TS2415, fmt.Sprintf(
+				"Class '%s' incorrectly extends base class '%s'.\n  '%s' index signatures are incompatible.",
+				className, instanceType.Bases()[0].String(), keyName))
+			return
+		}
+	}
+}
