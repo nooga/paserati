@@ -10,15 +10,20 @@ import (
 // A value of intersection type must satisfy ALL constituent types simultaneously.
 type IntersectionType struct {
 	Types []Type // Slice holding the types in the intersection
+	// Alias is the type alias this intersection was made by.
+	Alias *AliasRef
 }
 
 func (it *IntersectionType) String() string {
+	if it.Alias != nil {
+		return it.Alias.String()
+	}
 	typesStr := ""
 	for i, t := range it.Types {
 		if i > 0 {
 			typesStr += " & "
 		}
-		if _, isUnion := t.(*UnionType); isUnion {
+		if u, isUnion := t.(*UnionType); isUnion && u.Alias == nil {
 			typesStr += "(" + t.String() + ")"
 			continue
 		}

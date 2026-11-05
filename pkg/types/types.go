@@ -172,9 +172,15 @@ type MappedType struct {
 	// than `keyof X` itself (Pick<T, K extends keyof T>): tsc's
 	// getModifiersTypeFromMappedType. Nil when the mapping has none.
 	ModifiersType Type
+
+	// Alias is the type alias this mapped type was made by.
+	Alias *AliasRef
 }
 
 func (mt *MappedType) String() string {
+	if mt.Alias != nil {
+		return mt.Alias.String()
+	}
 	var modifiers []string
 	if mt.ReadonlyModifier == "+" {
 		modifiers = append(modifiers, "readonly")
@@ -395,9 +401,15 @@ type ConditionalType struct {
 	ExtendsType Type // The type being extended/checked against (U in T extends U ? X : Y)
 	TrueType    Type // The type when condition is true (X in T extends U ? X : Y)
 	FalseType   Type // The type when condition is false (Y in T extends U ? X : Y)
+
+	// Alias is the type alias this conditional type was made by.
+	Alias *AliasRef
 }
 
 func (ct *ConditionalType) String() string {
+	if ct.Alias != nil {
+		return ct.Alias.String()
+	}
 	checkStr := "unknown"
 	if ct.CheckType != nil {
 		checkStr = ct.CheckType.String()

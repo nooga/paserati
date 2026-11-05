@@ -18,7 +18,9 @@ func (at *ArrayType) String() string {
 		elemTypeStr = at.ElementType.String()
 		switch elem := at.ElementType.(type) {
 		case *UnionType, *IntersectionType:
-			elemTypeStr = "(" + elemTypeStr + ")"
+			if TypeAliasOf(elem) == nil {
+				elemTypeStr = "(" + elemTypeStr + ")"
+			}
 		case *ObjectType:
 			if elem.IsCallable() && len(elem.Props()) == 0 && elem.DisplayName == "" && elem.GenericName == "" {
 				elemTypeStr = "(" + elemTypeStr + ")"
