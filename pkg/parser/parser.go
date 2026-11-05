@@ -3674,6 +3674,12 @@ func (p *Parser) parseImportMetaExpression() Expression {
 		// import ( AssignmentExpression ,opt )
 		// import ( AssignmentExpression , AssignmentExpression ,opt )
 
+		// tsc parses the call's arguments like any other call and leaves the
+		// count, spread and attribute errors to the checker.
+		if p.tscDiagnostics {
+			return p.parseImportCallLoose(importToken)
+		}
+
 		// Check if we have an empty argument list: import()
 		if p.peekTokenIs(lexer.RPAREN) {
 			p.nextToken() // consume )

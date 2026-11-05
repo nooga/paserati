@@ -3926,15 +3926,19 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.DynamicImportExpression:
 		// Dynamic import returns Promise<Module>
 		// Check that the source expression is a string (or can be coerced to string)
-		c.visit(node.Source)
+		c.checkImportCallGrammar(node)
+		if node.Source != nil {
+			c.visit(node.Source)
+		}
+		if node.Options != nil {
+			c.visit(node.Options)
+		}
+		for _, extra := range node.ExtraArgs {
+			c.visit(extra)
+		}
 		if lit, ok := node.Source.(*parser.StringLiteral); ok && c.nodeModuleResolution {
 			c.checkDynamicImportSpecifier(lit)
 		}
-		sourceType := node.Source.GetComputedType()
-
-		// The specifier should be a string or any type that can be converted to string
-		// For simplicity, accept any type (JavaScript allows this)
-		_ = sourceType
 
 		// Return type is Promise<any> for now
 		// TODO: Create proper Promise<Module> type with module namespace exports

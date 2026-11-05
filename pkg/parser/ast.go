@@ -666,11 +666,17 @@ type DynamicImportExpression struct {
 	Token          *lexer.Token // The lexer.IMPORT token
 	Source         Expression   // The module specifier expression
 	Options        Expression   // Optional import options expression (for import attributes)
+	// ExtraArgs holds arguments past the second; only tsc-diagnostics parsing
+	// produces them (and a nil Source for import()), the checker reports them.
+	ExtraArgs []Expression
 }
 
 func (die *DynamicImportExpression) expressionNode()      {}
 func (die *DynamicImportExpression) TokenLiteral() string { return die.Token.Literal }
 func (die *DynamicImportExpression) String() string {
+	if die.Source == nil {
+		return "import()"
+	}
 	if die.Options != nil {
 		return fmt.Sprintf("import(%s, %s)", die.Source.String(), die.Options.String())
 	}
