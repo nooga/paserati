@@ -36,6 +36,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		AllowSelfReference:      node.Name != nil, // Allow recursion for named functions
 		AllowOverloadCompletion: node.Name != nil, // Check for overloads for named functions
 		ErrorNode:               functionErrorNode(node),
+		ThisType:                c.jsFuncThis[node],
 	}
 
 	// 1. Resolve parameters and signature

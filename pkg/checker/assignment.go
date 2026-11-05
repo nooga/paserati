@@ -690,6 +690,7 @@ func (c *Checker) arrayLiteralTuple(lit *parser.ArrayLiteral) *types.TupleType {
 // collectExpandoNames returns the names of function declarations and of
 // consts initialized by a function or arrow function anywhere in program.
 func collectExpandoNames(program *parser.Program) map[string]map[string]bool {
+	js := program.Source != nil && parser.IsJavaScriptName(program.Source.Name)
 	names := map[string]map[string]bool{}
 	assigned := map[string]map[string]bool{}
 	declare := func(name string) {
@@ -745,6 +746,22 @@ func collectExpandoNames(program *parser.Program) map[string]map[string]bool {
 				switch decl.Value.(type) {
 				case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
 					if decl.Name != nil {
+						declare(decl.Name.Value)
+					}
+				}
+			}
+		case *parser.VarStatement, *parser.LetStatement:
+			// JavaScript files take expandos on any variable bound to a function.
+			var decls []*parser.VarDeclarator
+			if v, ok := d.(*parser.VarStatement); ok {
+				decls = v.Declarations
+			} else {
+				decls = d.(*parser.LetStatement).Declarations
+			}
+			for _, decl := range decls {
+				switch decl.Value.(type) {
+				case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
+					if js && decl.Name != nil {
 						declare(decl.Name.Value)
 					}
 				}

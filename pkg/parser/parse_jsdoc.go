@@ -280,3 +280,6 @@ func applyJSDocToVarDeclarator(doc string, d *VarDeclarator) {
 		return
 	}
 }
+
+// IsJavaScriptName reports whether a source name is a JavaScript file.
+func IsJavaScriptName(name string) bool { return isJSFileName(name) }

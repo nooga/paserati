@@ -3598,7 +3598,11 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		} else {
 			// Callable object but no constructor signatures - return any (matches TypeScript behavior)
 			resultType = types.Any
-			c.checkNewOnCallSignature(node, objType)
+			if jc := c.jsCtorFor(node.Constructor); jc != nil {
+				resultType = jc.inst
+			} else {
+				c.checkNewOnCallSignature(node, objType)
+			}
 		}
 	} else if genericType, ok := constructorType.(*types.GenericType); ok {
 		// Handle GenericType constructors by checking their body for constructor signatures

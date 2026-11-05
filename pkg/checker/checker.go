@@ -278,6 +278,11 @@ type Checker struct {
 	// initialized by a function, whose types property assignments may
 	// extend, to the property names assigned through them.
 	expandoNames map[string]map[string]bool
+
+	// jsCtors and jsFuncThis model JavaScript constructor functions (see
+	// js_constructors.go); only set for JavaScript sources.
+	jsCtors      map[string]*jsCtor
+	jsFuncThis   map[*parser.FunctionLiteral]types.Type
 	expandoProps map[expandoKey]bool
 
 	// inferTopParam and inferSig describe the parameter and the
@@ -1752,6 +1757,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
 	c.constAliases = collectConstAliases(program)
 	c.expandoNames = collectExpandoNames(program)
+	c.jsCtors, c.jsFuncThis = nil, nil
+	if program.Source != nil && parser.IsJavaScriptName(program.Source.Name) {
+		c.collectJSConstructors(program)
+	}
 	c.source = program.Source           // Cache source for error reporting
 	c.errors = []errors.PaseratiError{} // Reset errors
 	c.reportedErrors = nil
@@ -2381,6 +2390,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// No explicit 'this' parameter - set to 'any' for top-level functions
 			c.currentThisType = types.Any
 			c.implicitAnyThis = true
+			if t := c.jsFuncThis[funcLit]; t != nil {
+				c.currentThisType = t
+				c.implicitAnyThis = false
+			}
 			debugPrintf("// [Checker Pass 3] No explicit this parameter, setting this to any for potential constructor function\n")
 		}
 
