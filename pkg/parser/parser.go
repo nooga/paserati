@@ -61,6 +61,10 @@ type Parser struct {
 	// checker (TS2364/TS2357), and malformed for-of/for-in heads are
 	// recovered with tsc's grammar errors.
 	tscDiagnostics bool
+
+	// jsFile marks a JavaScript source, where JSDoc tags type declarations;
+	// jsdocSub marks the throwaway parser of a JSDoc tag type.
+	jsFile, jsdocSub bool
 	// unresolvedPrivateNames are the private-name references no enclosing
 	// class declares (tscDiagnostics mode), mapped to whether they sit in
 	// a class body; see Program.UnresolvedPrivateNames.
@@ -391,6 +395,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 		}
 		p.ambientFile = IsDeclarationFile(name)
 		p.jsx = isJSXFile(name)
+		p.jsFile = isJSFileName(name)
 	}
 
 	// Initialize Pratt parser maps for VALUE expressions
@@ -1045,6 +1050,9 @@ func (p *Parser) parseStatement() Statement {
 	if stmt != nil {
 		if doc := p.l.DocBefore(start); doc != "" {
 			attachDeclarationDoc(stmt, doc)
+			if p.jsFile {
+				applyJSDocToStatement(stmt, doc)
+			}
 		}
 	}
 	return stmt
