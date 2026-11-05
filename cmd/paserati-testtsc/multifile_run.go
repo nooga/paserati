@@ -179,7 +179,7 @@ func runMultiJob(conformanceDir string, req workerReq, source string, resp *work
 
 	pas := driver.NewPaseratiWithInitializersAndBaseDir(tscInitializers(), disk("/.src"))
 	defer pas.Cleanup()
-	pas.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types, ImporterFormat: nodeFormatResolution(opts), NoHashSlashImports: opts.moduleIs("node16", "node18")}))
+	pas.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types, ImporterFormat: nodeFormatResolution(opts), NoHashSlashImports: opts.moduleIs("node16", "node18"), AllowJS: allowJS}))
 	pas.AddResolver(&rootedResolver{root: root, fs: modules.NewOSFileSystemResolver(root)})
 
 	defer func() {

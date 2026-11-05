@@ -2,9 +2,11 @@ package checker
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/modules"
 	"github.com/nooga/paserati/pkg/nodemodules"
 	"github.com/nooga/paserati/pkg/parser"
@@ -29,44 +31,52 @@ var relativeExtensions = map[string]bool{
 }
 
 // checkNodeImportExtension reports a relative import without a file
-// extension in an ECMAScript file, which does not resolve under node16
-// rules. It reports whether it did; the report replaces TS2307.
-func (c *Checker) checkNodeImportExtension(source *parser.StringLiteral, loaded interface{}) bool {
+// extension in an ECMAScript file (or a dynamic import, which always uses the
+// ECMAScript resolver), which does not resolve under node16 rules. It
+// reports whether it did; the report replaces TS2307.
+func (c *Checker) checkNodeImportExtension(source *parser.StringLiteral, dynamic bool) bool {
 	spec := source.Value
 	if !c.nodeModuleResolution || !(strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../")) {
 		return false
 	}
 	from := c.currentFilePath()
-	if from == "" || !nodemodules.IsESMFile(from) || relativeExtensions[strings.ToLower(filepath.Ext(spec))] {
+	if from == "" || !(dynamic || nodemodules.IsESMFile(from)) || relativeExtensions[strings.ToLower(filepath.Ext(spec))] {
 		return false
 	}
-	const msg = "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'."
-	rec, _ := loaded.(*modules.ModuleRecord)
-	if rec == nil || strings.HasPrefix(rec.ResolvedPath, "ambient:") {
-		c.addErrorWithCode(source, "TS2834", msg+" Consider adding an extension to the import path.")
+	if strings.HasSuffix(spec, "/") {
+		c.addErrorWithCode(source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", spec))
 		return true
 	}
-	c.addErrorWithCode(source, "TS2835", msg+fmt.Sprintf(" Did you mean '%s'?", suggestedExtension(spec, rec.ResolvedPath)))
+	const msg = "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'."
+	if suggest, ok := suggestedExtension(from, spec); ok {
+		c.addErrorWithCode(source, "TS2835", msg+fmt.Sprintf(" Did you mean '%s'?", suggest))
+	} else {
+		c.addErrorWithCode(source, "TS2834", msg+" Consider adding an extension to the import path.")
+	}
 	return true
 }
 
 // suggestedExtension is the specifier an ECMAScript file would write for the
-// file spec resolved to: .ts reads as .js, .mts as .mjs, .cts as .cjs, and a
-// directory as its index.
-func suggestedExtension(spec, resolved string) string {
-	base := filepath.Base(resolved)
-	js := base
-	for _, m := range [][2]string{{".d.mts", ".mjs"}, {".d.cts", ".cjs"}, {".d.ts", ".js"}, {".mts", ".mjs"}, {".cts", ".cjs"}, {".tsx", ".js"}, {".ts", ".js"}} {
-		if strings.HasSuffix(base, m[0]) {
-			js = strings.TrimSuffix(base, m[0]) + m[1]
-			break
+// file that spec names once the importing file's extension rules add an
+// extension: .ts reads as .js, .mts as .mjs, .cts as .cjs. A directory index
+// is no suggestion.
+func suggestedExtension(from, spec string) (string, bool) {
+	var exts [][2]string
+	switch strings.ToLower(filepath.Ext(from)) {
+	case ".mts":
+		exts = [][2]string{{".mts", ".mjs"}, {".d.mts", ".mjs"}}
+	case ".cts":
+		exts = [][2]string{{".cts", ".cjs"}, {".d.cts", ".cjs"}}
+	default:
+		exts = [][2]string{{".ts", ".js"}, {".tsx", ".js"}, {".d.ts", ".js"}}
+	}
+	base := filepath.Join(filepath.Dir(from), filepath.FromSlash(spec))
+	for _, e := range exts {
+		if info, err := os.Stat(base + e[0]); err == nil && !info.IsDir() {
+			return spec + e[1], true
 		}
 	}
-	stem := strings.TrimSuffix(js, filepath.Ext(js))
-	if stem == "index" && filepath.Base(spec) != "index" {
-		return strings.TrimSuffix(spec, "/") + "/" + js
-	}
-	return spec + filepath.Ext(js)
+	return "", false
 }
 
 // checkNodeImportFormat reports TS1479 when a CommonJS file imports an
@@ -84,4 +94,19 @@ func (c *Checker) checkNodeImportFormat(source *parser.StringLiteral, loaded int
 		return
 	}
 	c.addErrorWithCode(source, "TS1479", fmt.Sprintf("The current file is a CommonJS module whose imports will produce 'require' calls; however, the referenced file is an ECMAScript module and cannot be imported with 'require'. Consider writing a dynamic 'import(\"%s\")' call instead.", source.Value))
+}
+
+// checkDynamicImportSpecifier resolves the specifier of `import("x")` and
+// reports what does not resolve, as an ECMAScript import: TS2307, or TS2834
+// and TS2835 for a relative path without extension.
+func (c *Checker) checkDynamicImportSpecifier(source *parser.StringLiteral) {
+	if c.moduleLoader == nil || c.isSelfModule(source.Value) {
+		return
+	}
+	if c.checkNodeImportExtension(source, true) {
+		return
+	}
+	if _, err := c.moduleLoader.LoadModule(source.Value, c.currentFilePath()); err != nil {
+		c.addErrorWithCode(source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", source.Value))
+	}
 }

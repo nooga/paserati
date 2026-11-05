@@ -3907,6 +3907,9 @@ func (c *Checker) visit(node parser.Node) {
 		// Dynamic import returns Promise<Module>
 		// Check that the source expression is a string (or can be coerced to string)
 		c.visit(node.Source)
+		if lit, ok := node.Source.(*parser.StringLiteral); ok && c.nodeModuleResolution {
+			c.checkDynamicImportSpecifier(lit)
+		}
 		sourceType := node.Source.GetComputedType()
 
 		// The specifier should be a string or any type that can be converted to string
@@ -7124,7 +7127,7 @@ func (c *Checker) reportUnresolvedModule(source *parser.StringLiteral) {
 		return
 	}
 	loaded, err := c.moduleLoader.LoadModule(source.Value, c.currentFilePath())
-	if c.checkNodeImportExtension(source, loaded) {
+	if c.checkNodeImportExtension(source, false) {
 		return
 	}
 	if err != nil {
