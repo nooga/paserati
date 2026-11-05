@@ -1029,11 +1029,6 @@ func (c *Checker) noteImplicitAnyParameters(ctx *FunctionCheckContext) {
 				delete(c.implicitAnyParams, param)
 				continue
 			}
-			// FIXME: JSDoc @param types are not modelled, so a JavaScript
-			// file's destructured parameters may be typed by a comment.
-			if c.inJavaScriptFile() {
-				continue
-			}
 			if bindings := implicitAnyBindingElements(pattern, param.DefaultValue); len(bindings) > 0 {
 				c.implicitAnyParams[param] = implicitAnyParam{bindings: bindings}
 			}
