@@ -16,6 +16,28 @@ func (c *Checker) reverseMappedConstraint(pType *types.MappedType, argType types
 		return TypeParameterConstraint{}, false
 	}
 	tp, ok := keyof.OperandType.(*types.TypeParameterType)
+	if inter, isInter := keyof.OperandType.(*types.IntersectionType); isInter {
+		// `{ [K in keyof (A & T)]: (A & T)[K] }` (Readonly<A & T>): tsc's
+		// keyof of an intersection is keyof A | keyof T, and the keyof T
+		// member infers T from the argument. Read it as the mapping over T.
+		var param *types.TypeParameterType
+		for _, m := range inter.Types {
+			if mt, ok := m.(*types.TypeParameterType); ok && mt.Parameter != nil {
+				if param != nil {
+					return TypeParameterConstraint{}, false
+				}
+				param = mt
+			}
+		}
+		ia, isIA := pType.ValueType.(*types.IndexedAccessType)
+		if param == nil || !isIA || ia.ObjectType != keyof.OperandType {
+			return TypeParameterConstraint{}, false
+		}
+		clone := *pType
+		clone.ConstraintType = &types.KeyofType{OperandType: param}
+		clone.ValueType = &types.IndexedAccessType{ObjectType: param, IndexType: ia.IndexType}
+		pType, tp, ok = &clone, param, true
+	}
 	if !ok || tp.Parameter == nil {
 		return TypeParameterConstraint{}, false
 	}
