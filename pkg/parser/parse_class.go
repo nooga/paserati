@@ -70,6 +70,13 @@ func (p *Parser) parseClassDeclaration() Statement {
 
 	// Parse type parameters if present (same pattern as interfaces)
 	typeParameters := p.tryParseTypeParameters()
+	if p.jsFile && len(typeParameters) == 0 {
+		// `@template T` on a JS class declares its type parameters.
+		typeParameters = p.jsdocClassTemplates(classToken.StartPos)
+	}
+	savedClassTpl := p.classTplLocals
+	p.classTplLocals = tpNames(typeParameters)
+	defer func() { p.classTplLocals = savedClassTpl }()
 
 	superClass, superTypeArgs, implements, ok := p.parseClassHeritage()
 	if !ok {
@@ -300,6 +307,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			return
 		}
 		doc := p.l.DocBefore(docStart)
+		docPos := docStart
 		docStart = -1
 		if doc == "" {
 			return
@@ -309,7 +317,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 			methods[nMethods].Doc = doc
 			if k := methods[nMethods].Kind; p.jsFile && methods[nMethods].Value != nil && (k == "method" || k == "constructor") {
 				fl := methods[nMethods].Value
-				applyJSDocToFunction(doc, fl.Parameters, &fl.ReturnTypeAnnotation)
+				if ds, de, ok := p.l.DocRangeBefore(docPos); ok {
+					p.applyJSDocToFunction([2]int{ds, de}, &fl.Parameters, &fl.ReturnTypeAnnotation, &fl.TypeParameters)
+				}
 			}
 		case len(properties) > nProps:
 			properties[nProps].Doc = doc

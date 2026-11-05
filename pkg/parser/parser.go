@@ -65,6 +65,11 @@ type Parser struct {
 	// jsFile marks a JavaScript source, where JSDoc tags type declarations;
 	// jsdocSub marks the throwaway parser of a JSDoc tag type.
 	jsFile, jsdocSub bool
+	// jsdocTemplates caches the names declared by the file's @template tags.
+	jsdocTemplates map[string]bool
+	jsdocDeclared  map[string]bool
+	// classTplLocals are the @template names of the enclosing JS class.
+	classTplLocals map[string]bool
 	// unresolvedPrivateNames are the private-name references no enclosing
 	// class declares (tscDiagnostics mode), mapped to whether they sit in
 	// a class body; see Program.UnresolvedPrivateNames.
@@ -1022,6 +1027,9 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 		p.checkEarlyErrors(program, initialStrict)
 	}
 	p.safeFinishBinding(program)
+	if p.jsFile && !p.jsdocSub {
+		p.prependJSDocDeclarations(program)
+	}
 	program.UnresolvedPrivateNames = p.unresolvedPrivateNames
 	program.UsesImportMeta = p.usesImportMeta
 
@@ -1051,7 +1059,9 @@ func (p *Parser) parseStatement() Statement {
 		if doc := p.l.DocBefore(start); doc != "" {
 			attachDeclarationDoc(stmt, doc)
 			if p.jsFile {
-				applyJSDocToStatement(stmt, doc)
+				if ds, de, ok := p.l.DocRangeBefore(start); ok {
+					p.applyJSDocToStatement(stmt, [2]int{ds, de})
+				}
 			}
 		}
 	}
@@ -6069,6 +6079,18 @@ func (p *Parser) parseSatisfiesExpression(left Expression) Expression {
 
 // parseGroupedExpression handles expressions like (expr) OR arrow functions like () => expr or (a, b) => expr
 func (p *Parser) parseGroupedExpression() Expression {
+	if !p.jsFile || p.jsdocSub {
+		return p.parseGroupedExpressionCore()
+	}
+	start := p.curToken.StartPos
+	expr := p.parseGroupedExpressionCore()
+	if expr == nil {
+		return expr
+	}
+	return p.applyJSDocCast(start, expr)
+}
+
+func (p *Parser) parseGroupedExpressionCore() Expression {
 	defer p.withIn()()
 	// Save complete lexer state for proper backtracking
 	startState := p.l.SaveState()

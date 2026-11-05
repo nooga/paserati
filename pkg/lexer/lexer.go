@@ -379,7 +379,9 @@ type Lexer struct {
 
 	// docByEnd holds every /** ... */ comment scanned so far, keyed by the
 	// byte offset just past its closing '*/'. See DocBefore.
-	docByEnd map[int]string
+	docByEnd      map[int]string
+	docRanges     [][2]int
+	docStartByEnd map[int]int
 
 	// --- NEW: Template literal state tracking ---
 	inTemplate    bool // true when we're inside a template literal
@@ -502,7 +504,7 @@ func NewLexerWithSource(sourceFile *source.SourceFile) *Lexer {
 		source:    sourceFile,
 		input:     sourceFile.Content,
 		line:      1,
-		column:    0, // readChar below moves it to 1 for the first character
+		column:    0,       // readChar below moves it to 1 for the first character
 		prevToken: ILLEGAL, // Initialize to ILLEGAL to allow regex at start of input
 	}
 	l.readChar() // Initialize l.ch, l.position, l.readPosition, and potentially update line/column if input starts with newline

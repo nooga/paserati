@@ -22,72 +22,6 @@ func isJSFileName(name string) bool {
 	return false
 }
 
-type jsdocTag struct {
-	kind     string // "param", "returns", "type"
-	typ      string // raw text between the braces
-	name     string // param name
-	optional bool   // `[name]` / `[name=x]`
-}
-
-var jsdocTagStart = regexp.MustCompile(`^\s*@(param|arg|argument|returns?|type)\b`)
-
-// parseJSDocTags extracts the @param/@returns/@type tags that carry a braced type.
-func parseJSDocTags(doc string) []jsdocTag {
-	var tags []jsdocTag
-	if jsdocOwnsTags(doc) {
-		return nil
-	}
-	for _, line := range strings.Split(doc, "\n") {
-		m := jsdocTagStart.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		rest := strings.TrimSpace(line[len(m[0]):])
-		if !strings.HasPrefix(rest, "{") {
-			continue
-		}
-		depth, end := 0, -1
-		for i := 0; i < len(rest) && end < 0; i++ {
-			switch rest[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					end = i
-				}
-			}
-		}
-		if end < 0 {
-			continue
-		}
-		t := jsdocTag{typ: strings.TrimSpace(rest[1:end])}
-		rest = strings.TrimSpace(rest[end+1:])
-		switch m[1] {
-		case "param", "arg", "argument":
-			t.kind = "param"
-			if strings.HasPrefix(rest, "[") {
-				t.optional = true
-				rest = rest[1:]
-			}
-			i := 0
-			for i < len(rest) && (rest[i] == '_' || rest[i] == '$' || rest[i] >= '0' && rest[i] <= '9' || rest[i] >= 'a' && rest[i] <= 'z' || rest[i] >= 'A' && rest[i] <= 'Z' || rest[i] >= 0x80) {
-				i++
-			}
-			if i == 0 || i < len(rest) && rest[i] == '.' {
-				continue // nested `name.prop` or no name
-			}
-			t.name = rest[:i]
-		case "returns", "return":
-			t.kind = "returns"
-		default:
-			t.kind = "type"
-		}
-		tags = append(tags, t)
-	}
-	return tags
-}
-
 var (
 	jsdocArrayDot  = regexp.MustCompile(`\b(Array|Promise|Set|Map)\.<`)
 	jsdocObjectGen = regexp.MustCompile(`\bObject\.?<\s*([^,<>]+?)\s*,\s*([^<>]+?)\s*>`)
@@ -124,17 +58,6 @@ func jsdocTypeToTS(s string) (out string, optional, rest bool) {
 	return s, optional, rest
 }
 
-// jsdocKnownTypeNames are the capitalized type names resolved without any
-// declaration in the file. Other names (a @typedef, @callback, @enum, class or
-// import of the file) are not modelled yet, so a tag naming one is left
-// unapplied instead of reporting a false TS2304.
-var jsdocKnownTypeNames = map[string]bool{
-	"Array": true, "ReadonlyArray": true, "Promise": true, "Date": true, "RegExp": true, "Error": true,
-	"Map": true, "Set": true, "WeakMap": true, "WeakSet": true, "Function": true, "Record": true,
-	"Partial": true, "Required": true, "Readonly": true, "Pick": true, "Omit": true, "Symbol": true,
-	"BigInt": true, "Uint8Array": true, "ArrayBuffer": true,
-}
-
 var jsdocIdent = regexp.MustCompile(`[A-Za-z_$][\w$]*`)
 
 var jsdocLowerOK = map[string]bool{
@@ -144,11 +67,71 @@ var jsdocLowerOK = map[string]bool{
 	"infer": true, "unique": true, "is": true, "new": true,
 }
 
-func jsdocNamesResolvable(s string) bool {
+// jsdocKnownTypeNames are the global type names resolved without any
+// declaration in the file. A name that is neither one of these nor declared
+// in the file (a require()d class, a @enum, a constructor function, another
+// lib type) is not modelled yet, so a tag naming it is left unapplied or
+// annotated any instead of reporting a false TS2304.
+var jsdocKnownTypeNames = map[string]bool{
+	"Array": true, "ReadonlyArray": true, "Promise": true, "Date": true, "RegExp": true, "Error": true,
+	"Map": true, "Set": true, "WeakMap": true, "WeakSet": true, "Function": true, "Record": true,
+	"Partial": true, "Required": true, "Readonly": true, "Pick": true, "Omit": true, "Symbol": true,
+	"BigInt": true, "Uint8Array": true, "ArrayBuffer": true,
+}
+
+var jsdocDeclRe = regexp.MustCompile(`(?m)(?:^|[\s;}])(?:class|interface)\s+([A-Za-z_$][\w$]*)|@import\b[^\n]*`)
+
+// declaredTypeNames are the type names the file itself declares: its classes,
+// interfaces, and JSDoc typedefs, callbacks and imports.
+func (p *Parser) declaredTypeNames() map[string]bool {
+	if p.jsdocDeclared == nil {
+		p.jsdocDeclared = map[string]bool{}
+		src := p.l.Input()
+		for _, m := range jsdocDeclRe.FindAllStringSubmatch(src, -1) {
+			switch {
+			case m[1] != "":
+				p.jsdocDeclared[m[1]] = true
+			default:
+				for _, id := range jsdocIdent.FindAllString(strings.TrimPrefix(m[0], "@import"), -1) {
+					p.jsdocDeclared[id] = true
+				}
+			}
+		}
+		for _, line := range jsdocTypedefLine.FindAllStringSubmatch(src, -1) {
+			p.jsdocDeclared[line[1]] = true
+		}
+	}
+	return p.jsdocDeclared
+}
+
+var jsdocTypedefLine = regexp.MustCompile(`@(?:typedef|callback)\b(?:[ \t]*\{[^\n]*\})?[ \t]*([A-Za-z_$][\w$]*)`)
+
+var jsdocTemplateLine = regexp.MustCompile(`@template\b[^\n]*`)
+
+// fileTemplateNames are the names the file's `@template` tags declare. A tag
+// that mentions one outside the declaration that owns it (a class method using
+// the class's parameter) is not modelled yet and stays unapplied.
+func (p *Parser) fileTemplateNames() map[string]bool {
+	if p.jsdocTemplates == nil {
+		p.jsdocTemplates = map[string]bool{}
+		for _, line := range jsdocTemplateLine.FindAllString(p.l.Input(), -1) {
+			for _, id := range jsdocIdent.FindAllString(strings.TrimPrefix(line, "@template"), -1) {
+				p.jsdocTemplates[id] = true
+			}
+		}
+	}
+	return p.jsdocTemplates
+}
+
+func (p *Parser) jsdocNamesResolvable(s string, locals map[string]bool) bool {
+	tmpl := p.fileTemplateNames()
 	for _, loc := range jsdocIdent.FindAllStringIndex(s, -1) {
 		id := s[loc[0]:loc[1]]
+		if locals[id] {
+			continue
+		}
 		if id[0] >= 'A' && id[0] <= 'Z' {
-			if !jsdocKnownTypeNames[id] {
+			if tmpl[id] || !jsdocKnownTypeNames[id] && !p.declaredTypeNames()[id] {
 				return false
 			}
 			continue
@@ -172,16 +155,20 @@ func jsdocOwnsTags(doc string) bool {
 	return strings.Contains(doc, "@typedef") || strings.Contains(doc, "@callback") || strings.Contains(doc, "@enum")
 }
 
-// parseJSDocType parses a JSDoc type; nil when it does not parse cleanly.
-func parseJSDocType(s string) Expression {
-	if !jsdocNamesResolvable(s) {
+// parseJSDocTypeIn parses a JSDoc type already rewritten to TypeScript syntax,
+// preceded by pad (see docPad) so its tokens carry their source positions; nil
+// when it does not parse cleanly.
+func (p *Parser) parseJSDocTypeIn(s, pad string, locals map[string]bool) Expression {
+	if !p.jsdocNamesResolvable(s, locals) {
 		return nil
 	}
 	if strings.TrimSpace(s) == "" || strings.Contains(s, "function(") || strings.Contains(s, "import(") || strings.Contains(s, "typeof ") {
 		return nil
 	}
-	sub := NewParser(lexer.NewLexer(s))
+	sub := NewParser(lexer.NewLexer(pad + s))
 	sub.jsdocSub = true
+	sub.jsdocTemplates = p.fileTemplateNames()
+	sub.jsdocDeclared = p.declaredTypeNames()
 	t := sub.parseTypeExpression()
 	if t == nil || len(sub.errors) > 0 || !sub.peekTokenIs(lexer.EOF) {
 		return nil
@@ -189,39 +176,81 @@ func parseJSDocType(s string) Expression {
 	return t
 }
 
+// docTags scans the tags of the doc comment ending at the given source range.
+// A comment that declares a @typedef, @callback or @enum owns its tags.
+func (p *Parser) docTags(rng [2]int) []jsdocRawTag {
+	if rng[1] <= rng[0] || jsdocOwnsTags(p.l.Input()[rng[0]:rng[1]]) {
+		return nil
+	}
+	return scanDocTags(p.l.Input(), rng[0], rng[1])
+}
+
 // applyJSDocToFunction annotates the parameters and return type of a function
-// from the `@param` and `@returns` tags of its doc comment.
-func applyJSDocToFunction(doc string, params []*Parameter, ret *Expression) {
-	for _, t := range parseJSDocTags(doc) {
-		switch t.kind {
-		case "param":
-			for _, prm := range params {
-				if prm.Name == nil || prm.Name.Value != t.name || prm.TypeAnnotation != nil || prm.IsThis {
+// from the `@param` and `@returns` tags of its doc comment, and gives it the
+// type parameters of its `@template` tags.
+func (p *Parser) applyJSDocToFunction(rng [2]int, params *[]*Parameter, ret *Expression, tps *[]*TypeParameter) {
+	tags := p.docTags(rng)
+	if len(tags) == 0 {
+		return
+	}
+	locals := map[string]bool{}
+	for n := range p.classTplLocals {
+		locals[n] = true
+	}
+	if len(*tps) == 0 {
+		if tp := p.jsdocTemplateParams(tags); len(tp) > 0 {
+			*tps = tp
+		}
+	}
+	for n := range tpNames(*tps) {
+		locals[n] = true
+	}
+	for _, t := range tags {
+		switch t.name {
+		case "param", "arg", "argument":
+			if t.typOff < 0 {
+				continue
+			}
+			name, optTag := jsdocParamName(t.rest)
+			if name == "" {
+				continue
+			}
+			for _, prm := range *params {
+				if prm.Name == nil || prm.Name.Value != name || prm.TypeAnnotation != nil || prm.IsThis {
 					continue
 				}
 				src, opt, rest := jsdocTypeToTS(t.typ)
 				if rest {
 					break
 				}
-				ty := parseJSDocType(src)
+				ty := p.parseJSDocTypeIn(src, docPad(p.l.Input(), t.typOff), locals)
 				if ty == nil && strings.TrimSpace(src) != "" {
-					// A type that names a @typedef, @callback, @import or class
-					// of the file (not modelled yet) still makes the parameter
-					// annotated: it is any rather than an implicit any (TS7006).
-					ty = parseJSDocType("any")
+					// A type the parser cannot express (a `function(...)` type,
+					// a template parameter of an enclosing declaration) still
+					// makes the parameter annotated: any, not an implicit any.
+					ty = anyTypeExpr()
 				}
 				if ty != nil {
 					prm.TypeAnnotation = ty
-					if opt || t.optional {
+					if opt || optTag {
 						prm.Optional = true
 					}
 				}
 				break
 			}
-		case "returns":
-			if *ret == nil {
+		case "this":
+			if t.typOff < 0 || len(*params) > 0 && (*params)[0].IsThis {
+				continue
+			}
+			src, _, _ := jsdocTypeToTS(t.typ)
+			if ty := p.parseJSDocTypeIn(src, docPad(p.l.Input(), t.typOff), locals); ty != nil {
+				thisTok := &lexer.Token{Type: lexer.THIS, Literal: "this"}
+				*params = append([]*Parameter{{Token: thisTok, IsThis: true, TypeAnnotation: ty}}, *params...)
+			}
+		case "returns", "return":
+			if *ret == nil && t.typOff >= 0 {
 				src, _, _ := jsdocTypeToTS(t.typ)
-				if ty := parseJSDocType(src); ty != nil {
+				if ty := p.parseJSDocTypeIn(src, docPad(p.l.Input(), t.typOff), locals); ty != nil {
 					*ret = ty
 				}
 			}
@@ -230,58 +259,58 @@ func applyJSDocToFunction(doc string, params []*Parameter, ret *Expression) {
 }
 
 // applyJSDocToStatement is the JS-file hook run on every documented statement.
-func applyJSDocToStatement(stmt Statement, doc string) {
+func (p *Parser) applyJSDocToStatement(stmt Statement, rng [2]int) {
 	switch n := stmt.(type) {
 	case *ExportNamedDeclaration:
 		if n != nil && n.Declaration != nil {
-			applyJSDocToStatement(n.Declaration, doc)
+			p.applyJSDocToStatement(n.Declaration, rng)
 		}
 	case *ExpressionStatement:
 		if n != nil {
 			if fl, ok := n.Expression.(*FunctionLiteral); ok && fl != nil {
-				applyJSDocToFunction(doc, fl.Parameters, &fl.ReturnTypeAnnotation)
+				p.applyJSDocToFunction(rng, &fl.Parameters, &fl.ReturnTypeAnnotation, &fl.TypeParameters)
 			}
 		}
 	case *VarStatement:
 		if n != nil && len(n.Declarations) == 1 {
-			applyJSDocToVarDeclarator(doc, n.Declarations[0])
+			p.applyJSDocToVarDeclarator(rng, n.Declarations[0])
 		}
 	case *LetStatement:
 		if n != nil && len(n.Declarations) == 1 {
-			applyJSDocToVarDeclarator(doc, n.Declarations[0])
+			p.applyJSDocToVarDeclarator(rng, n.Declarations[0])
 		}
 	case *ConstStatement:
 		if n != nil && len(n.Declarations) == 1 {
-			applyJSDocToVarDeclarator(doc, n.Declarations[0])
+			p.applyJSDocToVarDeclarator(rng, n.Declarations[0])
 		}
 	}
 }
 
 // applyJSDocToVarDeclarator types `/** @type {T} */ var x = ...` and the
 // parameters of a function or arrow assigned to the variable.
-func applyJSDocToVarDeclarator(doc string, d *VarDeclarator) {
+func (p *Parser) applyJSDocToVarDeclarator(rng [2]int, d *VarDeclarator) {
 	if d == nil {
 		return
 	}
 	switch v := d.Value.(type) {
 	case *FunctionLiteral:
 		if v != nil {
-			applyJSDocToFunction(doc, v.Parameters, &v.ReturnTypeAnnotation)
+			p.applyJSDocToFunction(rng, &v.Parameters, &v.ReturnTypeAnnotation, &v.TypeParameters)
 		}
 	case *ArrowFunctionLiteral:
 		if v != nil {
-			applyJSDocToFunction(doc, v.Parameters, &v.ReturnTypeAnnotation)
+			p.applyJSDocToFunction(rng, &v.Parameters, &v.ReturnTypeAnnotation, &v.TypeParameters)
 		}
 	}
 	if d.TypeAnnotation != nil {
 		return
 	}
-	for _, t := range parseJSDocTags(doc) {
-		if t.kind != "type" {
+	for _, t := range p.docTags(rng) {
+		if t.name != "type" || t.typOff < 0 {
 			continue
 		}
 		src, _, _ := jsdocTypeToTS(t.typ)
-		if ty := parseJSDocType(src); ty != nil {
+		if ty := p.parseJSDocTypeIn(src, docPad(p.l.Input(), t.typOff), nil); ty != nil {
 			d.TypeAnnotation = ty
 		}
 		return
