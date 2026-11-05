@@ -169,6 +169,9 @@ func (c *Checker) jsxCall(node *parser.JSXElement, ns *jsxNamespace) parser.Expr
 	var sigs []*types.Signature
 	if isIntrinsicJSXTag(node.TagName) {
 		if ns.intrinsicElements == nil {
+			if c.noImplicitAny {
+				c.addErrorWithCode(node.TagName, "TS7026", "JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.")
+			}
 			return nil
 		}
 		name := parserTagText(node.TagName)
