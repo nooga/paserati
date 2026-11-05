@@ -203,22 +203,98 @@ func (c *Checker) switchEndReachable(s *parser.SwitchStatement) bool {
 }
 
 // switchIsExhaustive reports whether a switch without a default covers every
-// member of a literal union. Anything else is not claimed exhaustive.
+// member of its expression's type, as tsc's computeExhaustiveSwitchStatement
+// does: the type must be a unit type or a union of them (literals, true and
+// false, enum members, null, undefined), every case value a unit type, and
+// every member of the type among the case values. Anything else is not
+// claimed exhaustive.
 func (c *Checker) switchIsExhaustive(s *parser.SwitchStatement) bool {
-	t := s.Expression.GetComputedType()
-	if t == nil {
+	if s.Expression == nil {
 		return false
 	}
-	union, ok := c.resolveTypeAlias(t).(*types.UnionType)
-	if !ok {
+	members, ok := c.unitTypeMembers(s.Expression.GetComputedType(), 0)
+	if !ok || len(members) == 0 {
 		return false
 	}
-	for _, m := range union.Types {
-		if _, isLit := m.(*types.LiteralType); !isLit && m != types.Null && m != types.Undefined {
+	var cases []types.Type
+	for _, cs := range s.Cases {
+		if cs == nil || cs.Condition == nil {
+			continue
+		}
+		units, ok := c.unitTypeMembers(cs.Condition.GetComputedType(), 0)
+		if !ok || len(units) != 1 {
+			return false
+		}
+		cases = append(cases, units[0])
+	}
+	for _, m := range members {
+		covered := false
+		for _, ct := range cases {
+			if sameUnitType(m, ct) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
 			return false
 		}
 	}
-	return len(s.Cases) >= len(union.Types)
+	return true
+}
+
+// unitTypeMembers flattens t into the unit types it is a union of, with
+// boolean as true | false and an enum as its members; ok is false when some
+// member is not a unit type.
+func (c *Checker) unitTypeMembers(t types.Type, depth int) ([]types.Type, bool) {
+	if t == nil || depth > 8 {
+		return nil, false
+	}
+	t = c.resolveTypeofTypeIfNeeded(t)
+	t = c.resolveTypeAlias(t)
+	switch tt := t.(type) {
+	case *types.LiteralType:
+		return []types.Type{tt}, true
+	case *types.EnumMemberType:
+		return []types.Type{tt}, true
+	case *types.EnumType:
+		var out []types.Type
+		for _, name := range tt.OrderedMemberNames() {
+			out = append(out, tt.Members[name])
+		}
+		return out, len(out) > 0
+	case *types.UnionType:
+		var out []types.Type
+		for _, m := range tt.Types {
+			units, ok := c.unitTypeMembers(m, depth+1)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, units...)
+		}
+		return out, true
+	}
+	switch t {
+	case types.Null, types.Undefined:
+		return []types.Type{t}, true
+	case types.Boolean:
+		return []types.Type{types.TrueType, types.FalseType}, true
+	}
+	return nil, false
+}
+
+// sameUnitType reports whether two unit types are the same value.
+func sameUnitType(a, b types.Type) bool {
+	if a == b {
+		return true
+	}
+	switch at := a.(type) {
+	case *types.LiteralType:
+		return at.Equals(b)
+	case *types.EnumMemberType:
+		bt, ok := b.(*types.EnumMemberType)
+		return ok && at.EnumName == bt.EnumName && at.MemberName == bt.MemberName
+	}
+	return false
 }
 
 func isTrueLiteral(e parser.Expression) bool {

@@ -216,6 +216,17 @@ func (p *Paserati) SetNoPropertyAccessFromIndexSignature(enabled bool) {
 	p.checker.SetNoPropertyAccessFromIndexSignature(enabled)
 }
 
+// SetNoImplicitReturns mirrors --noImplicitReturns (TS7030).
+func (p *Paserati) SetNoImplicitReturns(enabled bool) {
+	p.checker.SetNoImplicitReturns(enabled)
+}
+
+// SetNoFallthroughCasesInSwitch mirrors --noFallthroughCasesInSwitch
+// (TS7029).
+func (p *Paserati) SetNoFallthroughCasesInSwitch(enabled bool) {
+	p.checker.SetNoFallthroughCasesInSwitch(enabled)
+}
+
 // SetAllowTopLevelReturn controls whether script/eval style top-level returns
 // are accepted by the type checker.
 func (p *Paserati) SetAllowTopLevelReturn(allow bool) {

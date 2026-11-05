@@ -20,6 +20,7 @@ func (c *Checker) checkArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) {
 		IsAsync:                 node.IsAsync, // Support async arrow functions
 		AllowSelfReference:      false,        // Arrow functions don't have self-reference
 		AllowOverloadCompletion: false,        // Arrow functions don't support overloads
+		ErrorNode:               node,
 	}
 
 	// 1. Resolve parameters and signature

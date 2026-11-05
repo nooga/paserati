@@ -35,6 +35,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		IsAsync:                 node.IsAsync,     // Detect async functions
 		AllowSelfReference:      node.Name != nil, // Allow recursion for named functions
 		AllowOverloadCompletion: node.Name != nil, // Check for overloads for named functions
+		ErrorNode:               functionErrorNode(node),
 	}
 
 	// 1. Resolve parameters and signature
