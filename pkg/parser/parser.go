@@ -13502,6 +13502,7 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 
 		// Parse import attributes for bare imports too
 		if p.peekToken.Type == lexer.WITH {
+			stmt.AttributesToken = p.peekToken
 			p.nextToken() // consume source string
 			p.nextToken() // consume 'with'
 
@@ -13573,6 +13574,7 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 
 	// Parse import attributes (import assertions): with { type: "json" }
 	if p.peekToken.Type == lexer.WITH {
+		stmt.AttributesToken = p.peekToken
 		p.nextToken() // consume source string
 		p.nextToken() // consume 'with'
 
@@ -14085,6 +14087,7 @@ func (p *Parser) parseExportAllDeclaration(exportToken *lexer.Token, isTypeOnly 
 
 	// Parse import attributes (import assertions): with { type: "json" }
 	if p.peekToken.Type == lexer.WITH {
+		stmt.AttributesToken = p.peekToken
 		p.nextToken() // consume source string
 		p.nextToken() // consume 'with'
 
@@ -14156,6 +14159,9 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 				Token: p.curToken,
 				Value: p.curToken.Literal,
 			}
+		}
+		if !p.parseExportFromAttributes(stmt) {
+			return nil
 		}
 		p.expectExportStatementEnd()
 		return stmt
@@ -14232,6 +14238,9 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 					Value: p.curToken.Literal,
 				}
 			}
+			if !p.parseExportFromAttributes(stmt) {
+				return nil
+			}
 			p.expectExportStatementEnd()
 			return stmt
 		}
@@ -14265,6 +14274,9 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 		}
 	}
 
+	if !p.parseExportFromAttributes(stmt) {
+		return nil
+	}
 	p.expectExportStatementEnd()
 	return stmt
 }

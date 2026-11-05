@@ -6381,6 +6381,7 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 	}
 
 	c.checkDeferredImportClause(node)
+	c.checkImportAttributesModule(node.AttributesToken, node.IsTypeOnly, node.Attributes)
 
 	sourceModulePath := node.Source.Value
 	debugPrintf("// [Checker] Processing import from: %s (IsTypeOnly: %v)\n", sourceModulePath, node.IsTypeOnly)
@@ -6609,6 +6610,7 @@ func (c *Checker) importTypeNamespace(node *parser.ImportTypeExpression) *types.
 
 // checkExportNamedDeclaration handles type checking for named export statements
 func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaration) {
+	c.checkImportAttributesModule(node.AttributesToken, node.IsTypeOnly, node.Attributes)
 	for _, spec := range node.Specifiers {
 		if es, ok := spec.(*parser.ExportNamedSpecifier); ok {
 			c.reportStringModuleNameExpr(es.Local)
@@ -6742,6 +6744,7 @@ func (c *Checker) checkExportDefaultDeclaration(node *parser.ExportDefaultDeclar
 
 // checkExportAllDeclaration handles type checking for export all statements
 func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
+	c.checkImportAttributesModule(node.AttributesToken, node.IsTypeOnly, node.Attributes)
 	c.reportStringModuleNameExpr(node.Exported)
 	if node.Source == nil {
 		c.addError(node, "export * statement missing source module")

@@ -41,3 +41,17 @@ func (p *Parser) tscDeferPhaseClause() bool {
 	}
 	return isImportBindingName(p.peekToken.Type) && !p.peekTokenIs(lexer.COMMA)
 }
+
+// parseExportFromAttributes parses the `with { ... }` attributes of
+// `export { x } from "m"`, leaving curToken on the closing brace. It reports
+// false when the attributes are malformed.
+func (p *Parser) parseExportFromAttributes(stmt *ExportNamedDeclaration) bool {
+	if stmt.Source == nil || !p.peekTokenIs(lexer.WITH) {
+		return true
+	}
+	stmt.AttributesToken = p.peekToken
+	p.nextToken() // the source string
+	p.nextToken() // 'with'
+	stmt.Attributes = p.parseImportAttributes()
+	return stmt.Attributes != nil
+}
