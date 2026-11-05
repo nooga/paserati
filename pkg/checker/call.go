@@ -565,7 +565,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 	c.noteIndirectCallCallee(node.Function)
 	var funcNodeType types.Type
-	if node.Function == c.presetCallee && c.presetCalleeType != nil {
+	isConstructCall := node.Function == c.presetCallee && c.presetCalleeType != nil
+	if isConstructCall {
 		// `new` checked as a call of the construct signatures; the
 		// constructor expression has been visited.
 		funcNodeType = c.presetCalleeType
@@ -593,6 +594,10 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		c.callReceiver = types.RemoveNullishTypes(c.callReceiver)
 	}
 	defer func() { c.callReceiver = savedReceiver }()
+	if !isConstructCall {
+		receiver := c.callReceiver
+		defer func() { c.checkCallThisContext(node, funcNodeType, receiver) }()
+	}
 	debugPrintf("// [Checker CallExpr] Function type resolved to: %T (%v)\n", funcNodeType, funcNodeType)
 
 	if funcNodeType == nil {
@@ -4016,4 +4021,37 @@ func (c *Checker) withReturnContextInferences(callNode *parser.CallExpression, g
 		return paramType
 	}
 	return types.NewObjectType().WithCallSignature(&cp)
+}
+
+// checkCallThisContext is tsc's check of a call's this argument against the
+// signature's explicit `this` parameter (TS2684): the receiver of a method
+// call, void for a plain call.
+// FIXME: only a single non-generic call signature is checked; overloads,
+// unions of signatures and generic this types are not.
+func (c *Checker) checkCallThisContext(node *parser.CallExpression, callee types.Type, receiver types.Type) {
+	fn, ok := callee.(*types.ObjectType)
+	if !ok || len(fn.CallSigs()) != 1 {
+		return
+	}
+	sig := fn.CallSigs()[0]
+	if sig.ThisType == nil || len(sig.TypeParameters) > 0 || c.typeContainsTypeParameter(sig.ThisType) {
+		return
+	}
+	var errorNode parser.Node = node
+	thisArg := receiver
+	switch f := node.Function.(type) {
+	case *parser.MemberExpression:
+		errorNode = f.Object
+	case *parser.ChainBase:
+		errorNode = f.Receiver
+	default:
+		thisArg = types.Void
+	}
+	if thisArg == nil || thisArg == types.Any || c.typeContainsTypeParameter(thisArg) {
+		return
+	}
+	if c.isAssignableWithExpansion(thisArg, sig.ThisType) {
+		return
+	}
+	c.addErrorWithCode(errorNode, errors.TS2684, fmt.Sprintf("The 'this' context of type '%s' is not assignable to method's 'this' of type '%s'.", thisArg.String(), sig.ThisType.String()))
 }
