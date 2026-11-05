@@ -2120,6 +2120,15 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 			// `is` starts the next member/statement.
 			return leftExp
 		}
+		if peekType == lexer.DOT && p.tscDiagnostics {
+			// A qualified name only extends a type name; after `this`, a
+			// literal or anything else the `.` is left for the caller.
+			switch leftExp.(type) {
+			case *Identifier, *MemberExpression, *ImportTypeExpression:
+			default:
+				return leftExp
+			}
+		}
 		infix := p.typeInfixParseFns[peekType] // Look in the TYPE infix map
 		if infix == nil {
 			// No infix type operator found or lower precedence for the peek token
@@ -3407,7 +3416,11 @@ func (p *Parser) parseRegexLiteral() Expression {
 	if p.tscDiagnostics && p.target != 0 {
 		p.checkRegexFlagTargets(literal, lastSlash)
 	}
-	if err := jsregex.Validate(pattern, flags); err != nil {
+	if p.tscDiagnostics {
+		// tsc's scanner reports only the specific diagnostics below; it has
+		// no equivalent of the engine's pattern validation.
+		p.checkRegexScannerDiags(literal, lastSlash, flags)
+	} else if err := jsregex.Validate(pattern, flags); err != nil {
 		p.addError(p.curToken, "SyntaxError: "+err.Error())
 		return nil
 	}
@@ -3631,8 +3644,14 @@ func (p *Parser) parseImportMetaExpression() Expression {
 				Phase:  importPhase,
 			}
 		} else {
-			// Error: import. followed by something other than 'meta', 'defer', or 'source'
-			p.addError(p.peekToken, "expected 'meta', 'defer', or 'source' after 'import.'")
+			// tsc parses `import.<name>` for any identifier name and the checker
+			// reports TS17012 on the name.
+			if p.isIdentifierNameToken(p.peekToken) {
+				p.nextToken()
+				p.addSemanticErrorWithCode(p.curToken, "TS17012", "'"+p.curToken.Literal+"' is not a valid meta-property for keyword 'import'. Did you mean 'meta'?")
+				return &ImportMetaExpression{Token: importToken}
+			}
+			p.addErrorWithCode(p.peekToken, errors.TS1003, "Identifier expected.")
 			return nil
 		}
 	}
@@ -8913,6 +8932,13 @@ func (p *Parser) parseObjectLiteral() Expression {
 				// identical pattern in parseEnumDeclarationStatement). The
 				// `key == nil` check below would then never be true.
 				ident := p.parsePropertyName()
+				if ident != nil && p.tscDiagnostics && p.curTokenIs(lexer.PRIVATE_IDENT) {
+					p.addGrammarErrorWithCode(p.curToken, "TS18016", "Private identifiers are not allowed outside class bodies.")
+					if p.target != 0 && p.target < 2015 {
+						// checkGrammarAccessor
+						p.addGrammarErrorWithCode(p.curToken, "TS18028", "Private identifiers are only available when targeting ECMAScript 2015 and higher.")
+					}
+				}
 				if ident == nil {
 					p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'get'")
 					return nil
@@ -9014,6 +9040,13 @@ func (p *Parser) parseObjectLiteral() Expression {
 				// above for why this must check the concrete *Identifier
 				// before assigning into the Expression interface variable.
 				ident := p.parsePropertyName()
+				if ident != nil && p.tscDiagnostics && p.curTokenIs(lexer.PRIVATE_IDENT) {
+					p.addGrammarErrorWithCode(p.curToken, "TS18016", "Private identifiers are not allowed outside class bodies.")
+					if p.target != 0 && p.target < 2015 {
+						// checkGrammarAccessor
+						p.addGrammarErrorWithCode(p.curToken, "TS18028", "Private identifiers are only available when targeting ECMAScript 2015 and higher.")
+					}
+				}
 				if ident == nil {
 					p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'set'")
 					return nil
@@ -14476,8 +14509,10 @@ func (p *Parser) isGetterMethod() bool {
 		return false
 	}
 	// get identifier(...) or get [computed](...) or get keywordAsIdentifier(...) - this is a getter method
+	// tsc parses a private name here and its checker rejects it (TS18016).
 	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
 		p.peekTokenIs(lexer.BIGINT) || p.peekTokenIs(lexer.LBRACKET) ||
+		(p.tscDiagnostics && p.peekTokenIs(lexer.PRIVATE_IDENT)) ||
 		p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
 }
 
@@ -14491,8 +14526,10 @@ func (p *Parser) isSetterMethod() bool {
 		return false
 	}
 	// set identifier(...) or set [computed](...) or set keywordAsIdentifier(...) - this is a setter method
+	// tsc parses a private name here and its checker rejects it (TS18016).
 	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
 		p.peekTokenIs(lexer.BIGINT) || p.peekTokenIs(lexer.LBRACKET) ||
+		(p.tscDiagnostics && p.peekTokenIs(lexer.PRIVATE_IDENT)) ||
 		p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
 }
 
