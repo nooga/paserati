@@ -39,6 +39,8 @@ type CheckOptions struct {
 	AlwaysStrict                 bool
 	AllowUnreachableCode         bool
 	ExperimentalDecorators       bool
+	ImportHelpers                bool
+	ESModuleInteropOff           bool
 	// NoPropertyAccessFromIndexSignature makes `obj.name` that only an
 	// index signature provides TS4111.
 	NoPropertyAccessFromIndexSignature bool
@@ -126,6 +128,8 @@ func (o CheckOptions) apply(c *checker.Checker) {
 	c.SetAlwaysStrict(o.AlwaysStrict)
 	c.SetAllowUnreachableCode(o.AllowUnreachableCode)
 	c.SetExperimentalDecorators(o.ExperimentalDecorators)
+	c.SetImportHelpers(o.ImportHelpers)
+	c.SetESModuleInteropOff(o.ESModuleInteropOff)
 	c.SetNoPropertyAccessFromIndexSignature(o.NoPropertyAccessFromIndexSignature)
 	c.SetNoImplicitReturns(o.NoImplicitReturns)
 	c.SetNoFallthroughCasesInSwitch(o.NoFallthroughCasesInSwitch)

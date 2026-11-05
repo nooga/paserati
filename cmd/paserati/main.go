@@ -379,6 +379,10 @@ func projectCheckOptions(cfg *tsconfig.Config) driver.CheckOptions {
 	opts.NoImplicitOverride, _ = cfg.Bool("noImplicitOverride")
 	opts.AllowUnreachableCode, _ = cfg.Bool("allowUnreachableCode")
 	opts.ExperimentalDecorators, _ = cfg.Bool("experimentalDecorators")
+	opts.ImportHelpers, _ = cfg.Bool("importHelpers")
+	if v, set := cfg.Bool("esModuleInterop"); set {
+		opts.ESModuleInteropOff = !v
+	}
 	opts.NoPropertyAccessFromIndexSignature, _ = cfg.Bool("noPropertyAccessFromIndexSignature")
 	opts.NoImplicitReturns, _ = cfg.Bool("noImplicitReturns")
 	opts.NoFallthroughCasesInSwitch, _ = cfg.Bool("noFallthroughCasesInSwitch")
