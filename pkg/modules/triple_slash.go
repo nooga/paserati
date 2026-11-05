@@ -5,7 +5,11 @@ import (
 	"strings"
 )
 
-var tripleSlashRef = regexp.MustCompile(`^///\s*<reference\s+(path|types)\s*=\s*["']([^"']+)["']`)
+var tripleSlashRef = regexp.MustCompile(`^///\s*<reference\s+(path|types)\s*=\s*["']([^"']+)["'](?:.*\sresolution-mode\s*=\s*["'](import|require)["'])?`)
+
+// ResolutionModeSep joins a types reference's package name to its
+// resolution-mode override ("pkg\x00import"), for a resolver that honours it.
+const ResolutionModeSep = "\x00"
 
 // TripleSlashReferences returns the specifiers of a file's leading
 // `/// <reference path="..." />` and `/// <reference types="..." />`
@@ -33,6 +37,9 @@ func TripleSlashReferences(content string) []string {
 			spec := m[2]
 			if m[1] == "path" && !strings.HasPrefix(spec, ".") && !strings.HasPrefix(spec, "/") {
 				spec = "./" + spec
+			}
+			if m[1] == "types" && m[3] != "" {
+				spec += ResolutionModeSep + m[3]
 			}
 			refs = append(refs, spec)
 		case strings.HasPrefix(line, "//"):

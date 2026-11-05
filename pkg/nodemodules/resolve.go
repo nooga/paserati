@@ -41,6 +41,13 @@ type Options struct {
 	// Paths maps specifiers to files before packages are looked up, as
 	// tsc's "paths" option does.
 	Paths []PathMapping
+	// ImporterFormat picks the "import" or "require" condition per importing
+	// file, as node16/nodenext resolution does: .mts/.mjs import, .cts/.cjs
+	// require, and any other file follows its nearest package.json "type".
+	ImporterFormat bool
+	// NoHashSlashImports rejects "#/..." specifiers, which only node20 and
+	// later resolution (not node16 or node18) allows.
+	NoHashSlashImports bool
 
 	// fs, when set, caches directory listings across resolutions.
 	fs *fsCache
@@ -110,6 +117,12 @@ func IsBareSpecifier(specifier string) bool {
 // Resolve resolves a bare specifier imported from a file in fromDir to an
 // absolute path, with symlinks followed.
 func Resolve(specifier, fromDir string, opts Options) (string, error) {
+	if strings.HasPrefix(specifier, "#") {
+		if opts.NoHashSlashImports && strings.HasPrefix(specifier, "#/") {
+			return "", fmt.Errorf("%q is not a valid package import under this module resolution", specifier)
+		}
+		return resolveImports(specifier, fromDir, opts)
+	}
 	if len(opts.Paths) > 0 {
 		if path, ok, err := resolvePaths(opts.fs, specifier, opts.Paths, opts.Mode); ok && err == nil {
 			return path, nil
@@ -122,6 +135,12 @@ func Resolve(specifier, fromDir string, opts Options) (string, error) {
 	dir, err := filepath.Abs(fromDir)
 	if err != nil {
 		return "", err
+	}
+	// A package may import itself by name when it declares "exports".
+	if dir, pkg := nearestPackage(fromDir); pkg != nil && pkg.Name == pkgName && len(pkg.Exports) > 0 {
+		if path, err := resolveInPackage(dir, subpath, opts); err == nil {
+			return opts.fs.canonicalPath(path)
+		}
 	}
 	// tsc tries <dir>/node_modules/<pkg> and then <dir>/node_modules/@types/<pkg>
 	// in each directory before moving up to the parent.
@@ -206,6 +225,7 @@ type PackageJSON struct {
 	Types   string // "types", or "typings" when "types" is absent
 	Exports json.RawMessage
 	Imports json.RawMessage
+	Type    string
 }
 
 // ReadPackageJSON reads pkgDir/package.json. A field with an unexpected JSON
@@ -222,6 +242,7 @@ func ReadPackageJSON(pkgDir string) (*PackageJSON, error) {
 		Typings json.RawMessage `json:"typings"`
 		Exports json.RawMessage `json:"exports"`
 		Imports json.RawMessage `json:"imports"`
+		Type    json.RawMessage `json:"type"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("invalid package.json in %s: %w", pkgDir, err)
@@ -232,6 +253,7 @@ func ReadPackageJSON(pkgDir string) (*PackageJSON, error) {
 		Types:   stringField(raw.Types),
 		Exports: raw.Exports,
 		Imports: raw.Imports,
+		Type:    stringField(raw.Type),
 	}
 	if pkg.Types == "" {
 		pkg.Types = stringField(raw.Typings)
@@ -335,7 +357,15 @@ func tryFile(c *fsCache, pkgDir, rel string, mode Mode) (string, bool) {
 		if isDeclarationOrTS(rel) {
 			candidates = append(candidates, rel)
 		} else if dts, ok := declarationFor(rel); ok {
-			candidates = append(candidates, dts, strings.TrimSuffix(rel, filepath.Ext(rel))+".ts")
+			base := strings.TrimSuffix(rel, filepath.Ext(rel))
+			src := ".ts"
+			switch filepath.Ext(rel) {
+			case ".mjs":
+				src = ".mts"
+			case ".cjs":
+				src = ".cts"
+			}
+			candidates = append(candidates, dts, base+src)
 		}
 		for _, ext := range typesExts {
 			candidates = append(candidates, rel+ext)
@@ -421,7 +451,7 @@ func hasSubpathKeys(obj json.RawMessage) bool {
 		return false
 	}
 	for _, k := range keys {
-		if strings.HasPrefix(k, ".") {
+		if strings.HasPrefix(k, ".") || strings.HasPrefix(k, "#") {
 			return true
 		}
 	}
@@ -531,4 +561,61 @@ func canonicalPath(path string) (string, error) {
 		return filepath.Abs(resolved)
 	}
 	return filepath.Abs(path)
+}
+
+// nearestPackage finds the package.json that governs dir: the closest one in
+// dir or an ancestor.
+func nearestPackage(dir string) (string, *PackageJSON) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", nil
+	}
+	for {
+		if pkg, err := ReadPackageJSON(dir); err == nil {
+			return dir, pkg
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
+}
+
+// resolveImports resolves a "#name" specifier through the "imports" map of
+// the package.json that governs fromDir.
+func resolveImports(specifier, fromDir string, opts Options) (string, error) {
+	dir, pkg := nearestPackage(fromDir)
+	if pkg == nil || len(pkg.Imports) == 0 {
+		return "", fmt.Errorf("no package imports for %q from %s", specifier, fromDir)
+	}
+	target, ok, err := ExportsTarget(pkg.Imports, specifier, opts)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("%q is not defined in the imports of %s", specifier, dir)
+	}
+	if !strings.HasPrefix(target, ".") {
+		// An import mapped to a package name resolves like a bare import.
+		return Resolve(target, dir, opts)
+	}
+	path, err := entryFile(opts.fs, dir, target, opts.Mode)
+	if err != nil {
+		return "", err
+	}
+	return opts.fs.canonicalPath(path)
+}
+
+// importerRequires reports whether a file loads its imports as require calls
+// under node16 rules.
+func importerRequires(c *fsCache, fromPath string) bool {
+	switch strings.ToLower(filepath.Ext(fromPath)) {
+	case ".cts", ".cjs":
+		return true
+	case ".mts", ".mjs":
+		return false
+	}
+	_, pkg := nearestPackage(startDir(c, fromPath))
+	return pkg == nil || pkg.Type != "module"
 }

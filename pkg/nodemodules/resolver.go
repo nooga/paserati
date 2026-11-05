@@ -25,7 +25,10 @@ type Resolver struct {
 	dirs     map[string]string
 }
 
-type resolveKey struct{ specifier, dir string }
+type resolveKey struct {
+	specifier, dir string
+	require        bool
+}
 
 // resolveCall is one resolution; path and err are set before done closes.
 type resolveCall struct {
@@ -57,7 +60,7 @@ func (r *Resolver) CanResolve(specifier string) bool {
 	if r.Mode == Types && isRelative(specifier) {
 		return true
 	}
-	return IsBareSpecifier(specifier)
+	return IsBareSpecifier(specifier) || strings.HasPrefix(specifier, "#") && len(specifier) > 1
 }
 
 func (r *Resolver) Resolve(specifier, fromPath string) (*modules.ResolvedModule, error) {
@@ -76,8 +79,16 @@ func (r *Resolver) Resolve(specifier, fromPath string) (*modules.ResolvedModule,
 }
 
 func (r *Resolver) resolvePath(specifier, fromPath string) (string, error) {
+	opts := r.Options
+	if opts.ImporterFormat {
+		opts.Require = importerRequires(r.fs, fromPath)
+	}
+	if i := strings.Index(specifier, modules.ResolutionModeSep); i >= 0 {
+		opts.Require = specifier[i+1:] == "require"
+		specifier = specifier[:i]
+	}
 	if r.Mode != Types {
-		return resolvePath(specifier, startDir(nil, fromPath), r.Options)
+		return resolvePath(specifier, startDir(nil, fromPath), opts)
 	}
 	r.mu.Lock()
 	dir, ok := r.dirs[fromPath]
@@ -85,7 +96,7 @@ func (r *Resolver) resolvePath(specifier, fromPath string) (string, error) {
 	if !ok {
 		dir = startDir(r.fs, fromPath)
 	}
-	key := resolveKey{specifier, dir}
+	key := resolveKey{specifier, dir, opts.Require}
 	r.mu.Lock()
 	if r.dirs == nil {
 		r.dirs = make(map[string]string)
@@ -102,7 +113,7 @@ func (r *Resolver) resolvePath(specifier, fromPath string) (string, error) {
 		<-call.done
 		return call.path, call.err
 	}
-	call.path, call.err = resolvePath(specifier, dir, r.Options)
+	call.path, call.err = resolvePath(specifier, dir, opts)
 	close(call.done)
 	return call.path, call.err
 }

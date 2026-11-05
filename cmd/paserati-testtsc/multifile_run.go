@@ -178,7 +178,7 @@ func runMultiJob(conformanceDir string, req workerReq, source string, resp *work
 
 	pas := driver.NewPaseratiWithInitializersAndBaseDir(tscInitializers(), disk("/.src"))
 	defer pas.Cleanup()
-	pas.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types}))
+	pas.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types, ImporterFormat: nodeFormatResolution(opts), NoHashSlashImports: opts.moduleIs("node16", "node18")}))
 	pas.AddResolver(&rootedResolver{root: root, fs: modules.NewOSFileSystemResolver(root)})
 
 	defer func() {
@@ -228,4 +228,25 @@ func (r *rootedResolver) CanResolve(specifier string) bool {
 }
 func (r *rootedResolver) Resolve(specifier, fromPath string) (*modules.ResolvedModule, error) {
 	return r.fs.Resolve(filepath.Join(r.root, filepath.FromSlash(specifier)), fromPath)
+}
+
+// moduleIs reports whether --module is one of kinds.
+func (o Options) moduleIs(kinds ...string) bool {
+	m := strings.ToLower(strings.TrimSpace(o["module"]))
+	for _, k := range kinds {
+		if m == k {
+			return true
+		}
+	}
+	return false
+}
+
+// nodeFormatResolution reports whether imports resolve per importing file's
+// format: node16/nodenext resolution, which module=node16..nodenext implies.
+func nodeFormatResolution(o Options) bool {
+	res := strings.ToLower(strings.TrimSpace(o["moduleresolution"]))
+	if res != "" {
+		return res == "node16" || res == "nodenext"
+	}
+	return o.moduleIs("node16", "node18", "node20", "nodenext")
 }
