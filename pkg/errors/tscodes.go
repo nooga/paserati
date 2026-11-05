@@ -92,6 +92,7 @@ const (
 	TS2347  = "TS2347"  // Untyped function calls may not accept type arguments
 	TS2348  = "TS2348"  // Value of type 'X' is not callable. Did you mean to include 'new'?
 	TS2349  = "TS2349"  // This expression is not callable
+	TS6234  = "TS6234"  // This expression is not callable because it is a 'get' accessor
 	TS2351  = "TS2351"  // This expression is not constructable
 	TS2352  = "TS2352"  // Conversion of type 'X' to type 'Y' may be a mistake
 	TS2358  = "TS2358"  // The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter
