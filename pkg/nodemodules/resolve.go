@@ -619,3 +619,10 @@ func importerRequires(c *fsCache, fromPath string) bool {
 	_, pkg := nearestPackage(startDir(c, fromPath))
 	return pkg == nil || pkg.Type != "module"
 }
+
+// IsESMFile reports whether node16 rules read the file at path as an
+// ECMAScript module: .mts/.mjs files are, .cts/.cjs files are not, and any
+// other file follows its nearest package.json "type".
+func IsESMFile(path string) bool {
+	return !importerRequires(nil, path)
+}
