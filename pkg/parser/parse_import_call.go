@@ -23,3 +23,21 @@ func (p *Parser) parseImportCallLoose(importToken *lexer.Token) Expression {
 	}
 	return node
 }
+
+// tscDeferPhaseClause reports, with curToken on `defer` after `import`,
+// whether tsc takes `defer` as the import phase modifier although no `*`
+// follows: `import defer x from`, `import defer { x } from`, and
+// `import defer from from "m"` (a lone `from` followed by a string is the
+// default binding named defer). The checker then reports TS18058/TS18059.
+func (p *Parser) tscDeferPhaseClause() bool {
+	if !p.tscDiagnostics {
+		return false
+	}
+	switch {
+	case p.peekTokenIs(lexer.FROM):
+		return !p.peekTokenIs2(lexer.STRING) && isImportBindingName(p.lookAhead(1).Type)
+	case p.peekTokenIs(lexer.LBRACE):
+		return true
+	}
+	return isImportBindingName(p.peekToken.Type) && !p.peekTokenIs(lexer.COMMA)
+}

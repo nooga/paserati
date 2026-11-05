@@ -30,3 +30,36 @@ func (c *Checker) checkImportCallGrammar(node *parser.DynamicImportExpression) {
 		}
 	}
 }
+
+// checkDeferredImportClause mirrors tsc's checkGrammarImportClause for
+// `import defer`: only a namespace binding is allowed, and only under
+// --module esnext or preserve.
+func (c *Checker) checkDeferredImportClause(node *parser.ImportDeclaration) {
+	if !node.IsDeferred || node.ClauseToken == nil {
+		return
+	}
+	at := &parser.Identifier{Token: node.ClauseToken}
+	if len(node.Specifiers) > 0 {
+		if _, ok := node.Specifiers[0].(*parser.ImportDefaultSpecifier); ok {
+			c.addErrorWithCode(at, "TS18058", "Default imports are not allowed in a deferred import.")
+			return
+		}
+	}
+	for _, spec := range node.Specifiers {
+		if _, ok := spec.(*parser.ImportNamedSpecifier); ok {
+			c.addErrorWithCode(at, "TS18059", "Named imports are not allowed in a deferred import.")
+			return
+		}
+	}
+	c.checkDeferredModuleKind(at)
+}
+
+// checkDeferredModuleKind reports TS18060 for a deferred import under a
+// --module that cannot express it. An unset --module is left alone.
+func (c *Checker) checkDeferredModuleKind(node parser.Node) {
+	switch c.moduleKind {
+	case "", "esnext", "preserve":
+		return
+	}
+	c.addErrorWithCode(node, "TS18060", "Deferred imports are only supported when the '--module' flag is set to 'esnext' or 'preserve'.")
+}

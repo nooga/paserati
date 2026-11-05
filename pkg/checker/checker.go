@@ -3946,6 +3946,9 @@ func (c *Checker) visit(node parser.Node) {
 		debugPrintf("// [Checker DynamicImportExpr] Typed as Promise<any> (TODO: implement proper Promise<Module> type)\n")
 
 	case *parser.DeferredImportExpression:
+		if node.Phase == "defer" {
+			c.checkDeferredModuleKind(node)
+		}
 		// Deferred import (import.defer) returns Promise<DeferredModule>
 		// Check that the source expression is a string (or can be coerced to string)
 		c.visit(node.Source)
@@ -6376,6 +6379,8 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 		c.addError(node, "import statement missing source module")
 		return
 	}
+
+	c.checkDeferredImportClause(node)
 
 	sourceModulePath := node.Source.Value
 	debugPrintf("// [Checker] Processing import from: %s (IsTypeOnly: %v)\n", sourceModulePath, node.IsTypeOnly)
