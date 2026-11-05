@@ -183,7 +183,7 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 				}
 			} else if m.Value != nil && m.Value.Body != nil {
 				constructors++
-				if constructors > 1 {
+				if constructors > 1 && !p.tscDiagnostics { // tsc: the checker's TS2392
 					p.addError(m.Token, "A class may only have one constructor")
 				}
 			}
